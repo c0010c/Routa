@@ -3,6 +3,7 @@ pub mod core;
 pub mod model;
 pub mod netif;
 pub mod scheduler;
+pub mod stats;
 pub mod store;
 pub mod subscription;
 
