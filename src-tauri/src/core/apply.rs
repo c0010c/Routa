@@ -24,6 +24,11 @@ pub struct FailedListener {
 pub enum ApplyOutcome {
     Reloaded {
         cut: usize,
+        /// Affected connections that could not be closed even after a retry.
+        /// If the connection list itself was unavailable this is the number of
+        /// affected listeners (a lower bound, at least 1). The caller must
+        /// escalate (restart the core) when it is > 0.
+        uncut: usize,
         failed_listeners: Vec<FailedListener>,
     },
     FailedKeptPrevious {
@@ -31,6 +36,8 @@ pub enum ApplyOutcome {
     },
     FailedClosed {
         error: String,
+        /// Same meaning as in `Reloaded`.
+        uncut: usize,
     },
     FailedCoreStopped {
         error: String,
@@ -54,6 +61,8 @@ pub fn affected_listeners(old: &EffectivePlan, new: &EffectivePlan) -> Vec<Strin
 const PORT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const PORT_POLL_MAX: u32 = 10; // 2 s
 
+/// Precondition: mihomo must have been started with `empty_config` before the
+/// first `apply`, so `last_plan == None` really means "nothing is listening".
 pub struct Applier {
     api: Arc<dyn MihomoApi>,
     ports: Arc<dyn PortOwners>,
@@ -82,40 +91,63 @@ impl Applier {
         }
     }
 
-    async fn write_and_reload(&self, yaml: &str) -> Result<(), String> {
-        write_atomic(&self.config_path, yaml).map_err(|e| format!("write config: {e}"))?;
+    /// `Err((rejected, message))`; `rejected` is true only when mihomo
+    /// answered with a non-2xx status (so the old config is certainly intact).
+    async fn write_and_reload(&self, yaml: &str) -> Result<(), (bool, String)> {
+        write_atomic(&self.config_path, yaml)
+            .map_err(|e| (false, format!("write config: {e}")))?;
         self.api
             .reload(&self.config_path)
             .await
-            .map_err(|e: ApiError| e.to_string())
+            .map_err(|e: ApiError| (matches!(e, ApiError::Rejected { .. }), e.to_string()))
     }
 
-    /// Closes every connection coming in through one of `names`; returns how
-    /// many were closed. Failures only lower the count.
-    async fn cut(&self, names: &[String]) -> usize {
-        if names.is_empty() {
-            return 0;
-        }
-        let wanted: HashSet<&str> = names.iter().map(String::as_str).collect();
+    /// One list-and-close pass: `Ok((closed, failed))`, `Err` if the list failed.
+    /// A 404 on close means the connection is already gone: counts as closed.
+    async fn cut_once(&self, wanted: &HashSet<&str>) -> Result<(usize, usize), ()> {
         let snapshot = match self.api.connections().await {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("apply: list connections failed: {e}");
-                return 0;
+                return Err(());
             }
         };
-        let mut cut = 0;
+        let (mut closed, mut failed) = (0, 0);
         for c in snapshot
             .connections
             .iter()
             .filter(|c| wanted.contains(c.metadata.inbound_name.as_str()))
         {
             match self.api.close_connection(&c.id).await {
-                Ok(()) => cut += 1,
-                Err(e) => eprintln!("apply: close connection {} failed: {e}", c.id),
+                Ok(()) | Err(ApiError::Rejected { status: 404, .. }) => closed += 1,
+                Err(e) => {
+                    eprintln!("apply: close connection {} failed: {e}", c.id);
+                    failed += 1;
+                }
             }
         }
-        cut
+        Ok((closed, failed))
+    }
+
+    /// Closes every connection coming in through one of `names`; returns
+    /// `(cut, uncut)`. Any failure retries the whole pass once after 200 ms.
+    /// If the list is unavailable on the retry too, `uncut` is `names.len()`
+    /// (a lower bound, at least 1).
+    async fn cut(&self, names: &[String]) -> (usize, usize) {
+        if names.is_empty() {
+            return (0, 0);
+        }
+        let wanted: HashSet<&str> = names.iter().map(String::as_str).collect();
+        let first = self.cut_once(&wanted).await;
+        if let Ok((closed, 0)) = first {
+            return (closed, 0);
+        }
+        let first_closed = first.map(|(c, _)| c).unwrap_or(0);
+        tokio::time::sleep(PORT_POLL_INTERVAL).await;
+        match self.cut_once(&wanted).await {
+            Ok((closed, failed)) => (first_closed + closed, failed),
+            Err(()) => (first_closed, names.len().max(1)),
+        }
     }
 
     /// Polls port owners until every planned port belongs to `core_pid` (max 2 s).
@@ -168,15 +200,18 @@ impl Applier {
                         eprintln!("apply: restore select {group} -> {member} failed: {e}");
                     }
                 }
-                let cut = self.cut(&affected).await;
+                let (cut, uncut) = self.cut(&affected).await;
                 let failed_listeners = self.failed_listeners(&generated.plan, core_pid).await;
                 ApplyOutcome::Reloaded {
                     cut,
+                    uncut,
                     failed_listeners,
                 }
             }
-            Err(error) if !affected.is_empty() => {
-                // Tightening change rejected: mihomo may keep routing the old way.
+            Err((rejected, error)) if !rejected || !affected.is_empty() => {
+                // Either a tightening change was rejected (mihomo may keep
+                // routing the old way), or the outcome is ambiguous (timeout,
+                // transport error: mihomo may have applied the new config).
                 // Load an empty config so nothing can leak.
                 let empty = empty_config(controller_port, secret);
                 match self.write_and_reload(&empty).await {
@@ -185,11 +220,20 @@ impl Applier {
                         self.last_plan = Some(EffectivePlan {
                             listeners: BTreeMap::new(),
                         });
-                        // Existing connections survive reloads (spike S5): cut them.
-                        self.cut(&affected).await;
-                        ApplyOutcome::FailedClosed { error }
+                        // Existing connections survive reloads (spike S5), and
+                        // mihomo may have been running either plan: cut both.
+                        let mut names: Vec<String> = old_plan
+                            .listeners
+                            .keys()
+                            .chain(generated.plan.listeners.keys())
+                            .cloned()
+                            .collect();
+                        names.sort();
+                        names.dedup();
+                        let (_, uncut) = self.cut(&names).await;
+                        ApplyOutcome::FailedClosed { error, uncut }
                     }
-                    Err(e2) => {
+                    Err((_, e2)) => {
                         stop_core().await;
                         ApplyOutcome::FailedCoreStopped {
                             error: format!("{error}; empty config also failed: {e2}"),
@@ -197,8 +241,8 @@ impl Applier {
                     }
                 }
             }
-            Err(error) => {
-                // Non-tightening: mihomo still holds the previous config in memory.
+            Err((_, error)) => {
+                // Rejected, non-tightening: mihomo still holds the previous config.
                 if let Some(prev) = &self.last_yaml {
                     if let Err(e) = write_atomic(&self.config_path, prev) {
                         eprintln!("apply: restoring previous config failed: {e}");
@@ -327,6 +371,7 @@ mod tests {
             out,
             ApplyOutcome::Reloaded {
                 cut: 2,
+                uncut: 0,
                 failed_listeners: vec![]
             }
         );
@@ -367,7 +412,7 @@ mod tests {
     #[tokio::test]
     async fn restrictive_double_failure_stops_core() {
         let api = FakeApi::with_reload_results(vec![Err(rejected()), Err(rejected())]);
-        let (mut a, _api, _d, _p) = setup(api, owning(&[]));
+        let (mut a, _api, _d, path) = setup(api, owning(&[]));
         a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001)]));
         let stopped = Cell::new(false);
         let out = a
@@ -384,6 +429,12 @@ mod tests {
             "{out:?}"
         );
         assert!(stopped.get());
+        assert_eq!(a.last_plan, Some(plan(vec![pl("a", "E1", 1, 7001)])));
+        assert_eq!(a.last_yaml, None);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            empty_config(9097, "s")
+        );
     }
 
     #[tokio::test]
@@ -433,6 +484,7 @@ mod tests {
             out,
             ApplyOutcome::Reloaded {
                 cut: 0,
+                uncut: 0,
                 failed_listeners: vec![FailedListener {
                     id: ListenerId("id-busy".into()),
                     name: "busy".into(),
@@ -464,6 +516,7 @@ mod tests {
             out,
             ApplyOutcome::Reloaded {
                 cut: 0,
+                uncut: 0,
                 failed_listeners: vec![]
             }
         );
@@ -481,7 +534,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn close_and_list_errors_do_not_fail_apply() {
         let (mut a, api, _d, _p) = setup(FakeApi::new(), owning(&[]));
         a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001)]));
@@ -497,6 +550,7 @@ mod tests {
             out,
             ApplyOutcome::Reloaded {
                 cut: 1,
+                uncut: 1,
                 failed_listeners: vec![]
             }
         );
@@ -509,8 +563,131 @@ mod tests {
             out,
             ApplyOutcome::Reloaded {
                 cut: 0,
+                uncut: 1,
                 failed_listeners: vec![]
             }
+        );
+    }
+
+    fn unreachable() -> ApiError {
+        ApiError::Unreachable("timeout".into())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unreachable_reload_on_non_restrictive_change_fails_closed() {
+        let api = FakeApi::with_reload_results(vec![Err(unreachable()), Ok(())]);
+        let (mut a, api, _d, path) = setup(api, owning(&[]));
+        a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001)]));
+        a.last_yaml = Some("OLD".into());
+        api.set_connections(ConnectionsSnapshot {
+            connections: vec![conn("c1", "a"), conn("c2", "b"), conn("c3", "z")],
+            ..Default::default()
+        });
+        // Adds listener b (non-restrictive), keeps a.
+        let out = a
+            .apply(
+                generated(
+                    "NEW",
+                    plan(vec![pl("a", "E1", 1, 7001), pl("b", "E1", 1, 7002)]),
+                ),
+                9097,
+                "s",
+                PID,
+                async || {},
+            )
+            .await;
+        assert!(
+            matches!(out, ApplyOutcome::FailedClosed { uncut: 0, .. }),
+            "{out:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            empty_config(9097, "s")
+        );
+        assert_eq!(a.last_plan, Some(plan(vec![])));
+        // Union of old and new listener names is cut.
+        assert_eq!(*api.closed.lock().unwrap(), vec!["c1", "c2"]);
+    }
+
+    #[tokio::test]
+    async fn unreachable_then_unreachable_stops_core() {
+        let api = FakeApi::with_reload_results(vec![Err(unreachable()), Err(unreachable())]);
+        let (mut a, _api, _d, _p) = setup(api, owning(&[]));
+        let stopped = Cell::new(false);
+        let out = a
+            .apply(
+                generated("NEW", plan(vec![pl("a", "E1", 1, 7001)])),
+                9097,
+                "s",
+                PID,
+                async || stopped.set(true),
+            )
+            .await;
+        assert!(
+            matches!(out, ApplyOutcome::FailedCoreStopped { .. }),
+            "{out:?}"
+        );
+        assert!(stopped.get());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn connections_failure_reported_as_uncut() {
+        let (mut a, api, _d, _p) = setup(FakeApi::new(), owning(&[]));
+        a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001), pl("b", "E1", 1, 7002)]));
+        *api.connections_error.lock().unwrap() = Some(unreachable());
+        let out = a
+            .apply(generated("Y", plan(vec![])), 9097, "s", PID, async || {})
+            .await;
+        assert_eq!(
+            out,
+            ApplyOutcome::Reloaded {
+                cut: 0,
+                uncut: 2,
+                failed_listeners: vec![]
+            }
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn close_404_counts_as_cut() {
+        let (mut a, api, _d, _p) = setup(FakeApi::new(), owning(&[]));
+        a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001)]));
+        api.set_connections(ConnectionsSnapshot {
+            connections: vec![conn("c1", "a")],
+            ..Default::default()
+        });
+        api.close_gone.lock().unwrap().insert("c1".into());
+        let out = a
+            .apply(generated("Y", plan(vec![])), 9097, "s", PID, async || {})
+            .await;
+        assert_eq!(
+            out,
+            ApplyOutcome::Reloaded {
+                cut: 1,
+                uncut: 0,
+                failed_listeners: vec![]
+            }
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_closed_reports_uncut_when_connections_fail() {
+        let api = FakeApi::with_reload_results(vec![Err(rejected()), Ok(())]);
+        let (mut a, api, _d, _p) = setup(api, owning(&[]));
+        a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001)]));
+        *api.connections_error.lock().unwrap() = Some(unreachable());
+        let out = a
+            .apply(
+                generated("NEW", plan(vec![pl("a", "E2", 1, 7001)])),
+                9097,
+                "s",
+                PID,
+                async || {},
+            )
+            .await;
+        assert!(
+            matches!(out, ApplyOutcome::FailedClosed { uncut: 1, .. }),
+            "{out:?}"
         );
     }
 }

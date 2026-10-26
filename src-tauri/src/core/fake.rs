@@ -19,8 +19,10 @@ pub struct FakeApi {
     /// When set, `connections()` fails with this error.
     pub connections_error: Mutex<Option<ApiError>>,
     pub closed: Mutex<Vec<String>>,
-    /// Connection ids whose `close_connection` fails.
+    /// Connection ids whose `close_connection` fails with 500.
     pub close_fails: Mutex<HashSet<String>>,
+    /// Connection ids whose `close_connection` answers 404 (already gone).
+    pub close_gone: Mutex<HashSet<String>>,
     pub selects: Mutex<Vec<(String, String)>>,
     /// (proxy, url, timeout_ms) per delay call.
     pub delay_calls: Mutex<Vec<(String, String, u32)>>,
@@ -88,13 +90,24 @@ impl MihomoApi for FakeApi {
     }
 
     async fn close_connection(&self, id: &str) -> Result<(), ApiError> {
-        if self.close_fails.lock().unwrap().contains(id) {
+        if self.close_gone.lock().unwrap().contains(id) {
             return Err(ApiError::Rejected {
                 status: 404,
                 message: "no such connection".into(),
             });
         }
+        if self.close_fails.lock().unwrap().contains(id) {
+            return Err(ApiError::Rejected {
+                status: 500,
+                message: "boom".into(),
+            });
+        }
         self.closed.lock().unwrap().push(id.to_string());
+        self.connections
+            .lock()
+            .unwrap()
+            .connections
+            .retain(|c| c.id != id);
         Ok(())
     }
 
