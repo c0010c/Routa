@@ -1,4 +1,5 @@
 pub mod model;
+pub mod store;
 
 use tauri_specta::{collect_commands, Builder};
 
