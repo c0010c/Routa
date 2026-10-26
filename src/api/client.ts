@@ -6,6 +6,7 @@ import {
   type Result,
   type ValidationError,
 } from "../bindings";
+import { fieldErrors } from "../lib/validation";
 import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { getTraffic, subscribeTraffic } from "./trafficStore";
 
@@ -48,7 +49,7 @@ function useApiMutation<A extends unknown[], T>(
     mutationFn: async (a: A) => unwrap(await run(...a)),
     onError: (e) => {
       // Validation errors are shown in-form by the caller; everything else must be visible.
-      if (!isValidationError(e)) apply.showError(e instanceof Error ? e.message : "操作失败");
+      if (!isValidationError(e)) apply.showError(errorMessage(e));
     },
     onSuccess: (data) => {
       if (typeof data === "object" && data !== null && isApplyOutcome(data)) apply.show(data);
@@ -56,6 +57,17 @@ function useApiMutation<A extends unknown[], T>(
       void qc.invalidateQueries({ queryKey: ["status"] });
     },
   });
+}
+
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  const t = String(e ?? "");
+  return t === "" ? "操作失败" : t;
+}
+
+function validationText(errors: ValidationError[]): string {
+  const f = fieldErrors(errors);
+  return [...(f.name ? [f.name] : []), ...(f.port ? [f.port] : []), ...f.form].join("\n");
 }
 
 function isApplyOutcome(d: object): d is ApplyOutcome {
@@ -68,9 +80,17 @@ type Fn<A extends unknown[], T> = (...a: A) => Promise<Result<T, ValidationError
 function make<A extends unknown[], T>(get: () => Fn<A, T>) {
   return () => {
     const m = useApiMutation<A, T>((...a) => get()(...a));
+    const apply = useApplyResult();
     return {
       ...m,
-      mutate: (...a: A) => m.mutate(a),
+      // Fire-and-forget callers have no form to put validation errors in: show them as a fallback.
+      // mutateAsync callers handle validation errors themselves.
+      mutate: (...a: A) =>
+        m.mutate(a, {
+          onError: (e) => {
+            if (isValidationError(e)) apply.showError(validationText(e.errors));
+          },
+        }),
       mutateAsync: (...a: A) => m.mutateAsync(a),
     };
   };

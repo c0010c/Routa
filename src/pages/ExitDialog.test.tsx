@@ -121,6 +121,20 @@ describe("ExitDialog", () => {
     expect(within(list).getByText("（已移除的网卡）")).toBeInTheDocument();
   });
 
+  it("shows name errors on the exit name field and clears them on edit", async () => {
+    vi.mocked(commands.saveExit).mockResolvedValue({
+      status: "error",
+      error: [{ InvalidName: { name: "DIRECT", reason: "与 mihomo 内置名称冲突" } }],
+    });
+    renderDialog({ id: "e0", name: "DIRECT", kind: "Direct", interface: null });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("与 mihomo 内置名称冲突")).toBeInTheDocument();
+    expect(screen.getByLabelText("名称")).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "直连2" } });
+    expect(screen.queryByText("与 mihomo 内置名称冲突")).not.toBeInTheDocument();
+    await waitFor(() => expect(commands.getStatus).toHaveBeenCalled());
+  });
+
   it("removes missing members on demand", async () => {
     renderDialog({
       id: "e1",

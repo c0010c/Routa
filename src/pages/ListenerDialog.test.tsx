@@ -71,6 +71,21 @@ describe("ListenerDialog", () => {
     await waitFor(() => expect(commands.getModel).toHaveBeenCalled());
   });
 
+  it("masks the password and clears a field error on edit", async () => {
+    vi.mocked(commands.saveListener).mockResolvedValue({
+      status: "error",
+      error: [{ PortConflict: { port: 7891, with: "浏览器" } }],
+    });
+    renderDialog({ ...listener, auth: { username: "u", password: "p" } });
+    expect(screen.getByLabelText("密码")).toHaveAttribute("type", "password");
+    fireEvent.click(screen.getByRole("button", { name: "显示" }));
+    expect(screen.getByLabelText("密码")).toHaveAttribute("type", "text");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("端口 7891 已被「浏览器」占用");
+    fireEvent.change(screen.getByLabelText("端口"), { target: { value: "7892" } });
+    expect(screen.queryByText("端口 7891 已被「浏览器」占用")).not.toBeInTheDocument();
+  });
+
   it("rejects out-of-range ports without calling the backend", async () => {
     vi.mocked(commands.saveListener).mockClear();
     renderDialog(listener);
@@ -89,5 +104,10 @@ describe("newListener", () => {
     expect(l.listener_type).toBe("Mixed");
     expect(l.listen).toBe("0.0.0.0");
     expect(l.user_enabled).toBe(true);
+  });
+
+  it("never proposes a port above 65535", () => {
+    const p = newListener([{ ...listener, port: 65535 }, { ...listener, port: 1024 }]).port;
+    expect(p).toBe(1025);
   });
 });

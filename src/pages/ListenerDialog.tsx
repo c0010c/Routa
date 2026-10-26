@@ -20,6 +20,15 @@ import { isValidationError, useModel, useSaveListener } from "../api/client";
 import type { Listener, ListenerType } from "../bindings";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
 
+function proposePort(existing: Listener[]): number {
+  if (existing.length === 0) return 7891;
+  const max = Math.max(...existing.map((l) => l.port));
+  if (max < 65535) return max + 1;
+  const used = new Set(existing.map((l) => l.port));
+  for (let p = 1024; p < 65535; p++) if (!used.has(p)) return p;
+  return 7891;
+}
+
 /** Mirrors `Listener::new_default`; port is the highest used port + 1 (7891 when none). */
 export function newListener(existing: Listener[]): Listener {
   return {
@@ -27,7 +36,7 @@ export function newListener(existing: Listener[]): Listener {
     name: "",
     listener_type: "Mixed",
     listen: "0.0.0.0",
-    port: existing.length === 0 ? 7891 : Math.max(...existing.map((l) => l.port)) + 1,
+    port: proposePort(existing),
     auth: null,
     exit: null,
     user_enabled: true,
@@ -46,6 +55,7 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
   const [l, setL] = useState<Listener>(listener);
   const [portText, setPortText] = useState(String(listener.port));
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
+  const [showPw, setShowPw] = useState(false);
   const [portLocal, setPortLocal] = useState<string>();
 
   const submit = async () => {
@@ -55,6 +65,7 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
       return;
     }
     setPortLocal(undefined);
+    setErrs({ form: [] });
     try {
       await save.mutateAsync({ ...l, port });
       onClose();
@@ -81,7 +92,10 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
             label="名称"
             size="small"
             value={l.name}
-            onChange={(e) => setL({ ...l, name: e.target.value })}
+            onChange={(e) => {
+              setL({ ...l, name: e.target.value });
+              setErrs((x) => ({ ...x, name: undefined }));
+            }}
             error={!!errs.name}
             helperText={errs.name}
           />
@@ -90,7 +104,11 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
             size="small"
             type="number"
             value={portText}
-            onChange={(e) => setPortText(e.target.value)}
+            onChange={(e) => {
+              setPortText(e.target.value);
+              setPortLocal(undefined);
+              setErrs((x) => ({ ...x, port: undefined }));
+            }}
             error={!!portError}
             helperText={portError}
           />
@@ -130,6 +148,16 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
               <TextField
                 label="密码"
                 size="small"
+                type={showPw ? "text" : "password"}
+                slotProps={{
+                  input: {
+                    endAdornment: (
+                      <Button size="small" onClick={() => setShowPw((v) => !v)}>
+                        {showPw ? "隐藏" : "显示"}
+                      </Button>
+                    ),
+                  },
+                }}
                 value={l.auth.password}
                 onChange={(e) => setL({ ...l, auth: { username: l.auth?.username ?? "", password: e.target.value } })}
               />
@@ -144,6 +172,9 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
               onChange={(e) => setL({ ...l, exit: e.target.value === "" ? null : e.target.value })}
             >
               <MenuItem value="">未选择</MenuItem>
+              {l.exit !== null && !(model.data?.exits ?? []).some((x) => x.id === l.exit) && (
+                <MenuItem value={l.exit}>（已删除的出口）</MenuItem>
+              )}
               {(model.data?.exits ?? []).map((x) => (
                 <MenuItem key={x.id} value={x.id}>
                   {x.name}

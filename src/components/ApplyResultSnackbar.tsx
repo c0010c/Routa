@@ -53,7 +53,7 @@ export function ApplyResultProvider({ children }: { children: ReactNode }) {
         onClose={(_, reason) => reason !== "clickaway" && setError(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
-        <Alert severity="error" variant="filled" onClose={() => setError(null)}>
+        <Alert severity="error" variant="filled" sx={{ whiteSpace: "pre-line" }} onClose={() => setError(null)}>
           {error}
         </Alert>
       </Snackbar>

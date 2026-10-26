@@ -40,7 +40,6 @@ export function NodePicker(props: Props) {
     // Selected nodes that no longer exist stay visible so the user can see and remove them.
     for (const r of selected) if (!known.has(key(r))) list.push({ ref: r, group: MISSING_GROUP });
     return list;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.data, props.value]);
 
   const subName = (o: Option) => o.group;

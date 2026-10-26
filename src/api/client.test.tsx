@@ -25,8 +25,7 @@ function Probe() {
   );
 }
 
-function renderProbe() {
-  const qc = new QueryClient();
+function renderProbe(qc = new QueryClient()) {
   render(
     <QueryClientProvider client={qc}>
       <ApplyResultProvider>
@@ -37,6 +36,13 @@ function renderProbe() {
 }
 
 describe("mutation error reporting", () => {
+  it("shows string rejections verbatim", async () => {
+    vi.mocked(commands.resetTraffic).mockRejectedValue("core 未运行");
+    renderProbe();
+    fireEvent.click(screen.getByText("reset"));
+    expect(await screen.findByText("core 未运行")).toBeInTheDocument();
+  });
+
   it("shows non-validation failures in the snackbar", async () => {
     vi.mocked(commands.resetTraffic).mockResolvedValue({ status: "error", error: null });
     renderProbe();
@@ -44,15 +50,19 @@ describe("mutation error reporting", () => {
     expect(await screen.findByText("操作失败")).toBeInTheDocument();
   });
 
-  it("leaves validation errors to the caller", async () => {
+  it("shows validation errors from fire-and-forget mutate as a fallback, without invalidating", async () => {
     vi.mocked(commands.saveListener).mockResolvedValue({
       status: "error",
       error: [{ DanglingRef: { what: "x" } }],
     });
-    renderProbe();
+    const qc = new QueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    renderProbe(qc);
     fireEvent.click(screen.getByText("save"));
     await waitFor(() => expect(commands.saveListener).toHaveBeenCalled());
-    await waitFor(() => expect(commands.getModel).not.toHaveBeenCalled());
+    // fallback snackbar proves onError ran
+    expect(await screen.findByText(/仍被引用/)).toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
     expect(screen.queryByText("操作失败")).not.toBeInTheDocument();
   });
 });

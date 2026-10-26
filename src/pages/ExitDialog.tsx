@@ -85,6 +85,7 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
       };
     }
     setNodeError(undefined);
+    setErrs({ form: [] });
     try {
       await save.mutateAsync({ ...exit, name, kind, interface: iface });
       onClose();
@@ -110,7 +111,10 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
             label="名称"
             size="small"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setErrs((x) => ({ ...x, name: undefined }));
+            }}
             error={!!errs.name}
             helperText={errs.name}
           />
