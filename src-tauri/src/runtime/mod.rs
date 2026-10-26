@@ -42,6 +42,7 @@ pub type LauncherFor = Arc<dyn Fn(&Settings) -> Arc<dyn CoreLauncher> + Send + S
 pub type ApiFor = Box<dyn Fn(u16, String) -> Arc<dyn MihomoApi> + Send + Sync>;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
+const CONTROLLER_BUSY_PREFIX: &str = "控制端口";
 
 #[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
 pub struct RuntimeStatus {
@@ -268,7 +269,13 @@ impl Inner {
         let res = self.launch_core(eng).await;
         match &res {
             Ok(()) => {
-                self.status.lock().unwrap().core = CoreState::Running;
+                {
+                    let mut st = self.status.lock().unwrap();
+                    st.core = CoreState::Running;
+                    if st.startup_error.as_deref().is_some_and(|e| e.starts_with(CONTROLLER_BUSY_PREFIX)) {
+                        st.startup_error = None;
+                    }
+                }
                 // A fresh core has no connections, so `uncut` here is moot.
                 self.apply_once(eng).await;
             }
@@ -291,12 +298,32 @@ impl Inner {
             .launch(&config)
             .await
             .map_err(|e| format!("启动 mihomo 失败: {e}"))?;
+        let pid = handle.pid();
+        // Never talk to a controller we do not own (it could be another
+        // app's mihomo without a secret): wait until our child holds the port.
+        let deadline = Instant::now() + READY_TIMEOUT;
+        loop {
+            match self.ports.listening_owners(&[port]).get(&port) {
+                Some(&owner) if owner != pid => {
+                    let _ = handle.stop().await;
+                    let msg = format!("{CONTROLLER_BUSY_PREFIX} {port} 已被其他程序占用，请在设置中更换");
+                    self.status.lock().unwrap().startup_error = Some(msg.clone());
+                    return Err(msg);
+                }
+                Some(_) => break,
+                None if Instant::now() >= deadline => {
+                    let _ = handle.stop().await;
+                    return Err(format!("mihomo 未在 5 秒内监听控制端口 {port}"));
+                }
+                None => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
         let api = (self.api_for)(port, secret.clone());
-        if let Err(e) = wait_ready(api.as_ref(), READY_TIMEOUT).await {
+        let left = deadline.saturating_duration_since(Instant::now()).max(Duration::from_secs(1));
+        if let Err(e) = wait_ready(api.as_ref(), left).await {
             let _ = handle.stop().await;
             return Err(format!("mihomo 未在 5 秒内就绪: {e}"));
         }
-        let pid = handle.pid();
         let traffic_stream = tokio::spawn(tasks::traffic_stream(self.clone(), api.clone()));
         self.live.lock().unwrap().api = Some(api.clone());
         eng.core = Some(CoreRun {
@@ -599,15 +626,29 @@ impl Runtime {
     /// Validation errors leave everything untouched. After `shutdown` nothing
     /// is saved or applied and `FailedCoreStopped` is returned.
     pub async fn mutate(&self, f: impl FnOnce(&mut Model)) -> Result<ApplyOutcome, Vec<ValidationError>> {
+        self.mutate_with(|m| {
+            f(m);
+            Ok(())
+        })
+        .await
+        .map(|(outcome, ())| outcome)
+    }
+
+    /// Like `mutate`, but `f` may reject the change (nothing is saved) and
+    /// hand a value back, computed against the model it actually edited.
+    pub async fn mutate_with<R>(
+        &self,
+        f: impl FnOnce(&mut Model) -> Result<R, Vec<ValidationError>>,
+    ) -> Result<(ApplyOutcome, R), Vec<ValidationError>> {
         let mut eng = self.inner.engine.lock().await;
         if self.inner.is_shut_down() {
-            return Ok(ApplyOutcome::FailedCoreStopped { error: SHUT_DOWN.into() });
+            return Ok((ApplyOutcome::FailedCoreStopped { error: SHUT_DOWN.into() }, f(&mut eng.model.clone())?));
         }
         let mut m = eng.model.clone();
-        f(&mut m);
+        let r = f(&mut m)?;
         validate(&m)?;
         self.inner.commit_model(&mut eng, m);
-        Ok(self.inner.apply(&mut eng).await)
+        Ok((self.inner.apply(&mut eng).await, r))
     }
 
     /// Re-lists adapters; on any change re-evaluates and re-applies.

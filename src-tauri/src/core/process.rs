@@ -105,6 +105,57 @@ fn pipe_to_log<R: AsyncRead + Unpin + Send + 'static>(reader: R, log: PathBuf) {
     });
 }
 
+/// Windows Job Object with KILL_ON_JOB_CLOSE: when this app dies (even by a
+/// hard kill) the OS closes the handle and kills every assigned mihomo.
+#[cfg(windows)]
+mod job {
+    use std::sync::OnceLock;
+
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    struct Job(HANDLE);
+    // The handle is only ever passed to Win32 calls; it lives for the process.
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+
+    static JOB: OnceLock<Option<Job>> = OnceLock::new();
+
+    fn create() -> Option<Job> {
+        unsafe {
+            let h = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if h.is_null() {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                h,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            (ok != 0).then_some(Job(h))
+        }
+    }
+
+    /// Failures are logged only: the child still runs (kill_on_drop remains).
+    pub fn assign(child: &tokio::process::Child) {
+        let Some(job) = JOB.get_or_init(create) else {
+            eprintln!("process: could not create job object");
+            return;
+        };
+        let Some(proc) = child.raw_handle() else { return };
+        if unsafe { AssignProcessToJobObject(job.0, proc as HANDLE) } == 0 {
+            eprintln!("process: could not assign mihomo to job object");
+        }
+    }
+}
+
 impl CoreProcess {
     /// Runs `bin -d workdir -f config`. `config` must be inside `workdir`
     /// (spike S5). Does not wait for the API; see [`wait_ready`].
@@ -127,6 +178,8 @@ impl CoreProcess {
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         let mut child = cmd.spawn()?;
+        #[cfg(windows)]
+        job::assign(&child);
         let pid = child
             .id()
             .ok_or_else(|| io::Error::other("mihomo exited immediately"))?;

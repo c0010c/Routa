@@ -146,7 +146,7 @@ impl Default for Settings {
         Self {
             autostart: false,
             core_path: None,
-            controller_port: 9097,
+            controller_port: 19097,
             delay_test_interval_mins: Some(10),
             delay_test_url: "https://www.gstatic.com/generate_204".to_string(),
         }
@@ -170,7 +170,7 @@ mod tests {
         let s = Settings::default();
         assert!(!s.autostart);
         assert_eq!(s.core_path, None);
-        assert_eq!(s.controller_port, 9097);
+        assert_eq!(s.controller_port, 19097);
         assert_eq!(s.delay_test_interval_mins, Some(10));
         assert_eq!(s.delay_test_url, "https://www.gstatic.com/generate_204");
     }

@@ -116,7 +116,7 @@ fn harness_with(model: Option<&Model>, prepare: impl FnOnce(&Path)) -> Harness {
     let api = Arc::new(FakeApi::new());
     let launcher = Arc::new(FakeLauncher::default());
     let nics = Arc::new(FakeInterfaces(Mutex::new(vec![nic()])));
-    let ports = Arc::new(FakePortOwners(Mutex::new([(PORT, PID)].into_iter().collect())));
+    let ports = Arc::new(FakePortOwners(Mutex::new([(PORT, PID), (19097, PID)].into_iter().collect())));
     let (tx, rx) = mpsc::channel(4096);
     let api_args = Arc::new(Mutex::new(Vec::new()));
     let launcher_for: LauncherFor = {
@@ -241,13 +241,13 @@ async fn first_apply_after_empty_config() {
     h.rt.restart_core().await;
 
     let (port, secret) = h.api_args.lock().unwrap()[0].clone();
-    assert_eq!(port, 9097);
+    assert_eq!(port, 19097);
     assert_eq!(secret.len(), 64);
     assert!(secret.chars().all(|c| c.is_ascii_hexdigit()));
     // mihomo is launched with the empty config, then the model is applied.
     assert_eq!(
         h.launcher.launches.lock().unwrap()[0],
-        crate::config_gen::empty_config(9097, &secret)
+        crate::config_gen::empty_config(19097, &secret)
     );
     let reloads = h.api.reloads.lock().unwrap().clone();
     assert_eq!(reloads.len(), 1);
@@ -383,7 +383,7 @@ async fn uncut_connections_trigger_core_restart() {
     let secret = h.api_args.lock().unwrap()[1].1.clone();
     assert_eq!(
         h.launcher.launches.lock().unwrap()[1],
-        crate::config_gen::empty_config(9097, &secret)
+        crate::config_gen::empty_config(19097, &secret)
     );
     assert!(listener_names(&last_reload(&h.api)).is_empty());
 }
@@ -634,4 +634,19 @@ async fn stale_fetch_discarded_when_url_changed() {
     assert!(sub.nodes.is_empty());
     assert_eq!(sub.last_updated, None);
     assert_eq!(sub.last_result, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn foreign_controller_is_not_used() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.ports.0.lock().unwrap().insert(19097, PID + 1);
+    h.rt.restart_core().await;
+    let st = h.rt.status();
+    assert!(matches!(st.core, CoreState::Crashed { .. }), "{:?}", st.core);
+    let msg = st.startup_error.expect("startup_error set");
+    assert!(msg.contains("控制端口 19097 已被其他程序占用，请在设置中更换"), "{msg}");
+    assert!(h.launcher.stopped(0), "our child was stopped");
+    assert!(h.api_args.lock().unwrap().is_empty(), "no API client was even created");
+    assert!(h.api.reloads.lock().unwrap().is_empty(), "no reload reached the foreign controller");
 }

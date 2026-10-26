@@ -1,7 +1,7 @@
 mode: rule
 log-level: info
 allow-lan: true
-external-controller: 127.0.0.1:9097
+external-controller: 127.0.0.1:19097
 secret: sekret
 profile:
   store-selected: false

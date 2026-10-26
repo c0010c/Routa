@@ -416,7 +416,7 @@ mod tests {
     fn fixed_top_level() {
         let v = parse(&gen(&base()).yaml);
         assert_eq!(v["allow-lan"], true);
-        assert_eq!(v["external-controller"], "127.0.0.1:9097");
+        assert_eq!(v["external-controller"], "127.0.0.1:19097");
         assert_eq!(v["rules"], serde_yaml_ng::to_value(["MATCH,REJECT"]).unwrap());
         for k in ["port", "socks-port", "mixed-port", "tun", "dns"] {
             assert!(v.get(k).is_none(), "{k}");

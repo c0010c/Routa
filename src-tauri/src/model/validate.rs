@@ -208,10 +208,10 @@ mod tests {
     #[test]
     fn rejects_port_equal_to_controller() {
         let mut m = Model::default();
-        m.listeners.push(Listener::new_default("a".into(), 9097));
+        m.listeners.push(Listener::new_default("a".into(), 19097));
         let e = errs(&m);
         assert!(
-            e.contains(&ValidationError::PortConflict { port: 9097, with: "控制端口".into() }),
+            e.contains(&ValidationError::PortConflict { port: 19097, with: "控制端口".into() }),
             "{e:?}"
         );
     }

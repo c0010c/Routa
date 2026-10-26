@@ -11,7 +11,8 @@ pub mod subscription;
 pub mod tray;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Duration;
 use std::sync::Arc;
 
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
@@ -144,26 +145,39 @@ pub fn run() {
         .expect("error while building tauri application");
 
     // Shutdown (stop mihomo, persist totals) must run exactly once on any
-    // exit path and finish before the process goes away. ExitRequested runs
-    // it asynchronously then re-issues the exit; Exit is the fallback for
-    // paths that skip ExitRequested.
-    let shut_down = Arc::new(AtomicBool::new(false));
+    // exit path and finish before the process goes away. State 0 = running,
+    // 1 = shutdown in progress (every exit request is prevented), 2 = done
+    // (set right before our own app.exit; requests then pass). RunEvent::Exit
+    // is the fallback for paths that skip ExitRequested.
+    let state = Arc::new(AtomicU8::new(0));
     app.run(move |app, event| match event {
         RunEvent::ExitRequested { api, .. } => {
-            if shut_down.swap(true, Ordering::SeqCst) {
-                return; // second request (ours): let it through
+            if state.load(Ordering::SeqCst) == 2 {
+                return;
             }
             api.prevent_exit();
+            if state.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                return; // already shutting down
+            }
             let app = app.clone();
+            let state = state.clone();
             tauri::async_runtime::spawn(async move {
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
-                    rt.shutdown().await;
+                    let rt = Arc::clone(&*rt);
+                    // Spawned so a panic is caught; bounded so exit cannot hang.
+                    let job = tauri::async_runtime::spawn(async move { rt.shutdown().await });
+                    match tokio::time::timeout(Duration::from_secs(10), job).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => eprintln!("shutdown failed: {e}"),
+                        Err(_) => eprintln!("shutdown timed out after 10s"),
+                    }
                 }
+                state.store(2, Ordering::SeqCst);
                 app.exit(0);
             });
         }
         RunEvent::Exit => {
-            if !shut_down.swap(true, Ordering::SeqCst) {
+            if state.swap(2, Ordering::SeqCst) == 0 {
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     tauri::async_runtime::block_on(rt.shutdown());
                 }

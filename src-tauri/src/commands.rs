@@ -55,43 +55,50 @@ pub mod ops {
     /// Upsert. Returns the outcome and whether the subscription should be
     /// fetched now (new, or its URL changed). An existing subscription keeps
     /// its server-side nodes and fetch state: the caller's copy may be stale.
+    /// The merge runs inside the mutation, against the model being edited.
     pub async fn save_subscription(
         rt: &Runtime,
-        mut s: Subscription,
+        s: Subscription,
     ) -> Result<(ApplyOutcome, bool), Vec<ValidationError>> {
-        let existing = rt.model().subscriptions.into_iter().find(|x| x.id == s.id);
-        let fetch_now = match existing {
-            Some(old) => {
-                let url_changed = old.url != s.url;
-                s.nodes = old.nodes;
+        rt.mutate_with(|m| {
+            let mut s = s;
+            let mut fetch_now = true;
+            if let Some(old) = m.subscriptions.iter().find(|x| x.id == s.id) {
+                fetch_now = old.url != s.url;
+                s.nodes = old.nodes.clone();
                 s.last_updated = old.last_updated;
-                s.last_result = old.last_result;
-                url_changed
+                s.last_result = old.last_result.clone();
             }
-            None => true,
-        };
-        let outcome = rt
-            .mutate(|m| {
-                let id = s.id.clone();
-                upsert(&mut m.subscriptions, s, |x| x.id == id)
-            })
-            .await?;
-        Ok((outcome, fetch_now))
+            let id = s.id.clone();
+            upsert(&mut m.subscriptions, s, |x| x.id == id);
+            Ok(fetch_now)
+        })
+        .await
     }
 
     pub async fn delete_subscription(rt: &Runtime, id: SubscriptionId) -> CmdResult {
         rt.mutate(|m| m.subscriptions.retain(|s| s.id != id)).await
     }
 
+    /// Errors (`DanglingRef`) when the exit is missing, not a group, or
+    /// `member` is not one of its members.
     pub async fn select_group_member(rt: &Runtime, exit: ExitId, member: NodeRef) -> CmdResult {
-        rt.mutate(|m| {
-            if let Some(e) = m.exits.iter_mut().find(|e| e.id == exit) {
-                if let ExitKind::Group { selected, .. } = &mut e.kind {
+        rt.mutate_with(|m| {
+            let bad = |what: &str| Err(vec![ValidationError::DanglingRef { what: what.to_string() }]);
+            let Some(e) = m.exits.iter_mut().find(|e| e.id == exit) else {
+                return bad("出口不存在");
+            };
+            match &mut e.kind {
+                ExitKind::Group { members, selected, .. } if members.contains(&member) => {
                     *selected = Some(member);
+                    Ok(())
                 }
+                ExitKind::Group { .. } => bad("该节点不是此出口组的成员"),
+                _ => bad("该出口不是出口组"),
             }
         })
         .await
+        .map(|(outcome, ())| outcome)
     }
 
     pub async fn save_settings(rt: &Runtime, s: Settings) -> CmdResult {
@@ -339,5 +346,72 @@ mod tests {
         let m = rt.model();
         let ExitKind::Group { selected, .. } = &m.exits[0].kind else { panic!() };
         assert_eq!(selected.as_ref(), Some(&node));
+    }
+
+    fn sub(url: &str) -> Subscription {
+        Subscription {
+            id: SubscriptionId::new(),
+            name: "s".into(),
+            url: url.into(),
+            update_interval_mins: None,
+            fallback_exit: None,
+            last_updated: Some(5),
+            last_result: None,
+            nodes: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn save_subscription_fetch_now_rules() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = runtime(&td);
+        let mut s = sub("http://a/x");
+        let (_, fetch) = ops::save_subscription(&rt, s.clone()).await.unwrap();
+        assert!(fetch, "new -> fetch");
+
+        // Server-side nodes exist; the caller's copy is stale (no nodes).
+        let node = Node {
+            name: "n".into(),
+            proxy_type: "ss".into(),
+            server: "1.1.1.1".into(),
+            raw: serde_json::json!({"name": "n"}),
+        };
+        let id = s.id.clone();
+        rt.mutate(|m| m.subscriptions.iter_mut().find(|x| x.id == id).unwrap().nodes = vec![node]).await.unwrap();
+
+        s.name = "renamed".into();
+        s.last_updated = None;
+        let (_, fetch) = ops::save_subscription(&rt, s.clone()).await.unwrap();
+        assert!(!fetch, "url unchanged -> no fetch");
+        let saved = rt.model().subscriptions[0].clone();
+        assert_eq!(saved.name, "renamed");
+        assert_eq!(saved.nodes.len(), 1, "server-side nodes kept");
+        assert_eq!(saved.last_updated, Some(5), "fetch state kept");
+
+        s.url = "http://b/y".into();
+        let (_, fetch) = ops::save_subscription(&rt, s).await.unwrap();
+        assert!(fetch, "url changed -> fetch");
+    }
+
+    #[tokio::test]
+    async fn select_group_member_rejects_bad_targets() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = runtime(&td);
+        let direct = direct_exit("直连");
+        ops::save_exit(&rt, direct.clone()).await.unwrap();
+        let node = NodeRef { subscription_id: SubscriptionId::new(), name: "n".into() };
+        let missing = ops::select_group_member(&rt, ExitId::new(), node.clone()).await;
+        assert!(matches!(missing.unwrap_err()[0], ValidationError::DanglingRef { .. }));
+        let not_group = ops::select_group_member(&rt, direct.id, node.clone()).await;
+        assert!(matches!(not_group.unwrap_err()[0], ValidationError::DanglingRef { .. }));
+        let group = Exit {
+            id: ExitId::new(),
+            name: "组".into(),
+            kind: ExitKind::Group { strategy: GroupStrategy::Select, members: vec![], selected: None },
+            interface: None,
+        };
+        ops::save_exit(&rt, group.clone()).await.unwrap();
+        let not_member = ops::select_group_member(&rt, group.id, node).await;
+        assert!(matches!(not_member.unwrap_err()[0], ValidationError::DanglingRef { .. }));
     }
 }
