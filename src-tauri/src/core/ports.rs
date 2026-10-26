@@ -66,15 +66,13 @@ impl WindowsPortOwners {
                         // Rows are packed after the u32 count; read unaligned.
                         if family == 2 {
                             let sz = std::mem::size_of::<MIB_TCPROW_OWNER_PID>();
-                            let row: MIB_TCPROW_OWNER_PID = unsafe {
-                                std::ptr::read_unaligned(rows[i * sz..].as_ptr().cast())
-                            };
+                            let row: MIB_TCPROW_OWNER_PID =
+                                unsafe { std::ptr::read_unaligned(rows[i * sz..].as_ptr().cast()) };
                             out.push((u16::from_be(row.dwLocalPort as u16), row.dwOwningPid));
                         } else {
                             let sz = std::mem::size_of::<MIB_TCP6ROW_OWNER_PID>();
-                            let row: MIB_TCP6ROW_OWNER_PID = unsafe {
-                                std::ptr::read_unaligned(rows[i * sz..].as_ptr().cast())
-                            };
+                            let row: MIB_TCP6ROW_OWNER_PID =
+                                unsafe { std::ptr::read_unaligned(rows[i * sz..].as_ptr().cast()) };
                             out.push((u16::from_be(row.dwLocalPort as u16), row.dwOwningPid));
                         }
                     }

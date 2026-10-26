@@ -102,7 +102,14 @@ impl HttpMihomoApi {
             base: format!("http://127.0.0.1:{port}"),
             port,
             secret,
-            client: reqwest::Client::new(),
+            // no_proxy: loopback controller traffic (with the Bearer secret) must
+            // never go through HTTP_PROXY/system proxies.
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(5))
+                .connect_timeout(std::time::Duration::from_secs(2))
+                .build()
+                .expect("reqwest client"),
         }
     }
 
@@ -185,13 +192,19 @@ impl MihomoApi for HttpMihomoApi {
             delay: u32,
         }
         let d: D = self
-            .json(self.client.get(format!(
-                "{}/proxies/{}/delay?url={}&timeout={}",
-                self.base,
-                enc(proxy),
-                enc(url),
-                timeout_ms
-            )))
+            .json(
+                self.client
+                    .get(format!(
+                        "{}/proxies/{}/delay?url={}&timeout={}",
+                        self.base,
+                        enc(proxy),
+                        enc(url),
+                        timeout_ms
+                    ))
+                    .timeout(std::time::Duration::from_millis(
+                        u64::from(timeout_ms) + 2000,
+                    )),
+            )
             .await?;
         Ok(d.delay)
     }
@@ -219,7 +232,19 @@ impl MihomoApi for HttpMihomoApi {
             enc(&self.secret)
         );
         let connect = async move {
-            match tokio_tungstenite::connect_async(url).await {
+            // tokio-tungstenite dials the address directly (no proxy support), so
+            // the secret never goes through a system proxy.
+            let dial = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                tokio_tungstenite::connect_async(url),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                Err(tokio_tungstenite::tungstenite::Error::Io(
+                    std::io::ErrorKind::TimedOut.into(),
+                ))
+            });
+            match dial {
                 Ok((ws, _)) => ws
                     .filter_map(|msg| async move {
                         match msg {
@@ -413,15 +438,32 @@ mod tests {
         use tokio_tungstenite::tungstenite::Message;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
         tokio::spawn(async move {
             let (sock, _) = listener.accept().await.unwrap();
-            let mut ws = tokio_tungstenite::accept_async(sock).await.unwrap();
-            ws.send(Message::text(r#"{"up":5,"down":6}"#)).await.unwrap();
-            ws.send(Message::text(r#"{"up":7,"down":8}"#)).await.unwrap();
+            let uri = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            let seen = uri.clone();
+            let mut ws = tokio_tungstenite::accept_hdr_async(
+                sock,
+                move |req: &tokio_tungstenite::tungstenite::handshake::server::Request, resp| {
+                    *seen.lock().unwrap() = req.uri().to_string();
+                    Ok(resp)
+                },
+            )
+            .await
+            .unwrap();
+            tx.send(uri.lock().unwrap().clone()).unwrap();
+            ws.send(Message::text(r#"{"up":5,"down":6}"#))
+                .await
+                .unwrap();
+            ws.send(Message::text(r#"{"up":7,"down":8}"#))
+                .await
+                .unwrap();
             ws.close(None).await.unwrap();
         });
         let api = HttpMihomoApi::new(port, "tok".into());
         let got: Vec<_> = api.traffic_stream().take(2).collect().await;
         assert_eq!(got, vec![Ok((5, 6)), Ok((7, 8))]);
+        assert_eq!(rx.await.unwrap(), "/traffic?token=tok");
     }
 }

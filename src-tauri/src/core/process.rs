@@ -44,25 +44,62 @@ pub struct CoreProcess {
     pid: u32,
 }
 
-/// Copies lines from a child pipe into the shared log file.
+/// `path` lies under `dir` (symlinks/`..`/case resolved when the paths exist).
+fn is_inside(path: &Path, dir: &Path) -> bool {
+    let norm = |p: &Path| {
+        if let Ok(c) = p.canonicalize() {
+            return c;
+        }
+        match (
+            p.parent().and_then(|d| d.canonicalize().ok()),
+            p.file_name(),
+        ) {
+            (Some(d), Some(n)) => d.join(n),
+            _ => p.to_path_buf(),
+        }
+    };
+    norm(path).starts_with(norm(dir))
+}
+
+/// Copies lines from a child pipe into the shared log file. If the log cannot
+/// be opened the output is still drained (so the child never blocks on a full
+/// pipe) but discarded, with one warning on stderr.
 fn pipe_to_log<R: AsyncRead + Unpin + Send + 'static>(reader: R, log: PathBuf) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     tokio::spawn(async move {
-        let Ok(mut file) = tokio::fs::OpenOptions::new()
+        let mut file = match tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&log)
             .await
-        else {
-            return;
+        {
+            Ok(f) => Some(f),
+            Err(e) => {
+                if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!(
+                        "cannot open {}: {e}; discarding mihomo output",
+                        log.display()
+                    );
+                }
+                None
+            }
         };
-        let mut lines = BufReader::new(reader).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if file
-                .write_all(format!("{line}\n").as_bytes())
-                .await
-                .is_err()
-            {
-                break;
+        let mut reader = BufReader::new(reader);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            if let Some(f) = file.as_mut() {
+                let mut line = String::from_utf8_lossy(&buf)
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string();
+                line.push('\n');
+                if f.write_all(line.as_bytes()).await.is_err() {
+                    file = None;
+                }
             }
         }
     });
@@ -72,6 +109,12 @@ impl CoreProcess {
     /// Runs `bin -d workdir -f config`. `config` must be inside `workdir`
     /// (spike S5). Does not wait for the API; see [`wait_ready`].
     pub async fn start(bin: &Path, workdir: &Path, config: &Path) -> io::Result<Self> {
+        if !is_inside(config, workdir) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "config must be inside the mihomo workdir (spike S5)",
+            ));
+        }
         let mut cmd = Command::new(bin);
         cmd.arg("-d")
             .arg(workdir)
@@ -98,9 +141,19 @@ impl CoreProcess {
     }
 
     pub async fn stop(&mut self) -> io::Result<()> {
-        // Killing an already-exited child is fine; wait() reaps it either way.
-        let _ = self.child.start_kill();
-        self.child.wait().await.map(|_| ())
+        if let Err(e) = self.child.start_kill() {
+            // An already-exited child is fine; anything else is a real failure.
+            if self.child.try_wait().ok().flatten().is_none() {
+                return Err(e);
+            }
+        }
+        match tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await {
+            Ok(r) => r.map(|_| ()),
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "mihomo did not exit within 5s of kill",
+            )),
+        }
     }
 
     pub fn try_wait(&mut self) -> Option<Option<i32>> {
@@ -150,11 +203,18 @@ impl CoreLauncher for ProcessLauncher {
 pub async fn wait_ready(api: &dyn MihomoApi, timeout: Duration) -> Result<String, ApiError> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        match api.version().await {
-            Ok(v) => return Ok(v),
-            Err(e) if tokio::time::Instant::now() >= deadline => return Err(e),
-            Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+        // Bound each probe by the remaining time so a mihomo that accepts but
+        // never answers cannot overrun the deadline.
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let err = match tokio::time::timeout(remaining, api.version()).await {
+            Ok(Ok(v)) => return Ok(v),
+            Ok(Err(e)) => e,
+            Err(_) => ApiError::Unreachable("timed out waiting for mihomo".into()),
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(err);
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -218,6 +278,34 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, ApiError::Unreachable("down".into()));
+    }
+
+    #[tokio::test]
+    async fn wait_ready_bounded_when_server_never_replies() {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((s, _)) = l.accept().await {
+                held.push(s); // accept, never answer
+            }
+        });
+        let api = HttpMihomoApi::new(port, "x".into());
+        let t = std::time::Instant::now();
+        let r = wait_ready(&api, Duration::from_millis(500)).await;
+        assert!(r.is_err());
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+    }
+
+    #[tokio::test]
+    async fn start_rejects_config_outside_workdir() {
+        let work = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let cfg = other.path().join("config.yaml");
+        let e = CoreProcess::start(Path::new("whatever.exe"), work.path(), &cfg)
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[tokio::test]
