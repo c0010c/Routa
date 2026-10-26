@@ -1,6 +1,14 @@
 import { render, screen, within } from "@testing-library/react";
 import App from "./App";
 
+vi.mock("./api/events", () => ({ useRuntimeEvents: () => {} }));
+vi.mock("./bindings", () => ({
+  commands: {
+    getModel: () => new Promise(() => {}),
+    getStatus: () => new Promise(() => {}),
+  },
+}));
+
 describe("App", () => {
   it("renders the five navigation items", () => {
     render(<App />);
