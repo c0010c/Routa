@@ -1,12 +1,6 @@
 import { Alert, Button, FormControlLabel, Paper, Stack, Switch, TextField, Typography } from "@mui/material";
 import { useState } from "react";
-import {
-  isValidationError,
-  useCoreControl,
-  useModel,
-  useOpenLogDir,
-  useSaveSettings,
-} from "../api/client";
+import { isValidationError, useModel, useOpenLogDir, useSaveSettings } from "../api/client";
 import type { Settings as SettingsModel } from "../bindings";
 import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { IntervalInput } from "../components/IntervalInput";
@@ -14,7 +8,6 @@ import { fieldErrors, type FieldErrors } from "../lib/validation";
 
 function SettingsForm({ initial }: { initial: SettingsModel }) {
   const save = useSaveSettings();
-  const core = useCoreControl();
   const openLogDir = useOpenLogDir();
   const apply = useApplyResult();
   const [saved, setSaved] = useState(initial);
@@ -48,18 +41,10 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
       if (isValidationError(e)) setErrs(fieldErrors(e.errors));
       return;
     }
-    const needsRestart = next.controller_port !== saved.controller_port || next.core_path !== saved.core_path;
+    // The backend restarts mihomo itself when these change.
+    const restarted = next.controller_port !== saved.controller_port || next.core_path !== saved.core_path;
     setSaved(next);
-    if (needsRestart) {
-      try {
-        await core.restart.mutateAsync();
-        apply.showMessage("设置已保存，mihomo 正在重启", "success");
-      } catch {
-        // The restart failure is already shown by the mutation's onError.
-      }
-    } else {
-      apply.showMessage("设置已保存", "success");
-    }
+    apply.showMessage(restarted ? "设置已保存，mihomo 正在重启" : "设置已保存", "success");
   };
 
   return (

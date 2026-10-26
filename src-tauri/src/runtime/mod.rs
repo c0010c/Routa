@@ -682,6 +682,8 @@ impl Runtime {
     }
 
     /// clone → f → validate → `mihomo -t` → save → evaluate → generate → apply.
+    /// A changed controller port or core path restarts a supervised core
+    /// instead (the restart applies the new model).
     /// Validation errors (including a config mihomo rejects) leave everything
     /// untouched. After `shutdown` nothing
     /// is saved or applied and `FailedCoreStopped` is returned.
@@ -708,7 +710,17 @@ impl Runtime {
         let r = f(&mut m)?;
         validate(&m)?;
         self.inner.check_model(&mut eng, &m).await?;
+        // A new controller port or binary only takes effect on a fresh core.
+        let (old, new) = (&eng.model.settings, &m.settings);
+        let restart = eng.supervise && (old.controller_port != new.controller_port || old.core_path != new.core_path);
         self.inner.commit_model(&mut eng, m);
+        if restart {
+            let outcome = match self.inner.start_core(&mut eng).await {
+                Ok(()) => self.inner.status.lock().unwrap().last_apply.clone().unwrap_or_else(core_not_running),
+                Err(error) => ApplyOutcome::NotRunning { error },
+            };
+            return Ok((outcome, r));
+        }
         Ok((self.inner.apply(&mut eng).await, r))
     }
 

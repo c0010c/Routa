@@ -820,3 +820,35 @@ async fn mutate_without_core_is_saved_but_not_running() {
     assert!(matches!(out, ApplyOutcome::NotRunning { .. }), "{out:?}");
     assert_eq!(Store::open(h.data.clone()).unwrap().load_model().unwrap().listeners[0].name, "改名");
 }
+
+#[tokio::test(start_paused = true)]
+async fn controller_port_or_core_path_change_restarts_core() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.ports.0.lock().unwrap().insert(19100, PID);
+    h.rt.start().await.unwrap();
+
+    // Unrelated settings: hot reload only.
+    h.rt.mutate(|m| m.settings.autostart = true).await.unwrap();
+    assert_eq!(h.launcher.count(), 1);
+
+    let out = h.rt.mutate(|m| m.settings.controller_port = 19100).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::Reloaded { .. }), "{out:?}");
+    assert_eq!(h.launcher.count(), 2);
+    assert!(h.launcher.stopped(0));
+    let secret = h.api_args.lock().unwrap().last().unwrap().1.clone();
+    assert_eq!(h.api_args.lock().unwrap().last().unwrap().0, 19100);
+    assert_eq!(h.launcher.launches.lock().unwrap()[1], crate::config_gen::empty_config(19100, &secret));
+    assert_eq!(listener_names(&last_reload(&h.api)), vec!["L1".to_string()]);
+
+    h.rt.mutate(|m| m.settings.core_path = Some("C:/mihomo.exe".into())).await.unwrap();
+    assert_eq!(h.launcher.count(), 3);
+    assert_eq!(h.rt.status().core, CoreState::Running);
+
+    // A stopped core stays stopped.
+    h.rt.stop_core().await;
+    let out = h.rt.mutate(|m| m.settings.controller_port = 19097).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::NotRunning { .. }), "{out:?}");
+    assert_eq!(h.launcher.count(), 3);
+    h.rt.shutdown().await;
+}

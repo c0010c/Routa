@@ -37,13 +37,14 @@ function renderPage() {
 }
 
 describe("Settings", () => {
-  it("restarts mihomo after the controller port changes", async () => {
+  it("reports the backend restart after the controller port changes, without restarting itself", async () => {
     renderPage();
     fireEvent.change(await screen.findByLabelText("控制端口"), { target: { value: "19100" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText("设置已保存，mihomo 正在重启")).toBeInTheDocument();
     expect(commands.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ controller_port: 19100 }));
-    await waitFor(() => expect(commands.coreRestart).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(commands.saveSettings).toHaveBeenCalledTimes(1));
+    expect(commands.coreRestart).not.toHaveBeenCalled();
   });
 
   it("does not restart when only unrelated fields change", async () => {
