@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::links::{b64_decode_lenient, parse_share_link};
 use crate::model::Node;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
     /// Recognised as a subscription but yielded no usable node.
     NoNodes,
