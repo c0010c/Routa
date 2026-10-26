@@ -3,3 +3,5 @@ node_modules/
 target/
 dist/
 src-tauri/binaries/*.exe
+spike/bin/
+spike/work/
