@@ -29,6 +29,8 @@ impl fmt::Display for FetchError {
 
 impl std::error::Error for FetchError {}
 
+const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+
 fn build_client(via_proxy: Option<u16>) -> Result<reqwest::Client, FetchError> {
     // `no_proxy()` first: neither path may silently pick up env/system proxies.
     let mut builder = reqwest::Client::builder()
@@ -38,10 +40,10 @@ fn build_client(via_proxy: Option<u16>) -> Result<reqwest::Client, FetchError> {
         .no_proxy();
     if let Some(port) = via_proxy {
         let proxy = reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
-            .map_err(|e| FetchError::Http(format!("代理配置无效: {e}")))?;
+            .map_err(|e| FetchError::Http(format!("代理配置无效: {}", e.without_url())))?;
         builder = builder.proxy(proxy);
     }
-    builder.build().map_err(|e| FetchError::Http(format!("创建 HTTP 客户端失败: {e}")))
+    builder.build().map_err(|e| FetchError::Http(format!("创建 HTTP 客户端失败: {}", e.without_url())))
 }
 
 /// GET the raw subscription body, directly or through `127.0.0.1:<port>`.
@@ -51,16 +53,24 @@ pub async fn fetch_body(url: &str, via_proxy: Option<u16>) -> Result<String, Fet
         .get(url)
         .send()
         .await
-        .map_err(|e| FetchError::Http(format!("请求失败: {e}")))?;
+        .map_err(|e| FetchError::Http(format!("请求失败: {}", e.without_url())))?;
     let status = resp.status();
     if !status.is_success() {
         return Err(FetchError::Http(format!("HTTP {}", status.as_u16())));
     }
-    let bytes = resp
-        .bytes()
+    let mut resp = resp;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
         .await
-        .map_err(|e| FetchError::Http(format!("读取响应失败: {e}")))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+        .map_err(|e| FetchError::Http(format!("读取响应失败: {}", e.without_url())))?
+    {
+        if buf.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(FetchError::Http("订阅内容过大（超过 10 MiB）".into()));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 async fn fetch_nodes(url: &str, via_proxy: Option<u16>) -> Result<Vec<Node>, FetchError> {
@@ -214,6 +224,31 @@ mod tests {
         assert_eq!(sb.last_updated, Some(2000));
     }
 
+
+    #[tokio::test]
+    async fn error_text_does_not_contain_url() {
+        let s = serve("nope", 500).await;
+        let e = fetch_body(&format!("{}/sub?token=SECRET123", s.uri()), None).await.unwrap_err();
+        assert!(!e.to_string().contains("SECRET123"), "{e}");
+        let dead = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let url = format!("http://127.0.0.1:{dead}/sub?token=SECRET123");
+        let e = fetch_body(&url, None).await.unwrap_err();
+        assert!(!e.to_string().contains("SECRET123"), "{e}");
+        let sb = sub(&url);
+        let e = update_subscription(&sb, Some(dead)).await.unwrap_err();
+        assert!(!e.to_string().contains("SECRET123"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn oversized_body_rejected() {
+        let big = "a".repeat(MAX_BODY_BYTES + 1);
+        let s = serve(&big, 200).await;
+        let r = fetch_body(&format!("{}/sub", s.uri()), None).await;
+        assert_eq!(r, Err(FetchError::Http("订阅内容过大（超过 10 MiB）".into())));
+    }
     #[tokio::test]
     async fn http_error_status_is_failure() {
         let s = serve("nope", 503).await;
