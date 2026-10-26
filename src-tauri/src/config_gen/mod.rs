@@ -32,6 +32,9 @@ pub struct PlannedListener {
     pub id: ListenerId,
     pub exit_name: String,
     pub exit_fingerprint: u64,
+    /// Hash of the listener's own settings (type, listen, port, users): a
+    /// change means existing connections were accepted under old rules.
+    pub listener_fingerprint: u64,
     pub port: u16,
 }
 
@@ -173,13 +176,17 @@ fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth) -> Option<ExitParts> {
     (!parts.proxies.is_empty()).then_some(parts)
 }
 
-fn fingerprint(parts: &ExitParts) -> u64 {
-    let mut all = parts.proxies.clone();
-    all.extend(parts.group.clone());
-    let text = serde_yaml_ng::to_string(&Value::Sequence(all)).expect("yaml serialization");
+fn hash_yaml(v: &Value) -> u64 {
+    let text = serde_yaml_ng::to_string(v).expect("yaml serialization");
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+fn fingerprint(parts: &ExitParts) -> u64 {
+    let mut all = parts.proxies.clone();
+    all.extend(parts.group.clone());
+    hash_yaml(&Value::Sequence(all))
 }
 
 fn base_config(
@@ -272,17 +279,20 @@ pub fn generate(input: &GenInput) -> Generated {
             ListenerType::Http => "http",
             ListenerType::Socks => "socks",
         };
-        let mut entries = vec![
-            ("name", s(&l.name)),
+        let mut own = vec![
             ("type", s(ty)),
             ("listen", s(&l.listen)),
             ("port", Value::from(l.port)),
-            ("proxy", s(&exit.name)),
         ];
         if let Some(a) = &l.auth {
             let user = map(vec![("username", s(&a.username)), ("password", s(&a.password))]);
-            entries.push(("users", Value::Sequence(vec![user])));
+            own.push(("users", Value::Sequence(vec![user])));
         }
+        let listener_fingerprint = hash_yaml(&map(own.clone()));
+        let mut entries = vec![("name", s(&l.name))];
+        entries.extend(own.drain(..3));
+        entries.push(("proxy", s(&exit.name)));
+        entries.extend(own);
         listeners.push(map(entries));
         plan.insert(
             l.name.clone(),
@@ -290,6 +300,7 @@ pub fn generate(input: &GenInput) -> Generated {
                 id: l.id.clone(),
                 exit_name: exit.name.clone(),
                 exit_fingerprint: fp,
+                listener_fingerprint,
                 port: l.port,
             },
         );
@@ -570,6 +581,27 @@ mod tests {
         assert_eq!(fp(&before, "入口C"), fp(&after, "入口C"));
         let p = &before.plan.listeners["入口B"];
         assert_eq!((p.exit_name.as_str(), p.port, &p.id), ("出口B", 7892, &ListenerId("lb".into())));
+    }
+
+    #[test]
+    fn listener_fingerprint_tracks_own_settings_only() {
+        let lfp = |m: &Model| gen(m).plan.listeners["入口A"].listener_fingerprint;
+        let before = lfp(&base());
+        let changed: [fn(&mut Listener); 5] = [
+            |l| l.listener_type = ListenerType::Http,
+            |l| l.listen = "127.0.0.1".into(),
+            |l| l.port = 7999,
+            |l| l.auth.as_mut().unwrap().password = "p2".into(),
+            |l| l.auth = None,
+        ];
+        for (i, change) in changed.iter().enumerate() {
+            let mut m = base();
+            change(&mut m.listeners[0]);
+            assert_ne!(lfp(&m), before, "change {i}");
+        }
+        let mut m = base();
+        m.exits[0].interface = Some(InterfaceGuid("{G2}".into())); // exit, not listener
+        assert_eq!(lfp(&m), before);
     }
 
     #[test]

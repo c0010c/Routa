@@ -50,14 +50,18 @@ pub enum ApplyOutcome {
 }
 
 /// Listener names that existed in `old` and whose traffic must not continue as
-/// before: removed in `new`, or routed to another exit / a changed exit.
-/// Port-only changes are not affected. Sorted by name.
+/// before: removed in `new`, routed to another exit / a changed exit, or with
+/// changed own settings (type, listen, port, users). Sorted by name.
 pub fn affected_listeners(old: &EffectivePlan, new: &EffectivePlan) -> Vec<String> {
     old.listeners
         .iter()
         .filter(|(name, o)| match new.listeners.get(*name) {
             None => true,
-            Some(n) => n.exit_name != o.exit_name || n.exit_fingerprint != o.exit_fingerprint,
+            Some(n) => {
+                n.exit_name != o.exit_name
+                    || n.exit_fingerprint != o.exit_fingerprint
+                    || n.listener_fingerprint != o.listener_fingerprint
+            }
         })
         .map(|(name, _)| name.clone())
         .collect()
@@ -279,6 +283,8 @@ mod tests {
                 id: ListenerId(format!("id-{name}")),
                 exit_name: exit.into(),
                 exit_fingerprint: fp,
+                // Stands in for type/listen/port/users: the port is enough here.
+                listener_fingerprint: u64::from(port),
                 port,
             },
         )
@@ -333,6 +339,11 @@ mod tests {
         }
     }
 
+    fn with_listener_fp(mut p: (String, PlannedListener), lfp: u64) -> (String, PlannedListener) {
+        p.1.listener_fingerprint = lfp;
+        p
+    }
+
     #[test]
     fn affected_detects_removed_changed_and_fingerprint() {
         let old = plan(vec![
@@ -341,17 +352,19 @@ mod tests {
             pl("fp", "E1", 1, 7003),
             pl("same", "E1", 1, 7004),
             pl("port-only", "E1", 1, 7005),
+            pl("auth", "E1", 1, 7007),
         ]);
         let new = plan(vec![
             pl("moved-exit", "E2", 1, 7002),
             pl("fp", "E1", 2, 7003),
             pl("same", "E1", 1, 7004),
             pl("port-only", "E1", 1, 7999),
+            with_listener_fp(pl("auth", "E1", 1, 7007), 42),
             pl("brand-new", "E1", 1, 7006),
         ]);
         assert_eq!(
             affected_listeners(&old, &new),
-            vec!["fp", "moved-exit", "removed"]
+            vec!["auth", "fp", "moved-exit", "port-only", "removed"]
         );
     }
 
@@ -411,6 +424,21 @@ mod tests {
             empty_config(9097, "s")
         );
         assert_eq!(a.last_plan, Some(plan(vec![])));
+        assert_eq!(*api.closed.lock().unwrap(), vec!["c1"]);
+    }
+
+    #[tokio::test]
+    async fn rejected_listener_settings_change_fails_closed() {
+        let api = FakeApi::with_reload_results(vec![Err(rejected()), Ok(())]);
+        let (mut a, api, _d, _p) = setup(api, owning(&[]));
+        a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001)]));
+        api.set_connections(ConnectionsSnapshot {
+            connections: vec![conn("c1", "a")],
+            ..Default::default()
+        });
+        let new = plan(vec![with_listener_fp(pl("a", "E1", 1, 7001), 99)]);
+        let out = a.apply(generated("NEW", new), 9097, "s", PID, async || {}).await;
+        assert!(matches!(out, ApplyOutcome::FailedClosed { .. }), "{out:?}");
         assert_eq!(*api.closed.lock().unwrap(), vec!["c1"]);
     }
 
