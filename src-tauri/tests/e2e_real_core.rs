@@ -54,20 +54,48 @@ fn curl_status(proxy_port: u16, url: &str) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-fn mihomo_running(pid_marker_dir: &str) -> bool {
-    // Any mihomo process whose command line mentions our temp workdir.
+fn ps_count(marker: &str) -> usize {
+    // Matches only mihomo processes whose command line mentions our temp workdir.
+    let action = "Measure-Object | ForEach-Object { $_.Count }";
     let out = Command::new("powershell")
         .args([
             "-NoProfile",
             "-Command",
             &format!(
-                "(Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{}*' -and $_.Name -like '*mihomo*' }} | Measure-Object).Count",
-                pid_marker_dir.replace('\'', "")
+                "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{}*' -and $_.Name -like '*mihomo*' }} | {}",
+                marker.replace('\'', ""),
+                action
             ),
         ])
         .output()
-        .unwrap();
-    String::from_utf8_lossy(&out.stdout).trim() != "0"
+        .expect("powershell");
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    text.parse::<usize>().unwrap_or_else(|_| {
+        panic!("could not parse process count {text:?}; stderr: {}", String::from_utf8_lossy(&out.stderr))
+    })
+}
+
+fn mihomo_running(marker: &str) -> bool {
+    ps_count(marker) > 0
+}
+
+/// Kills the test's own mihomo (matched by temp-dir marker) even when an
+/// assertion fails before `shutdown` runs.
+struct KillOnDrop(String);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{}*' -and $_.Name -like '*mihomo*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}",
+                    self.0.replace('\'', "")
+                ),
+            ])
+            .output();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -80,6 +108,7 @@ async fn real_core_two_listeners_direct_exit() {
     let store = Store::open(tmp.path().to_path_buf()).unwrap();
     let workdir = store.core_workdir();
     let marker = tmp.path().file_name().unwrap().to_string_lossy().to_string();
+    let _guard = KillOnDrop(marker.clone());
 
     // Model: one Direct exit, two listeners, free ports (controller included).
     let (p1, p2, ctrl) = (free_port(), free_port(), free_port());
