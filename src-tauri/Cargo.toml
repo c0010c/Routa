@@ -1,0 +1,22 @@
+[package]
+name = "mihomo-mapper"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mihomo_mapper"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+tauri-specta = { version = "=2.0.0-rc.21", features = ["derive", "typescript"] }
+specta = "=2.0.0-rc.22"
+specta-typescript = "=0.0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

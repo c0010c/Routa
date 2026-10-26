@@ -5,3 +5,5 @@ dist/
 src-tauri/binaries/*.exe
 spike/bin/
 spike/work/
+src-tauri/gen/
+*.log
