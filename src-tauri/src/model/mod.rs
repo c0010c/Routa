@@ -1,3 +1,4 @@
+pub mod health;
 pub mod types;
 pub mod validate;
 
