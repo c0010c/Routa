@@ -2,6 +2,7 @@ pub mod config_gen;
 pub mod core;
 pub mod model;
 pub mod netif;
+pub mod runtime;
 pub mod scheduler;
 pub mod stats;
 pub mod store;

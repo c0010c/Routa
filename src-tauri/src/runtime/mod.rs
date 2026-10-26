@@ -1,0 +1,608 @@
+//! Tauri-independent orchestration: model + store + health + config generation
+//! + fail-closed apply + mihomo supervision + schedulers + NIC watch.
+//!
+//! Locking: every model mutation, Store save, apply and core (re)start runs
+//! under the one async `engine` mutex. `status`, the model mirror and the
+//! live api/plan are std mutexes that are only held for copies, never across
+//! an await.
+
+mod tasks;
+
+use std::collections::HashMap;
+use std::io;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
+
+use crate::config_gen::{empty_config, generate, node_proxy_name, GenInput};
+use crate::core::api::MihomoApi;
+use crate::core::apply::{ApplyOutcome, Applier, FailedListener};
+use crate::core::ports::PortOwners;
+use crate::core::process::{wait_ready, CoreHandleLike, CoreLauncher, CoreState};
+use crate::model::health::{evaluate, ExitStatus, Health};
+use crate::model::{
+    validate, FetchResult, ListenerId, Model, Settings, SubscriptionId, ValidationError,
+};
+use crate::netif::{InterfaceSource, NetInterface};
+use crate::stats::delay::{test_many, DelayBook, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
+use crate::stats::traffic::{Rate, TrafficAggregator, TrafficTick};
+use crate::store::{Store, TrafficTotals};
+use crate::subscription::fetch::{fetch_listener_ports, record_result, update_subscription, PortAllocator};
+
+/// Builds the launcher for the current settings (core_path or sidecar); called
+/// at every (re)start so a changed `core_path` takes effect on restart.
+pub type LauncherFor = Arc<dyn Fn(&Settings) -> Arc<dyn CoreLauncher> + Send + Sync>;
+/// `(controller_port, secret)` -> API client for that core instance.
+pub type ApiFor = Box<dyn Fn(u16, String) -> Arc<dyn MihomoApi> + Send + Sync>;
+
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
+pub struct RuntimeStatus {
+    pub core: CoreState,
+    pub last_apply: Option<ApplyOutcome>,
+    pub health: Health,
+    pub delays: DelayBook,
+    pub traffic: Option<TrafficTick>,
+    pub interfaces: Vec<NetInterface>,
+    pub failed_listeners: Vec<FailedListener>,
+    /// Problems found while loading persisted state (e.g. a corrupt state.json
+    /// that was moved aside).
+    pub startup_error: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
+pub enum RuntimeEvent {
+    Status(RuntimeStatus),
+    Traffic(TrafficTick),
+}
+
+/// One running mihomo instance.
+struct CoreRun {
+    handle: Box<dyn CoreHandleLike + Send>,
+    secret: String,
+    pid: u32,
+    applier: Applier,
+    started: Instant,
+    traffic_stream: JoinHandle<()>,
+}
+
+/// State guarded by the engine mutex.
+struct Engine {
+    model: Model,
+    core: Option<CoreRun>,
+    /// Whether the supervisor restarts the core when it is not running.
+    supervise: bool,
+    alloc: PortAllocator,
+}
+
+/// What the samplers need without taking the engine lock.
+#[derive(Default)]
+struct Live {
+    api: Option<Arc<dyn MihomoApi>>,
+    name_to_id: HashMap<String, ListenerId>,
+    stream_rate: Option<Rate>,
+    last_delay_run: Option<i64>,
+}
+
+struct Inner {
+    store: Store,
+    nics: Arc<dyn InterfaceSource>,
+    launcher_for: LauncherFor,
+    api_for: ApiFor,
+    ports: Arc<dyn PortOwners>,
+    events: mpsc::Sender<RuntimeEvent>,
+    engine: tokio::sync::Mutex<Engine>,
+    model: Mutex<Model>,
+    status: Mutex<RuntimeStatus>,
+    live: Mutex<Live>,
+    traffic: Mutex<TrafficAggregator>,
+    /// false when a corrupt file could not be moved aside: never overwrite it.
+    persist_model: bool,
+    persist_totals: bool,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
+}
+
+pub struct Runtime {
+    inner: Arc<Inner>,
+}
+
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn random_secret() -> String {
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).expect("OS random source");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Loads a persisted file; on failure moves it to `<name>.corrupt-<unix ts>`
+/// and starts from the default. Returns `(value, may_save)`.
+fn load_or_quarantine<T: Default>(
+    loaded: io::Result<T>,
+    path: &Path,
+    errors: &mut Vec<String>,
+) -> (T, bool) {
+    let e = match loaded {
+        Ok(v) => return (v, true),
+        Err(e) => e,
+    };
+    let mut target = path.as_os_str().to_owned();
+    target.push(format!(".corrupt-{}", now_unix()));
+    match std::fs::rename(path, &target) {
+        Ok(()) => {
+            errors.push(format!(
+                "{} 无法读取（{e}），已备份为 {} 并使用默认值",
+                path.display(),
+                Path::new(&target).display()
+            ));
+            (T::default(), true)
+        }
+        Err(re) => {
+            errors.push(format!(
+                "{} 无法读取（{e}），备份失败（{re}），本次运行不会保存以免覆盖",
+                path.display()
+            ));
+            (T::default(), false)
+        }
+    }
+}
+
+fn uncut(o: &ApplyOutcome) -> usize {
+    match o {
+        ApplyOutcome::Reloaded { uncut, .. } | ApplyOutcome::FailedClosed { uncut, .. } => *uncut,
+        _ => 0,
+    }
+}
+
+fn core_not_running() -> ApplyOutcome {
+    ApplyOutcome::FailedCoreStopped { error: "mihomo 未运行，配置将在内核启动后生效".into() }
+}
+
+impl Inner {
+    fn emit_status(&self) {
+        let s = self.status.lock().unwrap().clone();
+        // Status events are full snapshots: dropping one when the consumer
+        // lags loses nothing the next one will not carry.
+        let _ = self.events.try_send(RuntimeEvent::Status(s));
+    }
+
+    fn set_core_state(&self, state: CoreState) {
+        self.status.lock().unwrap().core = state;
+        self.emit_status();
+    }
+
+    fn save_model(&self, m: &Model) {
+        if self.persist_model {
+            if let Err(e) = self.store.save_model(m) {
+                eprintln!("runtime: save state.json failed: {e}");
+            }
+        }
+    }
+
+    fn save_totals(&self) {
+        if !self.persist_totals {
+            return;
+        }
+        let totals = self.traffic.lock().unwrap().totals.clone();
+        if let Err(e) = self.store.save_totals(&totals) {
+            eprintln!("runtime: save traffic.json failed: {e}");
+        }
+    }
+
+    /// Replaces the model (already validated) and persists it.
+    fn commit_model(&self, eng: &mut Engine, m: Model) {
+        self.save_model(&m);
+        *self.model.lock().unwrap() = m.clone();
+        eng.model = m;
+    }
+
+    /// Stops and forgets the current core instance (no-op without one).
+    async fn drop_core(&self, eng: &mut Engine) {
+        if let Some(mut run) = eng.core.take() {
+            run.traffic_stream.abort();
+            if let Err(e) = run.handle.stop().await {
+                eprintln!("runtime: stopping mihomo failed: {e}");
+            }
+        }
+        let mut live = self.live.lock().unwrap();
+        live.api = None;
+        live.name_to_id.clear();
+        live.stream_rate = None;
+    }
+
+    /// (Re)starts mihomo: fresh secret, empty config, launch, wait for the
+    /// API, fresh Applier, then apply the latest model.
+    async fn start_core(self: &Arc<Self>, eng: &mut Engine) -> Result<(), String> {
+        self.drop_core(eng).await;
+        self.set_core_state(CoreState::Starting);
+        let res = self.launch_core(eng).await;
+        match &res {
+            Ok(()) => {
+                self.status.lock().unwrap().core = CoreState::Running;
+                // A fresh core has no connections, so `uncut` here is moot.
+                self.apply_once(eng).await;
+            }
+            Err(e) => {
+                eprintln!("runtime: {e}");
+                self.set_core_state(CoreState::Crashed { exit_code: None });
+            }
+        }
+        res
+    }
+
+    async fn launch_core(self: &Arc<Self>, eng: &mut Engine) -> Result<(), String> {
+        let secret = random_secret();
+        let port = eng.model.settings.controller_port;
+        let config = self.store.config_path();
+        std::fs::write(&config, empty_config(port, &secret))
+            .map_err(|e| format!("写入 mihomo 配置失败: {e}"))?;
+        let launcher = (self.launcher_for)(&eng.model.settings);
+        let mut handle = launcher
+            .launch(&config)
+            .await
+            .map_err(|e| format!("启动 mihomo 失败: {e}"))?;
+        let api = (self.api_for)(port, secret.clone());
+        if let Err(e) = wait_ready(api.as_ref(), READY_TIMEOUT).await {
+            let _ = handle.stop().await;
+            return Err(format!("mihomo 未在 5 秒内就绪: {e}"));
+        }
+        let pid = handle.pid();
+        let traffic_stream = tokio::spawn(tasks::traffic_stream(self.clone(), api.clone()));
+        self.live.lock().unwrap().api = Some(api.clone());
+        eng.core = Some(CoreRun {
+            handle,
+            secret,
+            pid,
+            applier: Applier::new(api, self.ports.clone(), config),
+            started: Instant::now(),
+            traffic_stream,
+        });
+        Ok(())
+    }
+
+    /// evaluate → generate → apply (when a core runs) → update status → emit.
+    /// `None` when no core is running (health and interfaces still update).
+    async fn apply_once(&self, eng: &mut Engine) -> Option<ApplyOutcome> {
+        let nics = self.nics.list();
+        let Engine { model, core, alloc, .. } = eng;
+        let health = evaluate(model, &nics);
+        let fetch = fetch_listener_ports(model, alloc);
+        let outcome = match core.as_mut() {
+            Some(run) => {
+                let generated = generate(&GenInput {
+                    model,
+                    health: &health,
+                    secret: &run.secret,
+                    fetch_listeners: &fetch,
+                });
+                let plan = generated.plan.clone();
+                let CoreRun { handle, applier, secret, pid, .. } = run;
+                let out = applier
+                    .apply(generated, model.settings.controller_port, secret, *pid, async || {
+                        if let Err(e) = handle.stop().await {
+                            eprintln!("runtime: stopping mihomo failed: {e}");
+                        }
+                    })
+                    .await;
+                let mut live = self.live.lock().unwrap();
+                match &out {
+                    ApplyOutcome::Reloaded { .. } => {
+                        live.name_to_id = plan
+                            .listeners
+                            .iter()
+                            .map(|(name, l)| (name.clone(), l.id.clone()))
+                            .collect();
+                    }
+                    ApplyOutcome::FailedClosed { .. } | ApplyOutcome::FailedCoreStopped { .. } => {
+                        live.name_to_id.clear();
+                    }
+                    ApplyOutcome::FailedKeptPrevious { .. } => {}
+                }
+                Some(out)
+            }
+            None => None,
+        };
+
+        if let Some(ApplyOutcome::FailedCoreStopped { .. }) = &outcome {
+            // The applier already stopped it; the supervisor restarts it
+            // (empty config first) with backoff.
+            self.drop_core(eng).await;
+            self.status.lock().unwrap().core = CoreState::Crashed { exit_code: None };
+        }
+        {
+            let mut st = self.status.lock().unwrap();
+            st.health = health;
+            st.interfaces = nics;
+            match &outcome {
+                Some(ApplyOutcome::Reloaded { failed_listeners, .. }) => {
+                    st.failed_listeners = failed_listeners.clone();
+                }
+                Some(ApplyOutcome::FailedKeptPrevious { .. }) => {}
+                _ => st.failed_listeners.clear(),
+            }
+            if let Some(o) = &outcome {
+                st.last_apply = Some(o.clone());
+            }
+        }
+        self.emit_status();
+        outcome
+    }
+
+    /// `apply_once`, escalating to a core restart when connections that must
+    /// not continue could not be cut (a restart drops every connection).
+    async fn apply(self: &Arc<Self>, eng: &mut Engine) -> ApplyOutcome {
+        match self.apply_once(eng).await {
+            Some(out) => {
+                if uncut(&out) > 0 {
+                    eprintln!("runtime: {} connection(s) could not be cut; restarting mihomo", uncut(&out));
+                    let _ = self.start_core(eng).await;
+                }
+                out
+            }
+            None => core_not_running(),
+        }
+    }
+
+    /// Fetches one subscription (fallback through its exit's internal
+    /// listener when that exit is healthy), records the result, saves, and
+    /// re-applies when the nodes changed. `None` if the subscription is gone.
+    async fn update_one_subscription(self: &Arc<Self>, id: &SubscriptionId) -> Option<FetchResult> {
+        let (sub, port) = {
+            let mut eng = self.engine.lock().await;
+            let sub = eng.model.subscriptions.iter().find(|s| &s.id == id)?.clone();
+            let core_up = eng.core.is_some();
+            let Engine { model, alloc, .. } = &mut *eng;
+            let fetch = fetch_listener_ports(model, alloc);
+            let st = self.status.lock().unwrap();
+            let port = sub.fallback_exit.as_ref().and_then(|exit| {
+                let ok = st.health.exits.get(exit).is_some_and(|h| h.status == ExitStatus::Ok);
+                (core_up && ok)
+                    .then(|| fetch.iter().find(|(e, _)| e == exit).map(|(_, p)| *p))
+                    .flatten()
+            });
+            (sub, port)
+        };
+
+        let result = update_subscription(&sub, port).await;
+
+        let mut eng = self.engine.lock().await;
+        let mut m = eng.model.clone();
+        let target = m.subscriptions.iter_mut().find(|s| &s.id == id)?;
+        let old_nodes = target.nodes.clone();
+        record_result(target, result, now_unix());
+        let fetch_result = target.last_result.clone();
+        let changed = target.nodes != old_nodes;
+        self.commit_model(&mut eng, m);
+        if changed {
+            self.apply(&mut eng).await;
+        } else {
+            self.emit_status();
+        }
+        fetch_result
+    }
+
+    async fn update_due_subscriptions(self: &Arc<Self>) {
+        let subs = self.model.lock().unwrap().subscriptions.clone();
+        for id in crate::scheduler::due_subscriptions(&subs, now_unix()) {
+            self.update_one_subscription(&id).await;
+        }
+    }
+
+    async fn refresh_interfaces(self: &Arc<Self>) -> bool {
+        let mut eng = self.engine.lock().await;
+        let current = self.nics.list();
+        if self.status.lock().unwrap().interfaces == current {
+            return false;
+        }
+        self.apply(&mut eng).await;
+        true
+    }
+
+    /// Every node proxy plus every healthy exit.
+    fn delay_targets(&self) -> Vec<String> {
+        let m = self.model.lock().unwrap().clone();
+        let st = self.status.lock().unwrap();
+        let mut names: Vec<String> = m
+            .subscriptions
+            .iter()
+            .flat_map(|s| s.nodes.iter().map(move |n| node_proxy_name(s, n)))
+            .collect();
+        names.extend(
+            m.exits
+                .iter()
+                .filter(|e| st.health.exits.get(&e.id).is_some_and(|h| h.status == ExitStatus::Ok))
+                .map(|e| e.name.clone()),
+        );
+        names
+    }
+
+    async fn test_delays(&self, names: Vec<String>) -> Vec<(String, DelayResult)> {
+        let api = self.live.lock().unwrap().api.clone();
+        let url = self.model.lock().unwrap().settings.delay_test_url.clone();
+        let results = match api {
+            Some(api) => test_many(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS).await,
+            None => names
+                .into_iter()
+                .map(|n| (n, DelayResult { ms: None, tested_at: now_unix() }))
+                .collect(),
+        };
+        {
+            let mut st = self.status.lock().unwrap();
+            for (name, r) in &results {
+                st.delays.record(name.clone(), r.clone());
+            }
+        }
+        self.emit_status();
+        results
+    }
+}
+
+impl Runtime {
+    /// Loads persisted state. A corrupt state.json / traffic.json is moved
+    /// aside (`*.corrupt-<unix ts>`), the default is used and the problem is
+    /// reported in `RuntimeStatus::startup_error`. Does not start anything.
+    pub fn new(
+        store: Store,
+        nics: Arc<dyn InterfaceSource>,
+        launcher_for: LauncherFor,
+        api_for: ApiFor,
+        ports: Arc<dyn PortOwners>,
+        events: mpsc::Sender<RuntimeEvent>,
+    ) -> Self {
+        let mut errors = Vec::new();
+        let (model, persist_model) = load_or_quarantine(store.load_model(), &store.state_path(), &mut errors);
+        let (totals, persist_totals): (TrafficTotals, bool) =
+            load_or_quarantine(store.load_totals(), &store.traffic_path(), &mut errors);
+        let interfaces = nics.list();
+        let status = RuntimeStatus {
+            core: CoreState::Stopped,
+            last_apply: None,
+            health: evaluate(&model, &interfaces),
+            delays: DelayBook::default(),
+            traffic: None,
+            interfaces,
+            failed_listeners: Vec::new(),
+            startup_error: (!errors.is_empty()).then(|| errors.join("\n")),
+        };
+        let inner = Inner {
+            store,
+            nics,
+            launcher_for,
+            api_for,
+            ports,
+            events,
+            engine: tokio::sync::Mutex::new(Engine {
+                model: model.clone(),
+                core: None,
+                supervise: false,
+                alloc: PortAllocator::new(),
+            }),
+            model: Mutex::new(model),
+            status: Mutex::new(status),
+            live: Mutex::new(Live::default()),
+            traffic: Mutex::new(TrafficAggregator::new(totals)),
+            persist_model,
+            persist_totals,
+            tasks: Mutex::new(Vec::new()),
+        };
+        Self { inner: Arc::new(inner) }
+    }
+
+    /// Starts mihomo (empty config → latest model) and the background tasks.
+    /// The tasks run even if the first start fails; the supervisor retries.
+    pub async fn start(&self) -> anyhow::Result<()> {
+        let res = {
+            let mut eng = self.inner.engine.lock().await;
+            eng.supervise = true;
+            if eng.core.is_none() {
+                self.inner.start_core(&mut eng).await
+            } else {
+                Ok(())
+            }
+        };
+        {
+            let mut t = self.inner.tasks.lock().unwrap();
+            if t.is_empty() {
+                *t = tasks::spawn_all(&self.inner);
+            }
+        }
+        res.map_err(anyhow::Error::msg)
+    }
+
+    /// Stops the background tasks, persists traffic totals, stops mihomo.
+    pub async fn shutdown(&self) {
+        for t in self.inner.tasks.lock().unwrap().drain(..) {
+            t.abort();
+        }
+        let mut eng = self.inner.engine.lock().await;
+        eng.supervise = false;
+        self.inner.save_totals();
+        self.inner.drop_core(&mut eng).await;
+        self.inner.set_core_state(CoreState::Stopped);
+    }
+
+    /// clone → f → validate → save → evaluate → generate → apply.
+    /// Validation errors leave everything untouched.
+    pub async fn mutate(&self, f: impl FnOnce(&mut Model)) -> Result<ApplyOutcome, Vec<ValidationError>> {
+        let mut eng = self.inner.engine.lock().await;
+        let mut m = eng.model.clone();
+        f(&mut m);
+        validate(&m)?;
+        self.inner.commit_model(&mut eng, m);
+        Ok(self.inner.apply(&mut eng).await)
+    }
+
+    /// Re-lists adapters; on any change re-evaluates and re-applies.
+    pub async fn refresh_interfaces(&self) -> bool {
+        self.inner.refresh_interfaces().await
+    }
+
+    /// (Re)starts mihomo with the latest model and re-enables supervision.
+    pub async fn restart_core(&self) {
+        let mut eng = self.inner.engine.lock().await;
+        eng.supervise = true;
+        let _ = self.inner.start_core(&mut eng).await;
+    }
+
+    /// Stops mihomo; the supervisor leaves it stopped until `restart_core`/`start`.
+    pub async fn stop_core(&self) {
+        let mut eng = self.inner.engine.lock().await;
+        eng.supervise = false;
+        self.inner.drop_core(&mut eng).await;
+        self.inner.status.lock().unwrap().failed_listeners.clear();
+        self.inner.set_core_state(CoreState::Stopped);
+    }
+
+    pub fn status(&self) -> RuntimeStatus {
+        self.inner.status.lock().unwrap().clone()
+    }
+
+    pub fn model(&self) -> Model {
+        self.inner.model.lock().unwrap().clone()
+    }
+
+    /// Fetches one subscription now (regardless of its schedule).
+    pub async fn refresh_subscription(&self, id: SubscriptionId) -> FetchResult {
+        self.inner
+            .update_one_subscription(&id)
+            .await
+            .unwrap_or_else(|| FetchResult::Failed { reason: "订阅不存在".into() })
+    }
+
+    /// One pass of the subscription scheduler (normally run every 60 s).
+    pub async fn update_due_subscriptions(&self) {
+        self.inner.update_due_subscriptions().await;
+    }
+
+    /// Tests `names` through mihomo and records the results in `status().delays`.
+    pub async fn test_delays(&self, names: Vec<String>) -> Vec<(String, DelayResult)> {
+        self.inner.test_delays(names).await
+    }
+
+    /// Zeroes the cumulative traffic totals and persists that.
+    pub async fn reset_traffic(&self) {
+        let totals = {
+            let mut t = self.inner.traffic.lock().unwrap();
+            t.reset();
+            t.totals.clone()
+        };
+        self.inner.save_totals();
+        if let Some(tick) = self.inner.status.lock().unwrap().traffic.as_mut() {
+            tick.totals = totals;
+        }
+        self.inner.emit_status();
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -88,6 +88,14 @@ impl Store {
         write_json_atomic(&self.dir.join(TRAFFIC_FILE), t)
     }
 
+    pub fn state_path(&self) -> PathBuf {
+        self.dir.join(STATE_FILE)
+    }
+
+    pub fn traffic_path(&self) -> PathBuf {
+        self.dir.join(TRAFFIC_FILE)
+    }
+
     pub fn config_path(&self) -> PathBuf {
         self.core_workdir().join("config.yaml")
     }

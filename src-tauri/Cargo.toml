@@ -30,6 +30,8 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["process", "io-util", "time", "net", "macros", "rt-multi-thread", "sync"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "gzip", "native-tls"] }
 tokio-tungstenite = "0.26"
+anyhow = "1"
+getrandom = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

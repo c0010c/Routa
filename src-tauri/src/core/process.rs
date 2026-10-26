@@ -11,7 +11,7 @@ use tokio::process::{Child, Command};
 
 use super::api::{ApiError, MihomoApi};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub enum CoreState {
     Stopped,
     Starting,

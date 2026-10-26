@@ -2222,9 +2222,11 @@ dependencies = [
 name = "mihomo-mapper"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.23.1",
  "futures-util",
+ "getrandom 0.3.4",
  "ipconfig",
  "percent-encoding",
  "reqwest",

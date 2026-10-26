@@ -1,0 +1,534 @@
+use std::io;
+use std::net::Ipv4Addr;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use tokio::sync::mpsc;
+
+use super::*;
+use crate::core::api::{Conn, ConnMeta, ConnectionsSnapshot, MihomoApi};
+use crate::core::apply::ApplyOutcome;
+use crate::core::fake::FakeApi;
+use crate::core::ports::FakePortOwners;
+use crate::core::process::{CoreHandleLike, CoreLauncher, CoreState};
+use crate::model::health::ListenerStatus;
+use crate::model::*;
+use crate::netif::{FakeInterfaces, NetInterface};
+use crate::store::{Bytes, Store};
+
+const PID: u32 = 4242;
+const PORT: u16 = 7891;
+const NIC_GUID: &str = "{11111111-0000-0000-0000-000000000001}";
+
+type ExitCell = Arc<Mutex<Option<Option<i32>>>>;
+
+struct FakeHandle {
+    exit: ExitCell,
+    stopped: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl CoreHandleLike for FakeHandle {
+    async fn stop(&mut self) -> io::Result<()> {
+        self.stopped.store(true, Ordering::SeqCst);
+        let mut e = self.exit.lock().unwrap();
+        if e.is_none() {
+            *e = Some(None);
+        }
+        Ok(())
+    }
+    fn try_wait(&mut self) -> Option<Option<i32>> {
+        *self.exit.lock().unwrap()
+    }
+    fn pid(&self) -> u32 {
+        PID
+    }
+}
+
+#[derive(Default)]
+struct FakeLauncher {
+    /// Config file content at the moment of each launch.
+    launches: Mutex<Vec<String>>,
+    exits: Mutex<Vec<ExitCell>>,
+    stopped: Mutex<Vec<Arc<AtomicBool>>>,
+}
+
+impl FakeLauncher {
+    fn count(&self) -> usize {
+        self.launches.lock().unwrap().len()
+    }
+    fn crash(&self, i: usize, code: i32) {
+        *self.exits.lock().unwrap()[i].lock().unwrap() = Some(Some(code));
+    }
+    fn stopped(&self, i: usize) -> bool {
+        self.stopped.lock().unwrap()[i].load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl CoreLauncher for FakeLauncher {
+    async fn launch(&self, config: &Path) -> io::Result<Box<dyn CoreHandleLike + Send>> {
+        let content = std::fs::read_to_string(config).unwrap_or_default();
+        self.launches.lock().unwrap().push(content);
+        let exit: ExitCell = Arc::new(Mutex::new(None));
+        let stopped = Arc::new(AtomicBool::new(false));
+        self.exits.lock().unwrap().push(exit.clone());
+        self.stopped.lock().unwrap().push(stopped.clone());
+        Ok(Box::new(FakeHandle { exit, stopped }))
+    }
+}
+
+struct Harness {
+    _td: tempfile::TempDir,
+    data: PathBuf,
+    rt: Runtime,
+    api: Arc<FakeApi>,
+    launcher: Arc<FakeLauncher>,
+    nics: Arc<FakeInterfaces>,
+    ports: Arc<FakePortOwners>,
+    events: mpsc::Receiver<RuntimeEvent>,
+    api_args: Arc<Mutex<Vec<(u16, String)>>>,
+}
+
+fn nic() -> NetInterface {
+    NetInterface {
+        guid: InterfaceGuid(NIC_GUID.into()),
+        friendly_name: "以太网 2".into(),
+        description: "Test Adapter".into(),
+        is_up: true,
+        ipv4: vec![Ipv4Addr::new(192, 168, 1, 10)],
+        ipv6: vec![],
+        mihomo_name: "以太网 2".into(),
+    }
+}
+
+fn harness_with(model: Option<&Model>, prepare: impl FnOnce(&Path)) -> Harness {
+    let td = tempfile::tempdir().unwrap();
+    let data = td.path().join("data");
+    let store = Store::open(data.clone()).unwrap();
+    if let Some(m) = model {
+        store.save_model(m).unwrap();
+    }
+    prepare(&data);
+    let api = Arc::new(FakeApi::new());
+    let launcher = Arc::new(FakeLauncher::default());
+    let nics = Arc::new(FakeInterfaces(Mutex::new(vec![nic()])));
+    let ports = Arc::new(FakePortOwners(Mutex::new([(PORT, PID)].into_iter().collect())));
+    let (tx, rx) = mpsc::channel(4096);
+    let api_args = Arc::new(Mutex::new(Vec::new()));
+    let launcher_for: LauncherFor = {
+        let l = launcher.clone();
+        Arc::new(move |_s: &Settings| l.clone() as Arc<dyn CoreLauncher>)
+    };
+    let api_for: ApiFor = {
+        let a = api.clone();
+        let args = api_args.clone();
+        Box::new(move |port, secret| {
+            args.lock().unwrap().push((port, secret));
+            a.clone() as Arc<dyn MihomoApi>
+        })
+    };
+    let rt = Runtime::new(store, nics.clone(), launcher_for, api_for, ports.clone(), tx);
+    Harness { _td: td, data, rt, api, launcher, nics, ports, events: rx, api_args }
+}
+
+fn harness(model: &Model) -> Harness {
+    harness_with(Some(model), |_| {})
+}
+
+/// One direct exit (optionally bound to the test NIC) and listener `L1` on it.
+fn model_with_listener(bind_nic: bool) -> Model {
+    let exit = Exit {
+        id: ExitId("exit-1".into()),
+        name: "直连出口".into(),
+        kind: ExitKind::Direct,
+        interface: bind_nic.then(|| InterfaceGuid(NIC_GUID.into())),
+    };
+    let mut l = Listener::new_default("L1".into(), PORT);
+    l.id = ListenerId("lis-1".into());
+    l.exit = Some(exit.id.clone());
+    let mut m = Model { exits: vec![exit], listeners: vec![l], ..Model::default() };
+    m.settings.delay_test_interval_mins = None;
+    m
+}
+
+fn listener_names(yaml: &str) -> Vec<String> {
+    let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).unwrap();
+    v["listeners"]
+        .as_sequence()
+        .map(|seq| {
+            seq.iter()
+                .map(|l| l["name"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn last_reload(api: &FakeApi) -> String {
+    api.reloads.lock().unwrap().last().expect("no reload").1.clone()
+}
+
+fn conn(id: &str, inbound: &str, up: u64, down: u64) -> Conn {
+    Conn {
+        id: id.into(),
+        upload: up,
+        download: down,
+        metadata: ConnMeta { inbound_name: inbound.into() },
+    }
+}
+
+fn drain(rx: &mut mpsc::Receiver<RuntimeEvent>) -> Vec<RuntimeEvent> {
+    let mut out = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        out.push(e);
+    }
+    out
+}
+
+#[tokio::test(start_paused = true)]
+async fn mutate_invalid_returns_errors_and_does_not_save() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    let reloads_before = h.api.reloads.lock().unwrap().len();
+    let before = std::fs::read_to_string(h.data.join("state.json")).unwrap();
+
+    let res = h
+        .rt
+        .mutate(|m| {
+            let mut dup = m.listeners[0].clone();
+            dup.id = ListenerId("lis-2".into());
+            m.listeners.push(dup); // duplicate name and port
+        })
+        .await;
+
+    let errs = res.unwrap_err();
+    assert!(!errs.is_empty());
+    assert_eq!(std::fs::read_to_string(h.data.join("state.json")).unwrap(), before);
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads_before);
+    assert_eq!(h.rt.model(), m);
+}
+
+#[tokio::test(start_paused = true)]
+async fn mutate_valid_saves_and_applies() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+
+    let out = h
+        .rt
+        .mutate(|m| m.listeners[0].name = "监听 😀".into())
+        .await
+        .unwrap();
+
+    assert!(matches!(out, ApplyOutcome::Reloaded { uncut: 0, .. }), "{out:?}");
+    let saved = Store::open(h.data.clone()).unwrap().load_model().unwrap();
+    assert_eq!(saved.listeners[0].name, "监听 😀");
+    assert_eq!(h.rt.model(), saved);
+    assert_eq!(listener_names(&last_reload(&h.api)), vec!["监听 😀".to_string()]);
+    let st = h.rt.status();
+    assert_eq!(st.last_apply, Some(out));
+    assert_eq!(st.core, CoreState::Running);
+}
+
+#[tokio::test(start_paused = true)]
+async fn first_apply_after_empty_config() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+
+    let (port, secret) = h.api_args.lock().unwrap()[0].clone();
+    assert_eq!(port, 9097);
+    assert_eq!(secret.len(), 64);
+    assert!(secret.chars().all(|c| c.is_ascii_hexdigit()));
+    // mihomo is launched with the empty config, then the model is applied.
+    assert_eq!(
+        h.launcher.launches.lock().unwrap()[0],
+        crate::config_gen::empty_config(9097, &secret)
+    );
+    let reloads = h.api.reloads.lock().unwrap().clone();
+    assert_eq!(reloads.len(), 1);
+    assert_eq!(listener_names(&reloads[0].1), vec!["L1".to_string()]);
+    assert!(reloads[0].1.contains(&secret));
+    // The secret never lands in the persisted model.
+    assert!(!std::fs::read_to_string(h.data.join("state.json")).unwrap().contains(&secret));
+
+    // A restart uses a fresh secret.
+    h.rt.restart_core().await;
+    let args = h.api_args.lock().unwrap().clone();
+    assert_eq!(args.len(), 2);
+    assert_ne!(args[0].1, args[1].1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn interface_unplug_disables_listener() {
+    let m = model_with_listener(true);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    assert_eq!(listener_names(&last_reload(&h.api)), vec!["L1".to_string()]);
+    h.api.set_connections(ConnectionsSnapshot {
+        connections: vec![conn("c1", "L1", 0, 0)],
+        ..Default::default()
+    });
+
+    h.nics.0.lock().unwrap().clear();
+    assert!(h.rt.refresh_interfaces().await);
+
+    assert!(listener_names(&last_reload(&h.api)).is_empty());
+    assert_eq!(h.api.closed.lock().unwrap().clone(), vec!["c1".to_string()]);
+    let st = h.rt.status();
+    assert!(st.interfaces.is_empty());
+    assert!(matches!(
+        st.health.listeners[&ListenerId("lis-1".into())],
+        ListenerStatus::ExitBroken { .. }
+    ));
+    // No further change: nothing to do.
+    assert!(!h.rt.refresh_interfaces().await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn interface_replug_restores_listener() {
+    let m = model_with_listener(true);
+    let h = harness(&m);
+    h.nics.0.lock().unwrap().clear();
+    h.rt.restart_core().await;
+    assert!(listener_names(&last_reload(&h.api)).is_empty());
+
+    h.nics.0.lock().unwrap().push(nic());
+    assert!(h.rt.refresh_interfaces().await);
+
+    assert_eq!(listener_names(&last_reload(&h.api)), vec!["L1".to_string()]);
+    assert!(last_reload(&h.api).contains("以太网 2"));
+    assert_eq!(
+        h.rt.status().health.listeners[&ListenerId("lis-1".into())],
+        ListenerStatus::Active
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_listener_retried_until_port_free() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.ports.0.lock().unwrap().insert(PORT, 999); // someone else holds the port
+    h.rt.start().await.unwrap();
+
+    let st = h.rt.status();
+    assert_eq!(st.failed_listeners.len(), 1);
+    assert_eq!(st.failed_listeners[0].port, PORT);
+    let reloads = h.api.reloads.lock().unwrap().len();
+
+    h.ports.0.lock().unwrap().insert(PORT, PID); // port freed, mihomo got it
+    tokio::time::sleep(Duration::from_secs(31)).await;
+
+    assert!(h.rt.status().failed_listeners.is_empty());
+    let after = h.api.reloads.lock().unwrap().clone();
+    assert!(after.len() > reloads);
+    assert_eq!(listener_names(&after.last().unwrap().1), vec!["L1".to_string()]);
+    let reloads = after.len();
+
+    // Once empty, no further retries.
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn crash_restart_uses_latest_model() {
+    let m = model_with_listener(false);
+    let mut h = harness(&m);
+    h.rt.start().await.unwrap();
+    h.rt.mutate(|m| m.listeners[0].name = "新改动".into()).await.unwrap();
+
+    h.launcher.crash(0, 3);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    assert_eq!(h.launcher.count(), 2);
+    assert_eq!(listener_names(&last_reload(&h.api)), vec!["新改动".to_string()]);
+    assert_eq!(h.rt.status().core, CoreState::Running);
+    let crashed = drain(&mut h.events).into_iter().any(|e| {
+        matches!(e, RuntimeEvent::Status(s) if s.core == CoreState::Crashed { exit_code: Some(3) })
+    });
+    assert!(crashed);
+
+    // stop_core stops supervision: a later exit is not restarted.
+    h.rt.stop_core().await;
+    assert_eq!(h.rt.status().core, CoreState::Stopped);
+    assert!(h.launcher.stopped(1));
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(h.launcher.count(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn uncut_connections_trigger_core_restart() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    h.api.set_connections(ConnectionsSnapshot {
+        connections: vec![conn("c1", "L1", 0, 0)],
+        ..Default::default()
+    });
+    h.api.close_fails.lock().unwrap().insert("c1".into());
+
+    let out = h.rt.mutate(|m| m.listeners[0].user_enabled = false).await.unwrap();
+
+    assert!(matches!(out, ApplyOutcome::Reloaded { uncut: 1, .. }), "{out:?}");
+    assert_eq!(h.launcher.count(), 2);
+    assert!(h.launcher.stopped(0));
+    assert_eq!(h.rt.status().core, CoreState::Running);
+    // The restarted core gets the empty config first, then the latest model.
+    let secret = h.api_args.lock().unwrap()[1].1.clone();
+    assert_eq!(
+        h.launcher.launches.lock().unwrap()[1],
+        crate::config_gen::empty_config(9097, &secret)
+    );
+    assert!(listener_names(&last_reload(&h.api)).is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn corrupt_state_is_quarantined_not_overwritten() {
+    let h = harness_with(None, |data| {
+        std::fs::write(data.join("state.json"), "{ not json").unwrap();
+        std::fs::write(data.join("traffic.json"), "").unwrap();
+    });
+
+    let st = h.rt.status();
+    let err = st.startup_error.expect("startup_error");
+    assert!(err.contains("state.json"), "{err}");
+    assert!(err.contains("traffic.json"), "{err}");
+    assert_eq!(h.rt.model(), Model::default());
+
+    let names: Vec<String> = std::fs::read_dir(&h.data)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let corrupt = names
+        .iter()
+        .find(|n| n.starts_with("state.json.corrupt-"))
+        .unwrap_or_else(|| panic!("{names:?}"));
+    assert!(names.iter().any(|n| n.starts_with("traffic.json.corrupt-")), "{names:?}");
+    assert!(!names.contains(&"state.json".to_string()), "{names:?}");
+
+    h.rt.restart_core().await;
+    h.rt.mutate(|m| m.settings.autostart = true).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(h.data.join(corrupt)).unwrap(),
+        "{ not json"
+    );
+    assert!(Store::open(h.data.clone()).unwrap().load_model().unwrap().settings.autostart);
+}
+
+#[tokio::test]
+async fn subscription_due_is_fetched_and_applied() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "proxies:\n  - {name: a, type: ss, server: 1.1.1.1, port: 1, cipher: aes-128-gcm, password: x}\n",
+        ))
+        .mount(&server)
+        .await;
+
+    let sub_id = SubscriptionId("sub-1".into());
+    let mut m = model_with_listener(false);
+    m.exits[0].kind = ExitKind::Node {
+        node: NodeRef { subscription_id: sub_id.clone(), name: "a".into() },
+    };
+    m.subscriptions.push(Subscription {
+        id: sub_id.clone(),
+        name: "订阅".into(),
+        url: format!("{}/sub", server.uri()),
+        update_interval_mins: Some(60),
+        fallback_exit: None,
+        last_updated: None,
+        last_result: None,
+        nodes: vec![],
+    });
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    assert!(listener_names(&last_reload(&h.api)).is_empty()); // node missing
+
+    h.rt.update_due_subscriptions().await;
+
+    let model = h.rt.model();
+    assert_eq!(model.subscriptions[0].nodes.len(), 1);
+    assert_eq!(model.subscriptions[0].last_result, Some(FetchResult::Ok { node_count: 1 }));
+    assert!(model.subscriptions[0].last_updated.is_some());
+    let saved = Store::open(h.data.clone()).unwrap().load_model().unwrap();
+    assert_eq!(saved, model);
+    let yaml = last_reload(&h.api);
+    assert!(yaml.contains("订阅/a"), "{yaml}");
+    assert_eq!(listener_names(&yaml), vec!["L1".to_string()]);
+
+    // Not due any more.
+    let reloads = h.api.reloads.lock().unwrap().len();
+    h.rt.update_due_subscriptions().await;
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_persists_totals() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.api.set_connections(ConnectionsSnapshot {
+        upload_total: 100,
+        download_total: 200,
+        connections: vec![conn("c1", "L1", 100, 200)],
+    });
+    h.rt.start().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let tick = h.rt.status().traffic.expect("traffic sampled");
+    assert_eq!(tick.totals.per_listener[&ListenerId("lis-1".into())], Bytes { up: 100, down: 200 });
+
+    h.rt.shutdown().await;
+
+    let totals = Store::open(h.data.clone()).unwrap().load_totals().unwrap();
+    assert_eq!(totals.per_listener[&ListenerId("lis-1".into())], Bytes { up: 100, down: 200 });
+    assert!(h.launcher.stopped(0));
+    assert_eq!(h.rt.status().core, CoreState::Stopped);
+    // No background task survives shutdown.
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(h.launcher.count(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn delay_test_records_results() {
+    let mut m = model_with_listener(false);
+    m.settings.delay_test_interval_mins = Some(10);
+    let h = harness(&m);
+    h.api.set_delay("直连出口", Ok(42));
+    h.rt.start().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let st = h.rt.status();
+    assert_eq!(st.delays.get("直连出口").unwrap().ms, Some(42));
+    let calls = h.api.delay_calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1, "https://www.gstatic.com/generate_204");
+
+    let res = h.rt.test_delays(vec!["x".into()]).await;
+    assert_eq!(res[0].1.ms, None);
+    assert!(h.rt.status().delays.get("x").is_some());
+    h.rt.shutdown().await;
+}
+
+/// Task 14 awaits these from Tauri commands, which require `Send` futures.
+#[allow(dead_code)]
+fn runtime_futures_are_send(rt: &Runtime) {
+    fn send<T: Send>(_: T) {}
+    send(rt.start());
+    send(rt.shutdown());
+    send(rt.mutate(|_| {}));
+    send(rt.refresh_interfaces());
+    send(rt.restart_core());
+    send(rt.stop_core());
+    send(rt.refresh_subscription(SubscriptionId("x".into())));
+    send(rt.test_delays(vec![]));
+    send(rt.reset_traffic());
+}
