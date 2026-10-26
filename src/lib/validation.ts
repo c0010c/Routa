@@ -18,6 +18,8 @@ export function fieldErrors(errors: ValidationError[]): FieldErrors {
       out.name ??= e.InvalidName.reason;
     } else if ("DanglingRef" in e) {
       out.form.push(`仍被引用：${e.DanglingRef.what}`);
+    } else if ("CoreRejected" in e) {
+      out.form.push(`mihomo 拒绝了该配置：${e.CoreRejected.message}`);
     } else {
       out.form.push(`${e.IntervalOutOfRange.field} 的值 ${e.IntervalOutOfRange.value} 超出允许范围`);
     }

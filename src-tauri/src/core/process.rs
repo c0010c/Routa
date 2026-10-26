@@ -33,9 +33,122 @@ pub trait CoreHandleLike {
     fn pid(&self) -> u32;
 }
 
+/// Why `CoreLauncher::check_config` did not pass a config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckError {
+    /// mihomo ran and rejected the config; the text is from its output.
+    Rejected(String),
+    /// The check itself could not run (binary missing, timeout, ...).
+    Unavailable(String),
+}
+
 #[async_trait]
 pub trait CoreLauncher: Send + Sync {
     async fn launch(&self, config: &Path) -> io::Result<Box<dyn CoreHandleLike + Send>>;
+    /// Validates `config` (inside the core workdir) with the real core
+    /// (`mihomo -t`) without starting it.
+    async fn check_config(&self, config: &Path) -> Result<(), CheckError>;
+}
+
+const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+const CHECK_MESSAGE_MAX_CHARS: usize = 500;
+
+/// Replaces every `scheme://...` token (it may carry a subscription token).
+fn redact_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("://") {
+        let start = rest[..i]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            .last()
+            .map_or(i, |(j, _)| j);
+        let tail = &rest[i + 3..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ')' | ']' | '>' | ','))
+            .unwrap_or(tail.len());
+        out.push_str(&rest[..start]);
+        out.push_str("<URL>");
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The useful part of a failed `mihomo -t`: the `msg` of its error lines,
+/// else every other non-empty line except the "configuration file <path>
+/// test failed" trailer. URLs redacted, length bounded.
+fn check_failure_message(output: &str, code: Option<i32>) -> String {
+    let msg_of = |line: &str| -> String {
+        match line.find("msg=\"") {
+            Some(i) => {
+                let m = &line[i + 5..];
+                m.strip_suffix('"').unwrap_or(m).replace("\\\"", "\"")
+            }
+            None => line.to_string(),
+        }
+    };
+    let lines: Vec<&str> = output.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let errors: Vec<String> = lines
+        .iter()
+        .filter(|l| l.contains("level=error") || l.contains("level=fatal"))
+        .map(|l| msg_of(l))
+        .collect();
+    let picked = if errors.is_empty() {
+        lines
+            .iter()
+            .filter(|l| !l.starts_with("configuration file") && !l.contains("level=info"))
+            .map(|l| msg_of(l))
+            .collect()
+    } else {
+        errors
+    };
+    let text = redact_urls(&picked.join("; "));
+    if text.is_empty() {
+        return match code {
+            Some(c) => format!("mihomo -t 失败（退出码 {c}）"),
+            None => "mihomo -t 失败".to_string(),
+        };
+    }
+    if text.chars().count() > CHECK_MESSAGE_MAX_CHARS {
+        let cut: String = text.chars().take(CHECK_MESSAGE_MAX_CHARS).collect();
+        return format!("{cut}…");
+    }
+    text
+}
+
+/// Runs `bin -t -d workdir -f config` (no window, killed after 15 s).
+pub async fn check_config_with(bin: &Path, workdir: &Path, config: &Path) -> Result<(), CheckError> {
+    let mut cmd = Command::new(bin);
+    cmd.arg("-t")
+        .arg("-d")
+        .arg(workdir)
+        .arg("-f")
+        .arg(config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let child = cmd
+        .spawn()
+        .map_err(|e| CheckError::Unavailable(format!("无法运行 mihomo: {e}")))?;
+    // On timeout the dropped future drops the child: kill_on_drop kills it.
+    match tokio::time::timeout(CHECK_TIMEOUT, child.wait_with_output()).await {
+        Err(_) => Err(CheckError::Unavailable("mihomo 校验超时（15 秒）".into())),
+        Ok(Err(e)) => Err(CheckError::Unavailable(format!("mihomo 校验失败: {e}"))),
+        Ok(Ok(out)) if out.status.success() => Ok(()),
+        Ok(Ok(out)) => {
+            let text = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            Err(CheckError::Rejected(check_failure_message(&text, out.status.code())))
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -249,6 +362,9 @@ impl CoreLauncher for ProcessLauncher {
         let p = CoreProcess::start(&self.bin, &self.workdir, config).await?;
         Ok(Box::new(p))
     }
+    async fn check_config(&self, config: &Path) -> Result<(), CheckError> {
+        check_config_with(&self.bin, &self.workdir, config).await
+    }
 }
 
 /// Polls `version()` every 100 ms until it answers or `timeout` passes.
@@ -368,6 +484,54 @@ mod tests {
         let r =
             CoreProcess::start(Path::new("definitely-not-a-binary.exe"), dir.path(), &cfg).await;
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn check_message_keeps_error_msgs_only() {
+        let out = "time=\"t\" level=info msg=\"Start initial configuration in progress\"\n\
+                   time=\"t\" level=error msg=\"proxy 0: '' has unset fields: cipher\"\n\
+                   configuration file C:\\x\\check.yaml test failed\n";
+        assert_eq!(check_failure_message(out, Some(1)), "proxy 0: '' has unset fields: cipher");
+    }
+
+    #[test]
+    fn check_message_redacts_urls_and_falls_back() {
+        let out = "level=error msg=\"fetch https://sub.example.com/x?token=SECRET failed\"";
+        let m = check_failure_message(out, Some(1));
+        assert_eq!(m, "fetch <URL> failed");
+        assert_eq!(check_failure_message("plain problem\n", Some(1)), "plain problem");
+        assert_eq!(
+            check_failure_message("configuration file x test failed", Some(2)),
+            "mihomo -t 失败（退出码 2）"
+        );
+        let long = format!("level=error msg=\"{}\"", "x".repeat(600));
+        assert_eq!(check_failure_message(&long, None).chars().count(), CHECK_MESSAGE_MAX_CHARS + 1);
+    }
+
+    #[tokio::test]
+    async fn check_missing_binary_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("c.yaml");
+        let r = check_config_with(Path::new("definitely-not-a-binary.exe"), dir.path(), &cfg).await;
+        assert!(matches!(r, Err(CheckError::Unavailable(_))), "{r:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a real mihomo binary: set MIHOMO_BIN"]
+    async fn check_real_core() {
+        let bin = PathBuf::from(std::env::var("MIHOMO_BIN").expect("MIHOMO_BIN"));
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.yaml");
+        std::fs::write(&good, crate::config_gen::empty_config(19999, "s")).unwrap();
+        assert_eq!(check_config_with(&bin, dir.path(), &good).await, Ok(()));
+        let bad = dir.path().join("bad.yaml");
+        std::fs::write(
+            &bad,
+            "proxies:\n  - {name: a, type: ss, server: 1.1.1.1, port: 1, password: x}\nrules: [\"MATCH,REJECT\"]\n",
+        )
+        .unwrap();
+        let r = check_config_with(&bin, dir.path(), &bad).await;
+        assert!(matches!(&r, Err(CheckError::Rejected(m)) if m.contains("cipher")), "{r:?}");
     }
 
     #[tokio::test]

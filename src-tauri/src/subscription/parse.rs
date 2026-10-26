@@ -30,7 +30,10 @@ pub fn parse_subscription(body: &str) -> Result<Vec<Node>, ParseError> {
 
 /// `Some(entries)` if the body is a YAML mapping with a `proxies` key (possibly empty).
 fn parse_yaml_proxies(body: &str) -> Option<Vec<Value>> {
-    let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(body).ok()?;
+    let mut doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(body).ok()?;
+    // Resolve `<<: *anchor` merge keys, or merged fields would be lost and a
+    // literal `<<` key would reach mihomo.
+    doc.apply_merge().ok()?;
     let proxies = doc.as_mapping()?.get("proxies")?;
     let seq = proxies.as_sequence().map(Vec::as_slice).unwrap_or_default();
     Some(seq.iter().filter_map(|e| serde_json::to_value(e).ok()).collect())
@@ -184,6 +187,33 @@ mod tests {
         assert_eq!(tu["password"], json!("tuicpw"));
         assert_eq!(tu["congestion-controller"], json!("bbr"));
         assert_eq!(tu["alpn"], json!(["h3", "h2"]));
+    }
+
+    #[test]
+    fn resolves_yaml_merge_keys() {
+        let body = "base: &base
+  type: ss
+  cipher: aes-128-gcm
+  password: pw
+  port: 443
+proxies:
+  - <<: *base
+    name: m1
+    server: 1.1.1.1
+  - <<: *base
+    name: m2
+    server: 2.2.2.2
+    port: 8443
+";
+        let nodes = parse_subscription(body).unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].proxy_type, "ss");
+        assert_eq!(nodes[0].raw["cipher"], json!("aes-128-gcm"));
+        assert_eq!(nodes[0].raw["port"], json!(443));
+        assert_eq!(nodes[1].raw["port"], json!(8443));
+        for n in &nodes {
+            assert!(n.raw.get("<<").is_none(), "{:?}", n.raw);
+        }
     }
 
     #[test]

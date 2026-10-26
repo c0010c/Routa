@@ -27,6 +27,12 @@ describe("fieldErrors", () => {
     expect(r.form[1]).toContain("测速间隔");
   });
 
+  it("shows a config rejected by mihomo at form level", () => {
+    const r = fieldErrors([{ CoreRejected: { message: "proxy 0: '' has unset fields: cipher" } }]);
+    expect(r.name).toBeUndefined();
+    expect(r.form).toEqual(["mihomo 拒绝了该配置：proxy 0: '' has unset fields: cipher"]);
+  });
+
   it("returns an empty form list when there are no errors", () => {
     expect(fieldErrors([])).toEqual({ form: [] });
   });

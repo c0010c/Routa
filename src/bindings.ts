@@ -238,7 +238,11 @@ export type TrafficTick = { total_rate: Rate;
  */
 per_listener_rate: Partial<{ [key in ListenerId]: Rate }>; totals: TrafficTotals }
 export type TrafficTotals = { total: Bytes; per_listener: Partial<{ [key in ListenerId]: Bytes }> }
-export type ValidationError = { DuplicateName: { kind: string; name: string } } | { PortConflict: { port: number; with: string } } | { InvalidName: { name: string; reason: string } } | { IntervalOutOfRange: { field: string; value: number } } | { DanglingRef: { what: string } }
+export type ValidationError = { DuplicateName: { kind: string; name: string } } | { PortConflict: { port: number; with: string } } | { InvalidName: { name: string; reason: string } } | { IntervalOutOfRange: { field: string; value: number } } | { DanglingRef: { what: string } } | 
+/**
+ * The generated config was rejected by `mihomo -t`.
+ */
+{ CoreRejected: { message: string } }
 
 /** tauri-specta globals **/
 

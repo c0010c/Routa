@@ -250,7 +250,7 @@ mod tests {
     use crate::core::api::MihomoApi;
     use crate::core::fake::FakeApi;
     use crate::core::ports::FakePortOwners;
-    use crate::core::process::{CoreHandleLike, CoreLauncher};
+    use crate::core::process::{CheckError, CoreHandleLike, CoreLauncher};
     use crate::model::*;
     use crate::netif::FakeInterfaces;
     use crate::runtime::{ApiFor, LauncherFor, Runtime};
@@ -263,6 +263,9 @@ mod tests {
     impl CoreLauncher for NoLauncher {
         async fn launch(&self, _config: &Path) -> io::Result<Box<dyn CoreHandleLike + Send>> {
             Err(io::Error::other("no core in tests"))
+        }
+        async fn check_config(&self, _config: &Path) -> Result<(), CheckError> {
+            Err(CheckError::Unavailable("no core in tests".into()))
         }
     }
 

@@ -20,20 +20,22 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::config_gen::{empty_config, generate, node_proxy_name, GenInput};
+use crate::config_gen::{empty_config, generate, node_proxy_name, nodes_check_config, GenInput};
 use crate::core::api::MihomoApi;
 use crate::core::apply::{ApplyOutcome, Applier, FailedListener};
 use crate::core::ports::PortOwners;
-use crate::core::process::{wait_ready, CoreHandleLike, CoreLauncher, CoreState};
+use crate::core::process::{wait_ready, CheckError, CoreHandleLike, CoreLauncher, CoreState};
 use crate::model::health::{evaluate, ExitStatus, Health};
 use crate::model::{
-    validate, FetchResult, ListenerId, Model, Settings, SubscriptionId, ValidationError,
+    validate, FetchResult, ListenerId, Model, Node, Settings, Subscription, SubscriptionId, ValidationError,
 };
 use crate::netif::{InterfaceSource, NetInterface};
 use crate::stats::delay::{test_many, DelayBook, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
 use crate::stats::traffic::{Rate, TrafficAggregator, TrafficTick};
 use crate::store::{Store, TrafficTotals};
-use crate::subscription::fetch::{fetch_listener_ports, record_result, update_subscription, PortAllocator};
+use crate::subscription::fetch::{
+    fetch_listener_ports, record_result, update_subscription, FetchError, PortAllocator,
+};
 
 /// Builds the launcher for the current settings (core_path or sidecar); called
 /// at every (re)start so a changed `core_path` takes effect on restart.
@@ -43,6 +45,8 @@ pub type ApiFor = Box<dyn Fn(u16, String) -> Arc<dyn MihomoApi> + Send + Sync>;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTROLLER_BUSY_PREFIX: &str = "控制端口";
+/// Stands in for the real secret in configs that are only checked (`mihomo -t`).
+const CHECK_SECRET: &str = "config-check";
 
 #[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
 pub struct RuntimeStatus {
@@ -244,6 +248,58 @@ impl Inner {
         eng.model = m;
     }
 
+    /// Writes `yaml` to a temp file inside the core workdir, runs `mihomo -t`
+    /// on it (with the launcher for `settings`) and deletes the file.
+    async fn check_yaml(&self, settings: &Settings, yaml: &str) -> Result<(), CheckError> {
+        let path = self.store.core_workdir().join(format!("check-{}.yaml", &random_secret()[..16]));
+        std::fs::write(&path, yaml)
+            .map_err(|e| CheckError::Unavailable(format!("写入校验配置失败: {e}")))?;
+        let res = (self.launcher_for)(settings).check_config(&path).await;
+        if let Err(e) = std::fs::remove_file(&path) {
+            eprintln!("runtime: removing {} failed: {e}", path.display());
+        }
+        res
+    }
+
+    /// The config `m` would generate must pass `mihomo -t`, or mihomo rejects
+    /// the whole config on every later apply. A check that cannot run (e.g.
+    /// the core binary is missing) is skipped: nothing would start anyway.
+    async fn check_model(&self, eng: &mut Engine, m: &Model) -> Result<(), Vec<ValidationError>> {
+        let nics = self.nics.list();
+        let health = evaluate(m, &nics);
+        let fetch = fetch_listener_ports(m, &mut eng.alloc);
+        let generated = generate(&GenInput {
+            model: m,
+            health: &health,
+            secret: CHECK_SECRET,
+            fetch_listeners: &fetch,
+        });
+        match self.check_yaml(&m.settings, &generated.yaml).await {
+            Ok(()) => Ok(()),
+            Err(CheckError::Rejected(message)) => Err(vec![ValidationError::CoreRejected { message }]),
+            Err(CheckError::Unavailable(e)) => {
+                eprintln!("runtime: config check skipped: {e}");
+                Ok(())
+            }
+        }
+    }
+
+    /// Fetched nodes are accepted only if mihomo accepts them (one invalid
+    /// proxy makes it reject the entire config). Skipped when the check
+    /// cannot run.
+    async fn check_nodes(&self, sub: &Subscription, nodes: Vec<Node>) -> Result<Vec<Node>, FetchError> {
+        let settings = self.model.lock().unwrap().settings.clone();
+        let yaml = nodes_check_config(settings.controller_port, CHECK_SECRET, sub, &nodes);
+        match self.check_yaml(&settings, &yaml).await {
+            Ok(()) => Ok(nodes),
+            Err(CheckError::Rejected(msg)) => Err(FetchError::CoreRejected(msg)),
+            Err(CheckError::Unavailable(e)) => {
+                eprintln!("runtime: subscription node check skipped: {e}");
+                Ok(nodes)
+            }
+        }
+    }
+
     /// Stops and forgets the current core instance (no-op without one).
     async fn drop_core(&self, eng: &mut Engine) {
         if let Some(mut run) = eng.core.take() {
@@ -443,7 +499,10 @@ impl Inner {
             (sub, port)
         };
 
-        let result = update_subscription(&sub, port).await;
+        let result = match update_subscription(&sub, port).await {
+            Ok(nodes) => self.check_nodes(&sub, nodes).await,
+            Err(e) => Err(e),
+        };
 
         let mut eng = self.engine.lock().await;
         if self.is_shut_down() {
@@ -622,8 +681,9 @@ impl Runtime {
         self.inner.set_core_state(CoreState::Stopped);
     }
 
-    /// clone → f → validate → save → evaluate → generate → apply.
-    /// Validation errors leave everything untouched. After `shutdown` nothing
+    /// clone → f → validate → `mihomo -t` → save → evaluate → generate → apply.
+    /// Validation errors (including a config mihomo rejects) leave everything
+    /// untouched. After `shutdown` nothing
     /// is saved or applied and `FailedCoreStopped` is returned.
     pub async fn mutate(&self, f: impl FnOnce(&mut Model)) -> Result<ApplyOutcome, Vec<ValidationError>> {
         self.mutate_with(|m| {
@@ -647,6 +707,7 @@ impl Runtime {
         let mut m = eng.model.clone();
         let r = f(&mut m)?;
         validate(&m)?;
+        self.inner.check_model(&mut eng, &m).await?;
         self.inner.commit_model(&mut eng, m);
         Ok((self.inner.apply(&mut eng).await, r))
     }

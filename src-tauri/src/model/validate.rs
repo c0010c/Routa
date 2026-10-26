@@ -7,6 +7,8 @@ pub enum ValidationError {
     InvalidName { name: String, reason: String },
     IntervalOutOfRange { field: String, value: u32 },
     DanglingRef { what: String },
+    /// The generated config was rejected by `mihomo -t`.
+    CoreRejected { message: String },
 }
 
 const MAX_INTERVAL_MINS: u32 = 525_600;
@@ -26,6 +28,9 @@ fn check_name(name: &str, forbid_slash: bool, errors: &mut Vec<ValidationError>)
             reason: reason.to_string(),
         })
     };
+    if name.trim().is_empty() {
+        invalid("名称不能为空");
+    }
     if name.starts_with("__") {
         invalid("名称不能以 \"__\" 开头（保留给内部使用）");
     }
@@ -278,6 +283,22 @@ mod tests {
         m.subscriptions.push(sub("__fetch"));
         m.listeners.push(Listener::new_default("__fetch".into(), 7891));
         assert_eq!(count_invalid(&m, "__fetch"), 3);
+    }
+
+    #[test]
+    fn rejects_empty_and_whitespace_names() {
+        for n in ["", "  ", "	"] {
+            let mut m = Model::default();
+            m.exits.push(exit(n));
+            m.subscriptions.push(sub(&format!("{n}{n}")));
+            m.listeners.push(Listener::new_default(n.into(), 7891));
+            let e = errs(&m);
+            let empty = e
+                .iter()
+                .filter(|x| matches!(x, ValidationError::InvalidName { reason, .. } if reason == "名称不能为空"))
+                .count();
+            assert_eq!(empty, 3, "{n:?} {e:?}");
+        }
     }
 
     #[test]

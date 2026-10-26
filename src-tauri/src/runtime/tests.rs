@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use crate::core::api::{Conn, ConnMeta, ConnectionsSnapshot, MihomoApi};
 use crate::core::apply::ApplyOutcome;
 use crate::core::fake::FakeApi;
 use crate::core::ports::FakePortOwners;
-use crate::core::process::{CoreHandleLike, CoreLauncher, CoreState};
+use crate::core::process::{CheckError, CoreHandleLike, CoreLauncher, CoreState};
 use crate::model::health::ListenerStatus;
 use crate::model::*;
 use crate::netif::{FakeInterfaces, NetInterface};
@@ -54,6 +55,10 @@ struct FakeLauncher {
     launches: Mutex<Vec<String>>,
     exits: Mutex<Vec<ExitCell>>,
     stopped: Mutex<Vec<Arc<AtomicBool>>>,
+    /// `check_config` results consumed in call order; once exhausted every check is Ok.
+    check_results: Mutex<VecDeque<Result<(), CheckError>>>,
+    /// Config file content at the moment of each check.
+    checks: Mutex<Vec<String>>,
 }
 
 impl FakeLauncher {
@@ -65,6 +70,9 @@ impl FakeLauncher {
     }
     fn stopped(&self, i: usize) -> bool {
         self.stopped.lock().unwrap()[i].load(Ordering::SeqCst)
+    }
+    fn push_check(&self, r: Result<(), CheckError>) {
+        self.check_results.lock().unwrap().push_back(r);
     }
 }
 
@@ -78,6 +86,11 @@ impl CoreLauncher for FakeLauncher {
         self.exits.lock().unwrap().push(exit.clone());
         self.stopped.lock().unwrap().push(stopped.clone());
         Ok(Box::new(FakeHandle { exit, stopped }))
+    }
+    async fn check_config(&self, config: &Path) -> Result<(), CheckError> {
+        let content = std::fs::read_to_string(config).unwrap_or_default();
+        self.checks.lock().unwrap().push(content);
+        self.check_results.lock().unwrap().pop_front().unwrap_or(Ok(()))
     }
 }
 
@@ -649,4 +662,112 @@ async fn foreign_controller_is_not_used() {
     assert!(h.launcher.stopped(0), "our child was stopped");
     assert!(h.api_args.lock().unwrap().is_empty(), "no API client was even created");
     assert!(h.api.reloads.lock().unwrap().is_empty(), "no reload reached the foreign controller");
+}
+
+/// Names of the leftover `check-*.yaml` files in the core workdir.
+fn check_files(data: &Path) -> Vec<String> {
+    std::fs::read_dir(data.join("mihomo"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("check-"))
+        .collect()
+}
+
+#[tokio::test]
+async fn invalid_nodes_rejected_by_core_keep_old_nodes() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "proxies:
+  - {name: bad, type: ss, server: 2.2.2.2, port: 1, password: x}
+",
+        ))
+        .mount(&server)
+        .await;
+
+    let sub_id = SubscriptionId("sub-1".into());
+    let old = Node {
+        name: "a".into(),
+        proxy_type: "ss".into(),
+        server: "1.1.1.1".into(),
+        raw: serde_json::json!({"name": "a", "type": "ss", "server": "1.1.1.1", "port": 1, "cipher": "aes-128-gcm", "password": "x"}),
+    };
+    let mut m = model_with_listener(false);
+    m.subscriptions.push(Subscription {
+        id: sub_id.clone(),
+        name: "订阅".into(),
+        url: format!("{}/sub", server.uri()),
+        update_interval_mins: Some(60),
+        fallback_exit: None,
+        last_updated: None,
+        last_result: None,
+        nodes: vec![old.clone()],
+    });
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    let reloads = h.api.reloads.lock().unwrap().len();
+    h.launcher.push_check(Err(CheckError::Rejected("proxy 0: '' has unset fields: cipher".into())));
+
+    let res = h.rt.refresh_subscription(sub_id).await;
+
+    let reason = match &res {
+        FetchResult::Failed { reason } => reason.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(reason, "订阅节点未通过 mihomo 校验：proxy 0: '' has unset fields: cipher");
+    let sub = h.rt.model().subscriptions[0].clone();
+    assert_eq!(sub.nodes, vec![old]);
+    assert_eq!(sub.last_result, Some(res));
+    assert_eq!(Store::open(h.data.clone()).unwrap().load_model().unwrap(), h.rt.model());
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads, "nothing applied");
+    // The checked config held just the fetched nodes, under their generated names.
+    let checked = h.launcher.checks.lock().unwrap().last().cloned().unwrap();
+    let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&checked).unwrap();
+    assert_eq!(v["proxies"].as_sequence().unwrap().len(), 1);
+    assert_eq!(v["proxies"][0]["name"], "订阅/bad");
+    assert!(v["listeners"].as_sequence().unwrap().is_empty());
+    assert!(check_files(&h.data).is_empty(), "temp config removed");
+}
+
+#[tokio::test(start_paused = true)]
+async fn mutate_rejected_by_core_is_not_saved_or_applied() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    let reloads = h.api.reloads.lock().unwrap().len();
+    let before = std::fs::read_to_string(h.data.join("state.json")).unwrap();
+    h.launcher.push_check(Err(CheckError::Rejected("proxy group[0]: format error".into())));
+
+    let errs = h.rt.mutate(|m| m.listeners[0].name = "新名字".into()).await.unwrap_err();
+
+    assert_eq!(
+        errs,
+        vec![ValidationError::CoreRejected { message: "proxy group[0]: format error".into() }]
+    );
+    assert_eq!(std::fs::read_to_string(h.data.join("state.json")).unwrap(), before);
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    assert_eq!(h.rt.model(), m);
+    // The generated config was what got checked, without the real secret.
+    let checked = h.launcher.checks.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(listener_names(&checked), vec!["新名字".to_string()]);
+    let secret = h.api_args.lock().unwrap()[0].1.clone();
+    assert!(!checked.contains(&secret));
+    assert!(check_files(&h.data).is_empty(), "temp config removed");
+}
+
+#[tokio::test(start_paused = true)]
+async fn mutate_skips_check_when_core_cannot_run() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    h.launcher.push_check(Err(CheckError::Unavailable("无法运行 mihomo".into())));
+
+    let out = h.rt.mutate(|m| m.listeners[0].name = "新名字".into()).await.unwrap();
+
+    assert!(matches!(out, ApplyOutcome::Reloaded { .. }), "{out:?}");
+    assert_eq!(h.rt.model().listeners[0].name, "新名字");
+    assert_eq!(listener_names(&last_reload(&h.api)), vec!["新名字".to_string()]);
 }

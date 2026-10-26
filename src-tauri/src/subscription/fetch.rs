@@ -13,6 +13,8 @@ use crate::subscription::parse::{parse_subscription, ParseError};
 pub enum FetchError {
     Http(String),
     Parse(ParseError),
+    /// The fetched nodes were rejected by `mihomo -t`.
+    CoreRejected(String),
 }
 
 impl fmt::Display for FetchError {
@@ -23,6 +25,7 @@ impl fmt::Display for FetchError {
             FetchError::Parse(ParseError::Unrecognized) => {
                 write!(f, "无法识别订阅内容（可能是错误页或已过期）")
             }
+            FetchError::CoreRejected(msg) => write!(f, "订阅节点未通过 mihomo 校验：{msg}"),
         }
     }
 }

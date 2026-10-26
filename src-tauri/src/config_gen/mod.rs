@@ -209,6 +209,17 @@ pub fn empty_config(controller_port: u16, secret: &str) -> String {
     base_config(controller_port, secret, vec![], vec![], vec![])
 }
 
+/// `empty_config` plus `nodes` as proxies, named and sanitized exactly like
+/// `generate` emits them: what `mihomo -t` checks before fetched nodes are
+/// accepted.
+pub fn nodes_check_config(controller_port: u16, secret: &str, sub: &Subscription, nodes: &[Node]) -> String {
+    let proxies = nodes
+        .iter()
+        .filter_map(|n| proxy_copy(n, &node_proxy_name(sub, n), None))
+        .collect();
+    base_config(controller_port, secret, proxies, vec![], vec![])
+}
+
 pub fn generate(input: &GenInput) -> Generated {
     let model = input.model;
 
@@ -568,6 +579,20 @@ mod tests {
         assert_eq!(v["external-controller"], "127.0.0.1:9097");
         assert_eq!(v["secret"], "s");
         assert_eq!(v["rules"], serde_yaml_ng::to_value(["MATCH,REJECT"]).unwrap());
+    }
+
+    #[test]
+    fn nodes_check_config_has_only_sanitized_nodes() {
+        let mut m = base();
+        m.subscriptions[0].nodes[0].raw["interface-name"] = json!("X");
+        let sub = &m.subscriptions[0];
+        let v = parse(&nodes_check_config(19097, "s", sub, &sub.nodes));
+        assert_eq!(names(&v, "proxies"), ["机场/HK 01", "机场/JP 01"]);
+        assert!(v["proxies"][0].get("interface-name").is_none());
+        assert_eq!(v["proxies"][0]["cipher"], "aes-128-gcm");
+        assert!(v["listeners"].as_sequence().unwrap().is_empty());
+        assert!(v["proxy-groups"].as_sequence().unwrap().is_empty());
+        assert_eq!(v["external-controller"], "127.0.0.1:19097");
     }
 
     #[test]
