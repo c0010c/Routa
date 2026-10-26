@@ -227,6 +227,16 @@ pub async fn core_restart(rt: Rt<'_>) -> Result<(), ()> {
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn open_log_dir(rt: Rt<'_>) -> Result<(), ()> {
+    std::process::Command::new("explorer.exe")
+        .arg(rt.core_workdir())
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;

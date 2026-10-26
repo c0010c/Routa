@@ -679,6 +679,11 @@ impl Runtime {
         self.inner.status.lock().unwrap().clone()
     }
 
+    /// Directory holding mihomo's working files (config.yaml, mihomo.log).
+    pub fn core_workdir(&self) -> std::path::PathBuf {
+        self.inner.store.core_workdir()
+    }
+
     pub fn model(&self) -> Model {
         self.inner.model.lock().unwrap().clone()
     }

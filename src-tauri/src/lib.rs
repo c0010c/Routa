@@ -96,6 +96,7 @@ pub fn run() {
         commands::core_start,
         commands::core_stop,
         commands::core_restart,
+        commands::open_log_dir,
     ]);
 
     #[cfg(debug_assertions)]

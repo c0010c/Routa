@@ -30,9 +30,11 @@ export function ApplyResultSnackbar({
 interface ApplyResultApi {
   show: (outcome: ApplyOutcome) => void;
   showError: (message: string) => void;
+  /** A plain result message; `error` styles it as a failure. */
+  showMessage: (message: string, severity: "success" | "error") => void;
 }
 
-const ApplyResultContext = createContext<ApplyResultApi>({ show: () => {}, showError: () => {} });
+const ApplyResultContext = createContext<ApplyResultApi>({ show: () => {}, showError: () => {}, showMessage: () => {} });
 
 export function useApplyResult(): ApplyResultApi {
   return useContext(ApplyResultContext);
@@ -40,10 +42,11 @@ export function useApplyResult(): ApplyResultApi {
 
 export function ApplyResultProvider({ children }: { children: ReactNode }) {
   const [outcome, setOutcome] = useState<ApplyOutcome | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ text: string; severity: "success" | "error" } | null>(null);
   const show = useCallback((o: ApplyOutcome) => setOutcome(o), []);
-  const showError = useCallback((m: string) => setError(m), []);
-  const api = useMemo(() => ({ show, showError }), [show, showError]);
+  const showMessage = useCallback((text: string, severity: "success" | "error") => setError({ text, severity }), []);
+  const showError = useCallback((m: string) => setError({ text: m, severity: "error" }), []);
+  const api = useMemo(() => ({ show, showError, showMessage }), [show, showError, showMessage]);
   return (
     <ApplyResultContext.Provider value={api}>
       {children}
@@ -53,8 +56,8 @@ export function ApplyResultProvider({ children }: { children: ReactNode }) {
         onClose={(_, reason) => reason !== "clickaway" && setError(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
-        <Alert severity="error" variant="filled" sx={{ whiteSpace: "pre-line" }} onClose={() => setError(null)}>
-          {error}
+        <Alert severity={error?.severity ?? "error"} variant="filled" sx={{ whiteSpace: "pre-line" }} onClose={() => setError(null)}>
+          {error?.text}
         </Alert>
       </Snackbar>
     </ApplyResultContext.Provider>

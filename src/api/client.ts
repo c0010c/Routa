@@ -106,6 +106,7 @@ export const useRefreshSubscription = make(() => commands.refreshSubscription);
 export const useSelectGroupMember = make(() => commands.selectGroupMember);
 export const useSaveSettings = make(() => commands.saveSettings);
 export const useTestDelays = make(() => commands.testDelays);
+export const useOpenLogDir = make(() => commands.openLogDir);
 export const useResetTraffic = make(() => commands.resetTraffic);
 
 export function useCoreControl() {

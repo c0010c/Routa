@@ -122,6 +122,14 @@ async coreRestart() : Promise<Result<null, null>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async openLogDir() : Promise<Result<null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_log_dir") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
