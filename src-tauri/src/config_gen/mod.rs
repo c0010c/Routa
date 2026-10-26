@@ -183,9 +183,15 @@ fn hash_yaml(v: &Value) -> u64 {
     hasher.finish()
 }
 
+/// What the exit routes through. The group's delay-test `url`/`interval`
+/// are left out: changing them must not cut every connection of the group.
 fn fingerprint(parts: &ExitParts) -> u64 {
     let mut all = parts.proxies.clone();
-    all.extend(parts.group.clone());
+    if let Some(Value::Mapping(mut g)) = parts.group.clone() {
+        g.remove("url");
+        g.remove("interval");
+        all.push(Value::Mapping(g));
+    }
     hash_yaml(&Value::Sequence(all))
 }
 
@@ -581,6 +587,24 @@ mod tests {
         assert_eq!(fp(&before, "入口C"), fp(&after, "入口C"));
         let p = &before.plan.listeners["入口B"];
         assert_eq!((p.exit_name.as_str(), p.port, &p.id), ("出口B", 7892, &ListenerId("lb".into())));
+    }
+
+    #[test]
+    fn exit_fingerprint_ignores_delay_test_settings() {
+        let fp = |m: &Model| gen(m).plan.listeners["入口B"].exit_fingerprint;
+        let before = fp(&base());
+        let mut m = base();
+        m.settings.delay_test_url = "https://cp.cloudflare.com".into();
+        m.settings.delay_test_interval_mins = Some(30);
+        assert_eq!(fp(&m), before);
+        assert_ne!(gen(&m).yaml, gen(&base()).yaml, "the group itself still changes");
+        let mut m = base();
+        m.exits[1].kind = ExitKind::Group {
+            strategy: GroupStrategy::Fallback,
+            members: vec![nref("HK 01"), nref("JP 01")],
+            selected: None,
+        };
+        assert_ne!(fp(&m), before, "a strategy change still counts");
     }
 
     #[test]
