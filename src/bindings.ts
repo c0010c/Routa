@@ -5,8 +5,123 @@
 
 
 export const commands = {
-async ping() : Promise<string> {
-    return await TAURI_INVOKE("ping");
+async getModel() : Promise<Model> {
+    return await TAURI_INVOKE("get_model");
+},
+async getStatus() : Promise<RuntimeStatus> {
+    return await TAURI_INVOKE("get_status");
+},
+async saveListener(l: Listener) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_listener", { l }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteListener(id: ListenerId) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_listener", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveExit(e: Exit) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_exit", { e }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteExit(id: ExitId) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_exit", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveSubscription(s: Subscription) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_subscription", { s }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteSubscription(id: SubscriptionId) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_subscription", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async refreshSubscription(id: SubscriptionId) : Promise<Result<FetchResult, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("refresh_subscription", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async selectGroupMember(exit: ExitId, member: NodeRef) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("select_group_member", { exit, member }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async testDelays(proxyNames: string[]) : Promise<Result<([string, DelayResult])[], null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("test_delays", { proxyNames }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveSettings(s: Settings) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_settings", { s }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async resetTraffic() : Promise<Result<null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reset_traffic") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async coreStart() : Promise<Result<null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("core_start") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async coreStop() : Promise<Result<null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("core_stop") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async coreRestart() : Promise<Result<null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("core_restart") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -20,7 +135,102 @@ async ping() : Promise<string> {
 
 /** user-defined types **/
 
-
+export type ApplyOutcome = { Reloaded: { cut: number; 
+/**
+ * Affected connections that could not be closed even after a retry.
+ * If the connection list itself was unavailable this is the number of
+ * affected listeners (a lower bound, at least 1). The caller must
+ * escalate (restart the core) when it is > 0.
+ */
+uncut: number; failed_listeners: FailedListener[] } } | { FailedKeptPrevious: { error: string } } | { FailedClosed: { error: string; 
+/**
+ * Same meaning as in `Reloaded`.
+ */
+uncut: number } } | { FailedCoreStopped: { error: string } }
+export type Auth = { username: string; password: string }
+export type Bytes = { up: number; down: number }
+export type CoreState = "Stopped" | "Starting" | "Running" | { Crashed: { exit_code: number | null } }
+/**
+ * Latest delay result per proxy name.
+ */
+export type DelayBook = Partial<{ [key in string]: DelayResult }>
+export type DelayResult = { 
+/**
+ * `None` means the test failed or timed out.
+ */
+ms: number | null; 
+/**
+ * Unix seconds at completion.
+ */
+tested_at: number }
+export type Exit = { id: ExitId; name: string; kind: ExitKind; interface: InterfaceGuid | null }
+export type ExitHealth = { status: ExitStatus; effective_members: NodeRef[]; missing_members: NodeRef[]; 
+/**
+ * Resolved adapter; `Some` even when it is not usable.
+ */
+interface: NetInterface | null }
+export type ExitId = string
+export type ExitKind = { Node: { node: NodeRef } } | { Group: { strategy: GroupStrategy; members: NodeRef[]; selected: NodeRef | null } } | "Direct"
+export type ExitStatus = "Ok" | "NodeMissing" | "AllMembersMissing" | "InterfaceUnavailable"
+export type FailedListener = { id: ListenerId; name: string; port: number }
+export type FetchResult = { Ok: { node_count: number } } | { Failed: { reason: string } }
+export type GroupStrategy = "UrlTest" | "Fallback" | "LoadBalance" | "Select"
+export type Health = { exits: Partial<{ [key in ExitId]: ExitHealth }>; listeners: Partial<{ [key in ListenerId]: ListenerStatus }> }
+/**
+ * Windows 网卡标识（GUID）。
+ */
+export type InterfaceGuid = string
+export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
+export type Listener = { id: ListenerId; name: string; listener_type: ListenerType; listen: string; port: number; auth: Auth | null; exit: ExitId | null; user_enabled: boolean }
+export type ListenerId = string
+export type ListenerStatus = "Active" | "DisabledByUser" | "NoExit" | { ExitBroken: { exit_status: ExitStatus } }
+export type ListenerType = "Mixed" | "Http" | "Socks"
+export type Model = { subscriptions: Subscription[]; exits: Exit[]; listeners: Listener[]; settings: Settings }
+export type NetInterface = { 
+/**
+ * Adapter GUID exactly as Windows reports it, e.g. `{XXXXXXXX-...}`.
+ */
+guid: InterfaceGuid; friendly_name: string; description: string; is_up: boolean; ipv4: string[]; ipv6: string[]; 
+/**
+ * Value for mihomo's `interface-name`: the friendly name verbatim,
+ * case preserved (spike S1: GUID and description do not work).
+ */
+mihomo_name: string }
+export type Node = { name: string; proxy_type: string; server: string; 
+/**
+ * 原样的 mihomo proxy 映射
+ */
+raw: JsonValue }
+export type NodeRef = { subscription_id: SubscriptionId; name: string }
+/**
+ * Bytes per second.
+ */
+export type Rate = { up: number; down: number }
+export type RuntimeStatus = { core: CoreState; last_apply: ApplyOutcome | null; health: Health; delays: DelayBook; traffic: TrafficTick | null; interfaces: NetInterface[]; failed_listeners: FailedListener[]; 
+/**
+ * Problems found while loading persisted state (e.g. a corrupt state.json
+ * that was moved aside).
+ */
+startup_error: string | null; 
+/**
+ * Last state.json / traffic.json save failure; cleared once that file
+ * saves successfully again.
+ */
+save_error: string | null }
+export type Settings = { autostart: boolean; core_path: string | null; controller_port: number; delay_test_interval_mins: number | null; delay_test_url: string }
+export type Subscription = { id: SubscriptionId; name: string; url: string; update_interval_mins: number | null; fallback_exit: ExitId | null; 
+/**
+ * unix 秒
+ */
+last_updated: number | null; last_result: FetchResult | null; nodes: Node[] }
+export type SubscriptionId = string
+export type TrafficTick = { total_rate: Rate; 
+/**
+ * Every listener that had a delta in this tick.
+ */
+per_listener_rate: Partial<{ [key in ListenerId]: Rate }>; totals: TrafficTotals }
+export type TrafficTotals = { total: Bytes; per_listener: Partial<{ [key in ListenerId]: Bytes }> }
+export type ValidationError = { DuplicateName: { kind: string; name: string } } | { PortConflict: { port: number; with: string } } | { InvalidName: { name: string; reason: string } } | { IntervalOutOfRange: { field: string; value: number } } | { DanglingRef: { what: string } }
 
 /** tauri-specta globals **/
 

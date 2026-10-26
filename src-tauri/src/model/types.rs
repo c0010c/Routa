@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 macro_rules! id_type {
     ($name:ident) => {
         #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
+        #[serde(transparent)]
         pub struct $name(pub String);
 
         impl $name {
@@ -25,6 +26,7 @@ id_type!(ListenerId);
 
 /// Windows 网卡标识（GUID）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
+#[serde(transparent)]
 pub struct InterfaceGuid(pub String);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
