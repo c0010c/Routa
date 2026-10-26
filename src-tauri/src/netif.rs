@@ -22,7 +22,8 @@ pub struct NetInterface {
 }
 
 impl NetInterface {
-    /// `is_up && (ipv4 non-empty || ipv6 non-empty)`.
+    /// `is_up` and at least one routable address: IPv4/IPv6 loopback and
+    /// link-local (169.254.0.0/16, fe80::/10) addresses do not count.
     ///
     /// This is a working hypothesis, not a proven rule. Spike S1: an Up adapter
     /// with no IP at all (`WLAN 2`) fails in mihomo with "interface not found",
@@ -31,8 +32,18 @@ impl NetInterface {
     /// dial fail with no fallback to the default NIC, so unusable means the
     /// exit must stay disabled.
     pub fn is_usable(&self) -> bool {
-        self.is_up && (!self.ipv4.is_empty() || !self.ipv6.is_empty())
+        self.is_up
+            && (self.ipv4.iter().copied().any(is_routable_v4)
+                || self.ipv6.iter().copied().any(is_routable_v6))
     }
+}
+
+fn is_routable_v4(a: Ipv4Addr) -> bool {
+    !a.is_loopback() && !a.is_link_local()
+}
+
+fn is_routable_v6(a: Ipv6Addr) -> bool {
+    !a.is_loopback() && (a.segments()[0] & 0xffc0) != 0xfe80
 }
 
 pub trait InterfaceSource: Send + Sync {
@@ -69,8 +80,8 @@ impl InterfaceSource for WindowsInterfaces {
                 let mut ipv6 = Vec::new();
                 for ip in a.ip_addresses() {
                     match ip {
-                        IpAddr::V4(v) if !v.is_loopback() => ipv4.push(*v),
-                        IpAddr::V6(v) if !v.is_loopback() => ipv6.push(*v),
+                        IpAddr::V4(v) if is_routable_v4(*v) => ipv4.push(*v),
+                        IpAddr::V6(v) if is_routable_v6(*v) => ipv6.push(*v),
                         _ => {}
                     }
                 }
@@ -112,6 +123,15 @@ mod tests {
         assert!(!nic(false, &v4, &[]).is_usable());
         assert!(nic(true, &v4, &[]).is_usable());
         assert!(nic(true, &[], &v6).is_usable());
+    }
+
+    #[test]
+    fn link_local_only_is_not_usable() {
+        let ll4 = Ipv4Addr::new(169, 254, 1, 2);
+        let ll6 = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
+        assert!(!nic(true, &[ll4], &[]).is_usable());
+        assert!(!nic(true, &[], &[ll6]).is_usable());
+        assert!(nic(true, &[ll4, Ipv4Addr::new(192, 168, 1, 5)], &[]).is_usable());
     }
 
     #[test]
