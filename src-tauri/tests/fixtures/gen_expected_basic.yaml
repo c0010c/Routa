@@ -1,0 +1,71 @@
+mode: rule
+log-level: info
+allow-lan: true
+external-controller: 127.0.0.1:9097
+secret: sekret
+profile:
+  store-selected: false
+proxies:
+- name: 机场/HK 01
+  type: ss
+  server: 1.1.1.1
+  port: 443
+  cipher: aes-128-gcm
+  password: pw
+- name: 机场/JP 01
+  type: trojan
+  server: jp.example.com
+  port: 443
+  password: pw2
+- name: 出口A
+  type: ss
+  server: 1.1.1.1
+  port: 443
+  cipher: aes-128-gcm
+  password: pw
+  interface-name: 以太网
+- name: 出口B/机场/HK 01
+  type: ss
+  server: 1.1.1.1
+  port: 443
+  cipher: aes-128-gcm
+  password: pw
+  interface-name: WLAN
+- name: 出口B/机场/JP 01
+  type: trojan
+  server: jp.example.com
+  port: 443
+  password: pw2
+  interface-name: WLAN
+- name: 出口C
+  type: direct
+  interface-name: USB
+proxy-groups:
+- name: 出口B
+  type: url-test
+  proxies:
+  - 出口B/机场/HK 01
+  - 出口B/机场/JP 01
+  url: https://www.gstatic.com/generate_204
+  interval: 600
+listeners:
+- name: 入口A
+  type: mixed
+  listen: 0.0.0.0
+  port: 7891
+  proxy: 出口A
+  users:
+  - username: u
+    password: p
+- name: 入口B
+  type: http
+  listen: 127.0.0.1
+  port: 7892
+  proxy: 出口B
+- name: 入口C
+  type: socks
+  listen: 0.0.0.0
+  port: 7893
+  proxy: 出口C
+rules:
+- MATCH,REJECT

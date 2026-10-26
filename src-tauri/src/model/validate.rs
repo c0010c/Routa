@@ -56,6 +56,17 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
 
     check_unique("subscription", model.subscriptions.iter().map(|s| s.name.as_str()), &mut errors);
     check_unique("exit", model.exits.iter().map(|e| e.name.as_str()), &mut errors);
+    // 出口名与订阅名共用一个命名空间：节点名可含 "/"，
+    // "{订阅}/{节点}" 可能等于 "{出口}/{订阅}/{节点}"。
+    check_unique(
+        "出口/订阅",
+        model
+            .exits
+            .iter()
+            .map(|e| e.name.as_str())
+            .chain(model.subscriptions.iter().map(|s| s.name.as_str())),
+        &mut errors,
+    );
     check_unique("listener", model.listeners.iter().map(|l| l.name.as_str()), &mut errors);
 
     for s in &model.subscriptions {
@@ -204,6 +215,14 @@ mod tests {
         m.exits.push(exit("x"));
         m.exits.push(exit("x"));
         assert!(errs(&m).contains(&ValidationError::DuplicateName { kind: "exit", name: "x".into() }));
+    }
+
+    #[test]
+    fn rejects_exit_name_equal_to_subscription_name() {
+        let mut m = Model::default();
+        m.exits.push(exit("x"));
+        m.subscriptions.push(sub("x"));
+        assert!(errs(&m).contains(&ValidationError::DuplicateName { kind: "出口/订阅", name: "x".into() }));
     }
 
     #[test]
