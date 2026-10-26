@@ -50,7 +50,12 @@ pub enum FetchResult {
     Failed { reason: String },
 }
 
+// Schema evolution: the persisted structs are `#[serde(default)]` at struct
+// level (missing fields come from `Default`), so a state.json written before
+// a field existed still loads. Struct level keeps the TS fields required.
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+#[serde(default)]
 pub struct Subscription {
     pub id: SubscriptionId,
     pub name: String,
@@ -85,6 +90,7 @@ pub enum ExitKind {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+#[serde(default)]
 pub struct Exit {
     pub id: ExitId,
     pub name: String,
@@ -106,6 +112,7 @@ pub struct Auth {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+#[serde(default)]
 pub struct Listener {
     pub id: ListenerId,
     pub name: String,
@@ -115,6 +122,33 @@ pub struct Listener {
     pub auth: Option<Auth>,
     pub exit: Option<ExitId>,
     pub user_enabled: bool,
+}
+
+impl Default for Subscription {
+    fn default() -> Self {
+        Self {
+            id: SubscriptionId::new(),
+            name: String::new(),
+            url: String::new(),
+            update_interval_mins: Some(1440),
+            fallback_exit: None,
+            last_updated: None,
+            last_result: None,
+            nodes: Vec::new(),
+        }
+    }
+}
+
+impl Default for Exit {
+    fn default() -> Self {
+        Self { id: ExitId::new(), name: String::new(), kind: ExitKind::Direct, interface: None }
+    }
+}
+
+impl Default for Listener {
+    fn default() -> Self {
+        Self::new_default(String::new(), 0)
+    }
 }
 
 impl Listener {
@@ -133,6 +167,7 @@ impl Listener {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+#[serde(default)]
 pub struct Settings {
     pub autostart: bool,
     pub core_path: Option<String>,
@@ -154,6 +189,7 @@ impl Default for Settings {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, specta::Type)]
+#[serde(default)]
 pub struct Model {
     pub subscriptions: Vec<Subscription>,
     pub exits: Vec<Exit>,
@@ -173,6 +209,28 @@ mod tests {
         assert_eq!(s.controller_port, 19097);
         assert_eq!(s.delay_test_interval_mins, Some(10));
         assert_eq!(s.delay_test_url, "https://www.gstatic.com/generate_204");
+    }
+
+    #[test]
+    fn old_state_json_missing_fields_loads_with_defaults() {
+        let json = r#"{
+            "subscriptions": [{"id": "s1", "name": "订阅", "url": "https://x/sub"}],
+            "exits": [{"id": "e1", "name": "直连", "kind": "Direct"}],
+            "listeners": [{"id": "l1", "name": "L", "listener_type": "Mixed", "listen": "0.0.0.0", "port": 7891}],
+            "settings": {"autostart": true, "core_path": null, "controller_port": 19098, "delay_test_interval_mins": 5}
+        }"#;
+        let m: Model = serde_json::from_str(json).unwrap();
+        assert_eq!(m.settings.delay_test_url, Settings::default().delay_test_url);
+        assert_eq!((m.settings.autostart, m.settings.controller_port), (true, 19098));
+        let s = &m.subscriptions[0];
+        assert_eq!(s.fallback_exit, None);
+        assert!(s.nodes.is_empty() && s.last_result.is_none());
+        assert_eq!(m.exits[0].interface, None);
+        let l = &m.listeners[0];
+        assert!(l.user_enabled && l.auth.is_none() && l.exit.is_none());
+        // A missing top-level section is the default too.
+        let m: Model = serde_json::from_str("{}").unwrap();
+        assert_eq!(m, Model::default());
     }
 
     #[test]
