@@ -1,5 +1,5 @@
 mode: rule
-log-level: info
+log-level: warning
 allow-lan: true
 external-controller: 127.0.0.1:19097
 secret: sekret

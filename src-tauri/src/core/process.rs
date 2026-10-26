@@ -218,6 +218,24 @@ fn pipe_to_log<R: AsyncRead + Unpin + Send + 'static>(reader: R, log: PathBuf) {
     });
 }
 
+const LOG_ROTATE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Before a launch: a log over `max_bytes` becomes `<log>.1` (replacing an
+/// older one) so the next run starts a fresh file. Failures are logged only.
+fn rotate_log(log: &Path, max_bytes: u64) {
+    let Ok(meta) = std::fs::metadata(log) else { return };
+    if meta.len() <= max_bytes {
+        return;
+    }
+    let mut old = log.as_os_str().to_owned();
+    old.push(".1");
+    let old = PathBuf::from(old);
+    let _ = std::fs::remove_file(&old);
+    if let Err(e) = std::fs::rename(log, &old) {
+        eprintln!("process: rotating {} failed: {e}", log.display());
+    }
+}
+
 /// Windows Job Object with KILL_ON_JOB_CLOSE: when this app dies (even by a
 /// hard kill) the OS closes the handle and kills every assigned mihomo.
 #[cfg(windows)]
@@ -279,6 +297,8 @@ impl CoreProcess {
                 "config must be inside the mihomo workdir (spike S5)",
             ));
         }
+        let log = workdir.join("mihomo.log");
+        rotate_log(&log, LOG_ROTATE_BYTES);
         let mut cmd = Command::new(bin);
         cmd.arg("-d")
             .arg(workdir)
@@ -296,7 +316,6 @@ impl CoreProcess {
         let pid = child
             .id()
             .ok_or_else(|| io::Error::other("mihomo exited immediately"))?;
-        let log = workdir.join("mihomo.log");
         if let Some(out) = child.stdout.take() {
             pipe_to_log(out, log.clone());
         }
@@ -484,6 +503,26 @@ mod tests {
         let r =
             CoreProcess::start(Path::new("definitely-not-a-binary.exe"), dir.path(), &cfg).await;
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn rotate_log_moves_only_oversized_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("mihomo.log");
+        let old = dir.path().join("mihomo.log.1");
+        rotate_log(&log, 10); // missing: nothing happens
+        assert!(!old.exists());
+
+        std::fs::write(&log, "small").unwrap();
+        rotate_log(&log, 10);
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "small");
+        assert!(!old.exists());
+
+        std::fs::write(&old, "older").unwrap();
+        std::fs::write(&log, "x".repeat(11)).unwrap();
+        rotate_log(&log, 10);
+        assert!(!log.exists());
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "x".repeat(11));
     }
 
     #[test]

@@ -191,7 +191,7 @@ fn base_config(
 ) -> String {
     let root = map(vec![
         ("mode", s("rule")),
-        ("log-level", s("info")),
+        ("log-level", s("warning")),
         ("allow-lan", Value::Bool(true)),
         ("external-controller", s(&format!("127.0.0.1:{controller_port}"))),
         ("secret", s(secret)),
@@ -427,6 +427,8 @@ mod tests {
     fn fixed_top_level() {
         let v = parse(&gen(&base()).yaml);
         assert_eq!(v["allow-lan"], true);
+        // info logs one line per connection: the log would grow without bound.
+        assert_eq!(v["log-level"], "warning");
         assert_eq!(v["external-controller"], "127.0.0.1:19097");
         assert_eq!(v["rules"], serde_yaml_ng::to_value(["MATCH,REJECT"]).unwrap());
         for k in ["port", "socks-port", "mixed-port", "tun", "dns"] {
