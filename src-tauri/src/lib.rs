@@ -122,7 +122,6 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .plugin(tauri_plugin_shell::init())
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             let rt = build_runtime(app.handle())?;
