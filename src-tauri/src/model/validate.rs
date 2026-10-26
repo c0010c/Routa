@@ -74,6 +74,13 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
     }
     for e in &model.exits {
         check_name(&e.name, true, &mut errors);
+        const BUILTIN: [&str; 6] = ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL"];
+        if BUILTIN.iter().any(|b| b.eq_ignore_ascii_case(&e.name)) {
+            errors.push(ValidationError::InvalidName {
+                name: e.name.clone(),
+                reason: "与 mihomo 内置名称冲突".to_string(),
+            });
+        }
     }
     for l in &model.listeners {
         check_name(&l.name, false, &mut errors);
@@ -223,6 +230,21 @@ mod tests {
         m.exits.push(exit("x"));
         m.subscriptions.push(sub("x"));
         assert!(errs(&m).contains(&ValidationError::DuplicateName { kind: "出口/订阅", name: "x".into() }));
+    }
+
+    #[test]
+    fn rejects_builtin_proxy_names_for_exits() {
+        for n in ["DIRECT", "reject", "Reject-Drop", "pass", "Compatible", "global"] {
+            let mut m = Model::default();
+            m.exits.push(exit(n));
+            assert!(
+                errs(&m).contains(&ValidationError::InvalidName { name: n.into(), reason: "与 mihomo 内置名称冲突".into() }),
+                "{n}"
+            );
+        }
+        let mut m = Model::default();
+        m.exits.push(exit("direct-2"));
+        assert_eq!(validate(&m), Ok(()));
     }
 
     #[test]

@@ -88,16 +88,22 @@ fn json_to_yaml(v: &serde_json::Value) -> Value {
 
 /// Copy of the node's raw proxy mapping with `name` (and optionally
 /// `interface-name`) replaced.
-fn proxy_copy(node: &Node, name: &str, interface: Option<&str>) -> Value {
-    let mut m = match json_to_yaml(&node.raw) {
-        Value::Mapping(m) => m,
-        _ => Mapping::new(),
+///
+/// Subscription-supplied `interface-name`, `routing-mark` and `dialer-proxy`
+/// are stripped: they would bind traffic to a NIC the user did not choose, or
+/// reference a proxy that has been renamed. `None` if `raw` is not an object.
+fn proxy_copy(node: &Node, name: &str, interface: Option<&str>) -> Option<Value> {
+    let Value::Mapping(mut m) = json_to_yaml(&node.raw) else {
+        return None;
     };
+    for k in ["interface-name", "routing-mark", "dialer-proxy"] {
+        m.remove(k);
+    }
     m.insert(s("name"), s(name));
     if let Some(i) = interface {
         m.insert(s("interface-name"), s(i));
     }
-    Value::Mapping(m)
+    Some(Value::Mapping(m))
 }
 
 fn find_node<'a>(model: &'a Model, r: &NodeRef) -> Option<(&'a Subscription, &'a Node)> {
@@ -121,15 +127,16 @@ struct ExitParts {
     group: Option<Value>,
 }
 
-fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth) -> ExitParts {
+/// `None` when nothing could be emitted for the exit (treated as not Ok).
+fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth) -> Option<ExitParts> {
     let iface = h.interface.as_ref().map(|n| n.mihomo_name.as_str());
-    match &exit.kind {
+    let parts = match &exit.kind {
         ExitKind::Node { .. } => {
             let proxies = h
                 .effective_members
                 .iter()
                 .filter_map(|r| find_node(model, r))
-                .map(|(_, n)| proxy_copy(n, &exit.name, iface))
+                .filter_map(|(_, n)| proxy_copy(n, &exit.name, iface))
                 .collect();
             ExitParts { proxies, group: None }
         }
@@ -139,8 +146,10 @@ fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth) -> ExitParts {
             for r in &h.effective_members {
                 if let Some((sub, n)) = find_node(model, r) {
                     let name = member_proxy_name(exit, sub, n);
-                    proxies.push(proxy_copy(n, &name, iface));
-                    names.push(s(&name));
+                    if let Some(p) = proxy_copy(n, &name, iface) {
+                        proxies.push(p);
+                        names.push(s(&name));
+                    }
                 }
             }
             let interval = model.settings.delay_test_interval_mins.map_or(0, |m| u64::from(m) * 60);
@@ -160,7 +169,8 @@ fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth) -> ExitParts {
             }
             ExitParts { proxies: vec![map(entries)], group: None }
         }
-    }
+    };
+    (!parts.proxies.is_empty()).then_some(parts)
 }
 
 fn fingerprint(parts: &ExitParts) -> u64 {
@@ -209,7 +219,7 @@ pub fn generate(input: &GenInput) -> Generated {
         .flat_map(|sub| {
             sub.nodes
                 .iter()
-                .map(move |n| proxy_copy(n, &node_proxy_name(sub, n), None))
+                .filter_map(move |n| proxy_copy(n, &node_proxy_name(sub, n), None))
         })
         .collect();
 
@@ -222,14 +232,14 @@ pub fn generate(input: &GenInput) -> Generated {
         if h.status != ExitStatus::Ok {
             continue;
         }
-        let parts = exit_parts(model, exit, h);
+        let Some(parts) = exit_parts(model, exit, h) else { continue };
         fingerprints.insert(&exit.id, fingerprint(&parts));
         proxies.extend(parts.proxies);
         groups.extend(parts.group);
 
         if let ExitKind::Group { strategy: GroupStrategy::Select, selected: Some(sel), .. } = &exit.kind {
             if h.effective_members.contains(sel) {
-                if let Some((sub, n)) = find_node(model, sel) {
+                if let Some((sub, n)) = find_node(model, sel).filter(|(_, n)| n.raw.is_object()) {
                     selects.push((exit.name.clone(), member_proxy_name(exit, sub, n)));
                 }
             }
@@ -467,6 +477,58 @@ mod tests {
         let member = format!("出口B/机场/{weird}");
         assert!(ps.iter().any(|p| p["name"].as_str() == Some(&member)));
         assert_eq!(v["proxy-groups"][0]["proxies"][0].as_str().unwrap(), member);
+    }
+
+    #[test]
+    fn strips_subscription_interface_and_dialer_proxy() {
+        let mut m = base();
+        m.subscriptions[0].nodes[0] = node(json!({"name":"HK 01","type":"ss","server":"1.1.1.1","port":443,
+            "interface-name":"X","routing-mark":1,"dialer-proxy":"foo"}));
+        m.exits[2].interface = None;
+        m.exits[0].interface = None; // no-NIC node exit
+        let h = evaluate(&m, &nics());
+        let v = parse(&generate(&GenInput { model: &m, health: &h, secret: "s", fetch_listeners: &[] }).yaml);
+        let ps = v["proxies"].as_sequence().unwrap();
+        let get = |n: &str| ps.iter().find(|p| p["name"].as_str() == Some(n)).unwrap();
+        for n in ["机场/HK 01", "出口A"] {
+            for k in ["interface-name", "routing-mark", "dialer-proxy"] {
+                assert!(get(n).get(k).is_none(), "{n} {k}");
+            }
+        }
+        let member = get("出口B/机场/HK 01");
+        assert_eq!(member["interface-name"], "WLAN");
+        assert!(member.get("routing-mark").is_none() && member.get("dialer-proxy").is_none());
+        assert_eq!(member.as_mapping().unwrap().keys().filter(|k| *k == "interface-name").count(), 1);
+    }
+
+    #[test]
+    fn non_object_raw_is_not_emitted() {
+        let mut m = base();
+        m.subscriptions[0].nodes[0].raw = serde_json::Value::Null;
+        let g = gen(&m);
+        let v = parse(&g.yaml);
+        let ps = names(&v, "proxies");
+        assert!(!ps.contains(&"机场/HK 01".to_string()));
+        assert!(!ps.contains(&"出口A".to_string()));
+        assert!(!ps.contains(&"出口B/机场/HK 01".to_string()));
+        assert!(ps.contains(&"出口B/机场/JP 01".to_string()));
+        assert_eq!(v["proxy-groups"][0]["proxies"], serde_yaml_ng::to_value(["出口B/机场/JP 01"]).unwrap());
+        assert_eq!(names(&v, "listeners"), ["入口B", "入口C"]);
+        assert!(!g.plan.listeners.contains_key("入口A"));
+    }
+
+    #[test]
+    fn exit_and_listener_names_roundtrip() {
+        let mut m = base();
+        m.exits[0].name = "出 \"口\": 🚀".into();
+        m.listeners[0].name = "入 \"口\": 🎯".into();
+        let g = gen(&m);
+        let v = parse(&g.yaml);
+        assert!(names(&v, "proxies").contains(&"出 \"口\": 🚀".to_string()));
+        let l = &v["listeners"][0];
+        assert_eq!(l["name"].as_str().unwrap(), "入 \"口\": 🎯");
+        assert_eq!(l["proxy"].as_str().unwrap(), "出 \"口\": 🚀");
+        assert_eq!(g.plan.listeners["入 \"口\": 🎯"].exit_name, "出 \"口\": 🚀");
     }
 
     #[test]
