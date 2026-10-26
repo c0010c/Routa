@@ -181,7 +181,7 @@ fn uncut(o: &ApplyOutcome) -> usize {
 const SHUT_DOWN: &str = "程序已退出，操作未执行";
 
 fn core_not_running() -> ApplyOutcome {
-    ApplyOutcome::FailedCoreStopped { error: "mihomo 未运行，配置将在内核启动后生效".into() }
+    ApplyOutcome::NotRunning { error: "mihomo 未运行，配置将在内核启动后生效".into() }
 }
 
 impl Inner {
@@ -429,7 +429,7 @@ impl Inner {
                     ApplyOutcome::FailedClosed { .. } | ApplyOutcome::FailedCoreStopped { .. } => {
                         live.name_to_id.clear();
                     }
-                    ApplyOutcome::FailedKeptPrevious { .. } => {}
+                    ApplyOutcome::FailedKeptPrevious { .. } | ApplyOutcome::NotRunning { .. } => {}
                 }
                 Some(out)
             }

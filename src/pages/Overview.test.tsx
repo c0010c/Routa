@@ -15,7 +15,7 @@ vi.mock("../bindings", () => ({
 }));
 
 import { commands } from "../bindings";
-import { Overview } from "./Overview";
+import { collectProblems, Overview } from "./Overview";
 
 const model: Model = {
   subscriptions: [],
@@ -86,6 +86,17 @@ describe("Overview", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("端口 7890 被占用");
   });
 
+  it("marks listeners not in effect when the last apply failed closed", async () => {
+    vi.mocked(commands.getStatus).mockResolvedValue({
+      ...status,
+      last_apply: { FailedClosed: { error: "bad config", uncut: 0 } },
+    });
+    renderOverview();
+    const rows = await screen.findAllByRole("row");
+    expect(within(rows[1]).getByText("未生效")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("配置未生效：bad config");
+  });
+
   it("enables start only when stopped", async () => {
     vi.mocked(commands.getStatus).mockResolvedValue({ ...status, core: "Stopped" });
     renderOverview();
@@ -96,5 +107,26 @@ describe("Overview", () => {
     await waitFor(() => expect(commands.coreStart).toHaveBeenCalled());
     // let the post-mutation refetch settle so no state updates leak past the test
     await waitFor(() => expect(commands.getStatus).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("collectProblems", () => {
+  const healthy: RuntimeStatus = { ...status, health: { exits: {}, listeners: {} } };
+  it("reports nothing for a running core with a clean reload", () =>
+    expect(
+      collectProblems(model, { ...healthy, last_apply: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } }),
+    ).toEqual([]));
+  it("reports a stopped or crashed core", () => {
+    expect(collectProblems(model, { ...healthy, core: "Stopped" })).toEqual(["mihomo 已停止"]);
+    expect(collectProblems(model, { ...healthy, core: { Crashed: { exit_code: 3 } } })).toEqual([
+      "mihomo 已崩溃（退出码 3）",
+    ]);
+  });
+  it("reports every non-Reloaded last apply", () => {
+    const of = (last_apply: RuntimeStatus["last_apply"]) => collectProblems(model, { ...healthy, last_apply });
+    expect(of({ FailedKeptPrevious: { error: "a" } })).toEqual(["配置未生效：a"]);
+    expect(of({ FailedClosed: { error: "b", uncut: 0 } })).toEqual(["配置未生效：b"]);
+    expect(of({ FailedCoreStopped: { error: "c" } })).toEqual(["配置未生效：c"]);
+    expect(of({ NotRunning: { error: "d" } })).toEqual(["配置未生效：d"]);
   });
 });

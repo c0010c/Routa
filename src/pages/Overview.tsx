@@ -22,9 +22,9 @@ import {
   useStatus,
   useTraffic,
 } from "../api/client";
-import type { CoreState, Exit, Model, NodeRef, RuntimeStatus } from "../bindings";
+import type { ApplyOutcome, CoreState, Exit, Model, NodeRef, RuntimeStatus } from "../bindings";
 import { ListenerStatusChip } from "../components/StatusChips";
-import { exitStatusLabel, formatBytes, formatRate } from "../lib/format";
+import { configNotEffective, exitStatusLabel, formatBytes, formatRate } from "../lib/format";
 
 const refKey = (r: NodeRef) => `${r.subscription_id}/${r.name}`;
 
@@ -35,9 +35,18 @@ function coreText(c: CoreState): string {
   return `已崩溃（退出码 ${c.Crashed.exit_code ?? "未知"}）`;
 }
 
+function applyError(a: Exclude<ApplyOutcome, { Reloaded: unknown }>): string {
+  if ("FailedKeptPrevious" in a) return a.FailedKeptPrevious.error;
+  if ("FailedClosed" in a) return a.FailedClosed.error;
+  if ("FailedCoreStopped" in a) return a.FailedCoreStopped.error;
+  return a.NotRunning.error;
+}
+
 export function collectProblems(model: Model, status: RuntimeStatus): string[] {
   const out: string[] = [];
-  if (typeof status.core === "object") out.push(`mihomo ${coreText(status.core)}`);
+  if (status.core === "Stopped" || typeof status.core === "object") out.push(`mihomo ${coreText(status.core)}`);
+  const a = status.last_apply;
+  if (a !== null && !("Reloaded" in a)) out.push(`配置未生效：${applyError(a)}`);
   for (const [id, h] of Object.entries(status.health.exits)) {
     if (!h || h.status === "Ok") continue;
     const name = model.exits.find((e) => e.id === id)?.name ?? id;
@@ -117,6 +126,7 @@ export function Overview() {
   const tick = liveTick ?? s.traffic;
   const problems = collectProblems(m, s);
   const failedIds = new Set(s.failed_listeners.map((f) => f.id));
+  const notEffective = configNotEffective(s);
 
   return (
     <Stack spacing={2}>
@@ -163,7 +173,7 @@ export function Overview() {
               return (
                 <TableRow key={l.id}>
                   <TableCell>
-                    {ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} /> : "—"}
+                    {ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={notEffective} /> : "—"}
                   </TableCell>
                   <TableCell>{l.name}</TableCell>
                   <TableCell>{l.port}</TableCell>

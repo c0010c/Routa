@@ -771,3 +771,52 @@ async fn mutate_skips_check_when_core_cannot_run() {
     assert_eq!(h.rt.model().listeners[0].name, "新名字");
     assert_eq!(listener_names(&last_reload(&h.api)), vec!["新名字".to_string()]);
 }
+
+#[tokio::test(start_paused = true)]
+async fn failed_apply_is_retried() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.ports.0.lock().unwrap().insert(7892, PID);
+    h.rt.start().await.unwrap();
+    let rejected = || crate::core::api::ApiError::Rejected { status: 400, message: "bad".into() };
+
+    // Renaming is restrictive: the rejected reload fails closed.
+    h.api.reload_results.lock().unwrap().push_back(Err(rejected()));
+    let out = h.rt.mutate(|m| m.listeners[0].name = "改名".into()).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::FailedClosed { .. }), "{out:?}");
+    assert!(listener_names(&last_reload(&h.api)).is_empty());
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    assert!(matches!(h.rt.status().last_apply, Some(ApplyOutcome::Reloaded { .. })));
+    assert_eq!(listener_names(&last_reload(&h.api)), vec!["改名".to_string()]);
+
+    // Adding a listener is not: the rejected reload keeps the previous config.
+    h.api.reload_results.lock().unwrap().push_back(Err(rejected()));
+    let out = h
+        .rt
+        .mutate(|m| {
+            let mut l = Listener::new_default("L2".into(), 7892);
+            l.exit = m.listeners[0].exit.clone();
+            m.listeners.push(l);
+        })
+        .await
+        .unwrap();
+    assert!(matches!(out, ApplyOutcome::FailedKeptPrevious { .. }), "{out:?}");
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    assert!(matches!(h.rt.status().last_apply, Some(ApplyOutcome::Reloaded { .. })));
+    assert_eq!(listener_names(&last_reload(&h.api)), vec!["改名".to_string(), "L2".to_string()]);
+
+    // Once applied, no further retries.
+    let reloads = h.api.reloads.lock().unwrap().len();
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn mutate_without_core_is_saved_but_not_running() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    let out = h.rt.mutate(|m| m.listeners[0].name = "改名".into()).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::NotRunning { .. }), "{out:?}");
+    assert_eq!(Store::open(h.data.clone()).unwrap().load_model().unwrap().listeners[0].name, "改名");
+}

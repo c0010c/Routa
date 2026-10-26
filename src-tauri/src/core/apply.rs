@@ -42,6 +42,11 @@ pub enum ApplyOutcome {
     FailedCoreStopped {
         error: String,
     },
+    /// No core is running: the model was saved but nothing was applied; it
+    /// takes effect when mihomo starts. Never produced by `Applier`.
+    NotRunning {
+        error: String,
+    },
 }
 
 /// Listener names that existed in `old` and whose traffic must not continue as

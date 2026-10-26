@@ -1,10 +1,12 @@
 import {
   applyOutcomeMessages,
+  configNotEffective,
   exitStatusLabel,
   formatBytes,
   formatRate,
   listenerStatusLabel,
 } from "./format";
+import type { RuntimeStatus } from "../bindings";
 
 describe("formatBytes", () => {
   it("formats zero", () => expect(formatBytes(0)).toBe("0 B"));
@@ -40,6 +42,11 @@ describe("listenerStatusLabel", () => {
     }));
   it("port failure overrides Active", () =>
     expect(listenerStatusLabel("Active", true)).toEqual({ text: "端口被占用", color: "error" }));
+  it("not-in-effect overrides Active and port failure, but not other states", () => {
+    expect(listenerStatusLabel("Active", false, true)).toEqual({ text: "未生效", color: "warning" });
+    expect(listenerStatusLabel("Active", true, true)).toEqual({ text: "未生效", color: "warning" });
+    expect(listenerStatusLabel("DisabledByUser", false, true)).toEqual({ text: "已停用", color: "default" });
+  });
 });
 
 describe("exitStatusLabel", () => {
@@ -72,15 +79,40 @@ describe("applyOutcomeMessages", () => {
       "部分旧连接未能断开，正在重启 mihomo",
     ]));
   it("failure variants", () => {
-    expect(applyOutcomeMessages({ FailedKeptPrevious: { error: "x" } })).toEqual([
-      "保存失败，已保留之前的配置：x",
-    ]);
+    expect(applyOutcomeMessages({ FailedKeptPrevious: { error: "x" } })).toEqual(["已保存，但未生效：x"]);
+    expect(applyOutcomeMessages({ NotRunning: { error: "x" } })).toEqual(["已保存，但未生效：x"]);
     expect(applyOutcomeMessages({ FailedClosed: { error: "x", uncut: 1 } })).toEqual([
-      "保存失败，为防止泄露已关闭所有端口：x",
+      "已保存，但未能生效，为防止泄露已关闭所有端口：x",
       "部分旧连接未能断开，正在重启 mihomo",
     ]);
     expect(applyOutcomeMessages({ FailedCoreStopped: { error: "x" } })).toEqual([
-      "保存失败，mihomo 已停止：x",
+      "已保存，但未能生效，mihomo 已停止：x",
     ]);
+  });
+});
+
+describe("configNotEffective", () => {
+  const base: RuntimeStatus = {
+    core: "Running",
+    last_apply: null,
+    health: { exits: {}, listeners: {} },
+    delays: {},
+    traffic: null,
+    interfaces: [],
+    failed_listeners: [],
+    startup_error: null,
+    save_error: null,
+  };
+  it("is false for a running core whose last apply did not close everything", () => {
+    expect(configNotEffective(base)).toBe(false);
+    expect(configNotEffective({ ...base, last_apply: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } })).toBe(false);
+    expect(configNotEffective({ ...base, last_apply: { FailedKeptPrevious: { error: "x" } } })).toBe(false);
+  });
+  it("is true when the core is not running or the last apply closed everything", () => {
+    expect(configNotEffective({ ...base, core: "Stopped" })).toBe(true);
+    expect(configNotEffective({ ...base, core: "Starting" })).toBe(true);
+    expect(configNotEffective({ ...base, core: { Crashed: { exit_code: null } } })).toBe(true);
+    expect(configNotEffective({ ...base, last_apply: { FailedClosed: { error: "x", uncut: 0 } } })).toBe(true);
+    expect(configNotEffective({ ...base, last_apply: { FailedCoreStopped: { error: "x" } } })).toBe(true);
   });
 });

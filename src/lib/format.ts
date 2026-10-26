@@ -1,4 +1,4 @@
-import type { ApplyOutcome, ExitStatus, ListenerStatus } from "../bindings";
+import type { ApplyOutcome, ExitStatus, ListenerStatus, RuntimeStatus } from "../bindings";
 
 export type LabelColor = "success" | "default" | "warning" | "error";
 export interface Label {
@@ -37,7 +37,15 @@ export function exitStatusLabel(s: ExitStatus): Label {
   }
 }
 
-export function listenerStatusLabel(s: ListenerStatus, isPortFailed: boolean): Label {
+/** True when the saved config is not what mihomo runs: core not running, or the last apply closed everything. */
+export function configNotEffective(status: RuntimeStatus): boolean {
+  if (status.core !== "Running") return true;
+  const a = status.last_apply;
+  return a !== null && ("FailedClosed" in a || "FailedCoreStopped" in a);
+}
+
+export function listenerStatusLabel(s: ListenerStatus, isPortFailed: boolean, notEffective = false): Label {
+  if (notEffective && s === "Active") return { text: "未生效", color: "warning" };
   if (isPortFailed) return { text: "端口被占用", color: "error" };
   if (s === "Active") return { text: "运行中", color: "success" };
   if (s === "DisabledByUser") return { text: "已停用", color: "default" };
@@ -66,12 +74,13 @@ export function applyOutcomeMessages(o: ApplyOutcome): string[] {
     return lines;
   }
   if ("FailedKeptPrevious" in o) {
-    return [`保存失败，已保留之前的配置：${o.FailedKeptPrevious.error}`];
+    return [`已保存，但未生效：${o.FailedKeptPrevious.error}`];
   }
   if ("FailedClosed" in o) {
-    const lines = [`保存失败，为防止泄露已关闭所有端口：${o.FailedClosed.error}`];
+    const lines = [`已保存，但未能生效，为防止泄露已关闭所有端口：${o.FailedClosed.error}`];
     if (o.FailedClosed.uncut > 0) lines.push(uncutLine);
     return lines;
   }
-  return [`保存失败，mihomo 已停止：${o.FailedCoreStopped.error}`];
+  if ("NotRunning" in o) return [`已保存，但未生效：${o.NotRunning.error}`];
+  return [`已保存，但未能生效，mihomo 已停止：${o.FailedCoreStopped.error}`];
 }

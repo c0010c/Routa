@@ -71,7 +71,7 @@ function validationText(errors: ValidationError[]): string {
 }
 
 function isApplyOutcome(d: object): d is ApplyOutcome {
-  return "Reloaded" in d || "FailedKeptPrevious" in d || "FailedClosed" in d || "FailedCoreStopped" in d;
+  return "Reloaded" in d || "FailedKeptPrevious" in d || "FailedClosed" in d || "FailedCoreStopped" in d || "NotRunning" in d;
 }
 
 type Fn<A extends unknown[], T> = (...a: A) => Promise<Result<T, ValidationError[] | string | null>>;

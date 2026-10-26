@@ -11,6 +11,7 @@ use tokio::time::{interval_at, Instant, MissedTickBehavior};
 
 use super::{now_unix, Inner, RuntimeEvent};
 use crate::core::api::MihomoApi;
+use crate::core::apply::ApplyOutcome;
 use crate::core::process::{backoff_delay, CoreState};
 use crate::scheduler::delay_test_due;
 use crate::stats::traffic::Rate;
@@ -48,7 +49,7 @@ pub(super) fn spawn_all(inner: &Arc<Inner>) -> Vec<JoinHandle<()>> {
         every(inner, NIC_POLL_EVERY, NIC_POLL_EVERY, |i| async move {
             i.refresh_interfaces().await;
         }),
-        every(inner, PORT_RETRY_EVERY, PORT_RETRY_EVERY, retry_failed_listeners),
+        every(inner, PORT_RETRY_EVERY, PORT_RETRY_EVERY, retry_failed_apply),
         every(inner, Duration::ZERO, SUBSCRIPTION_CHECK_EVERY, |i| async move {
             i.update_due_subscriptions().await
         }),
@@ -106,13 +107,25 @@ async fn supervise(inner: Arc<Inner>) {
     }
 }
 
-/// Spike S5: re-PUTting the same config binds a listener once its port is free.
-async fn retry_failed_listeners(inner: Arc<Inner>) {
+/// Re-applies the latest model while something is not in effect: a listener
+/// whose port was busy (spike S5: re-PUTting the same config binds it once
+/// the port is free) or a rejected/failed reload.
+async fn retry_failed_apply(inner: Arc<Inner>) {
     let mut eng = inner.engine.lock().await;
-    if eng.core.is_none() || inner.status.lock().unwrap().failed_listeners.is_empty() {
+    if eng.core.is_none() {
         return;
     }
-    inner.apply(&mut eng).await;
+    let needed = {
+        let st = inner.status.lock().unwrap();
+        !st.failed_listeners.is_empty()
+            || matches!(
+                st.last_apply,
+                Some(ApplyOutcome::FailedClosed { .. } | ApplyOutcome::FailedKeptPrevious { .. })
+            )
+    };
+    if needed {
+        inner.apply(&mut eng).await;
+    }
 }
 
 async fn scheduled_delay_test(inner: Arc<Inner>) {

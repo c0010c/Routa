@@ -154,7 +154,12 @@ uncut: number; failed_listeners: FailedListener[] } } | { FailedKeptPrevious: { 
 /**
  * Same meaning as in `Reloaded`.
  */
-uncut: number } } | { FailedCoreStopped: { error: string } }
+uncut: number } } | { FailedCoreStopped: { error: string } } | 
+/**
+ * No core is running: the model was saved but nothing was applied; it
+ * takes effect when mihomo starts. Never produced by `Applier`.
+ */
+{ NotRunning: { error: string } }
 export type Auth = { username: string; password: string }
 export type Bytes = { up: number; down: number }
 export type CoreState = "Stopped" | "Starting" | "Running" | { Crashed: { exit_code: number | null } }

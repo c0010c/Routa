@@ -5,11 +5,14 @@ import { exitStatusLabel, listenerStatusLabel } from "../lib/format";
 export function ListenerStatusChip({
   status,
   isPortFailed,
+  notEffective,
 }: {
   status: ListenerStatus;
   isPortFailed: boolean;
+  /** The config is not in effect (see `configNotEffective`). */
+  notEffective: boolean;
 }) {
-  const l = listenerStatusLabel(status, isPortFailed);
+  const l = listenerStatusLabel(status, isPortFailed, notEffective);
   return <Chip size="small" label={l.text} color={l.color} />;
 }
 
