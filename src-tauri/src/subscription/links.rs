@@ -296,7 +296,7 @@ fn parse_vless(line: &str) -> Option<Value> {
 
 fn parse_trojan(line: &str) -> Option<Value> {
     let p = split_url(line)?;
-    let password = pct_decode(p.url.username());
+    let password = userinfo_joined(&p.url);
     if password.is_empty() {
         return None;
     }
@@ -316,7 +316,8 @@ fn parse_trojan(line: &str) -> Option<Value> {
     Some(Value::Object(m))
 }
 
-/// `user[:pass]` of a URL, percent-decoded and rejoined (hysteria2 auth may contain ':').
+/// `user[:pass]` of a URL, percent-decoded and rejoined (a trojan / hysteria2
+/// password may contain ':').
 fn userinfo_joined(url: &Url) -> String {
     let user = pct_decode(url.username());
     match url.password() {

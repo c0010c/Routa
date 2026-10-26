@@ -255,6 +255,16 @@ proxies:
     }
 
     #[test]
+    fn trojan_password_with_colon_is_kept_whole() {
+        let nodes = parse_subscription("trojan://pa:ss:word@5.5.5.5:443#T
+").unwrap();
+        assert_eq!(nodes[0].raw["password"], json!("pa:ss:word"));
+        let nodes = parse_subscription("trojan://p%3Aw@5.5.5.5:443#T
+").unwrap();
+        assert_eq!(nodes[0].raw["password"], json!("p:w"));
+    }
+
+    #[test]
     fn only_unparseable_links_is_no_nodes() {
         assert_eq!(parse_subscription("foo://x\nbar://y"), Err(ParseError::NoNodes));
     }
