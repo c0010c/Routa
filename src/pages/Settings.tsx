@@ -23,6 +23,7 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
   const [port, setPort] = useState(String(initial.controller_port));
   const [interval, setIntervalMins] = useState(initial.delay_test_interval_mins);
   const [url, setUrl] = useState(initial.delay_test_url);
+  const [intervalValid, setIntervalValid] = useState(true);
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
   const [portError, setPortError] = useState<string>();
 
@@ -50,8 +51,12 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
     const needsRestart = next.controller_port !== saved.controller_port || next.core_path !== saved.core_path;
     setSaved(next);
     if (needsRestart) {
-      core.restart.mutate();
-      apply.showMessage("设置已保存，mihomo 正在重启", "success");
+      try {
+        await core.restart.mutateAsync();
+        apply.showMessage("设置已保存，mihomo 正在重启", "success");
+      } catch {
+        // The restart failure is already shown by the mutation's onError.
+      }
     } else {
       apply.showMessage("设置已保存", "success");
     }
@@ -89,10 +94,10 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
             error={!!portError}
             helperText={portError}
           />
-          <IntervalInput label="自动测速" value={interval} onChange={setIntervalMins} defaultMins={10} />
+          <IntervalInput label="自动测速" value={interval} onChange={setIntervalMins} onValidityChange={setIntervalValid} defaultMins={10} />
           <TextField size="small" label="测速 URL" value={url} onChange={(e) => setUrl(e.target.value)} />
           <Stack direction="row" spacing={1}>
-            <Button variant="contained" disabled={save.isPending} onClick={() => void submit()}>
+            <Button variant="contained" disabled={save.isPending || !intervalValid} onClick={() => void submit()}>
               保存
             </Button>
             <Button onClick={() => openLogDir.mutate()}>打开日志目录</Button>

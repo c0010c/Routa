@@ -53,4 +53,18 @@ describe("Settings", () => {
     expect(await screen.findByText("设置已保存")).toBeInTheDocument();
     expect(commands.coreRestart).not.toHaveBeenCalled();
   });
+
+  it("blocks saving while the interval is out of range", async () => {
+    renderPage();
+    await screen.findByLabelText("控制端口");
+    fireEvent.change(screen.getByLabelText("单位"), { target: { value: "天" } });
+    fireEvent.change(screen.getByLabelText("间隔"), { target: { value: "400" } });
+    const save = screen.getByRole("button", { name: "保存" });
+    expect(screen.getByText("超出范围")).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(commands.saveSettings).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("间隔"), { target: { value: "2" } });
+    expect(save).toBeEnabled();
+  });
 });

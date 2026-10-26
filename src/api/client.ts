@@ -20,12 +20,12 @@ export function isValidationError(e: unknown): e is ApiValidationError {
 }
 
 /** Unwraps a bindings Result: validation failures throw `ApiValidationError`. */
-export function unwrap<T>(r: Result<T, ValidationError[] | null>): T {
+export function unwrap<T>(r: Result<T, ValidationError[] | string | null>): T {
   if (r.status === "ok") return r.data;
   if (Array.isArray(r.error)) {
     throw { kind: "validation", errors: r.error } satisfies ApiValidationError;
   }
-  throw new Error("操作失败");
+  throw new Error(typeof r.error === "string" ? r.error : "操作失败");
 }
 
 export function useModel() {
@@ -41,7 +41,7 @@ export function useTraffic() {
 }
 
 function useApiMutation<A extends unknown[], T>(
-  run: (...a: A) => Promise<Result<T, ValidationError[] | null>>,
+  run: (...a: A) => Promise<Result<T, ValidationError[] | string | null>>,
 ) {
   const qc = useQueryClient();
   const apply = useApplyResult();
@@ -74,7 +74,7 @@ function isApplyOutcome(d: object): d is ApplyOutcome {
   return "Reloaded" in d || "FailedKeptPrevious" in d || "FailedClosed" in d || "FailedCoreStopped" in d;
 }
 
-type Fn<A extends unknown[], T> = (...a: A) => Promise<Result<T, ValidationError[] | null>>;
+type Fn<A extends unknown[], T> = (...a: A) => Promise<Result<T, ValidationError[] | string | null>>;
 
 // Each hook's mutate takes a single argument (or an args tuple for multi-arg commands).
 function make<A extends unknown[], T>(get: () => Fn<A, T>) {

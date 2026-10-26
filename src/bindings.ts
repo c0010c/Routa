@@ -123,7 +123,7 @@ async coreRestart() : Promise<Result<null, null>> {
     else return { status: "error", error: e  as any };
 }
 },
-async openLogDir() : Promise<Result<null, null>> {
+async openLogDir() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_log_dir") };
 } catch (e) {

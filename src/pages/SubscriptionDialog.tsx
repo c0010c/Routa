@@ -39,6 +39,7 @@ export function SubscriptionDialog({ subscription, onClose }: { subscription: Su
   const [url, setUrl] = useState(subscription.url);
   const [interval, setIntervalMins] = useState(subscription.update_interval_mins);
   const [fallback, setFallback] = useState(subscription.fallback_exit);
+  const [intervalValid, setIntervalValid] = useState(true);
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
 
   const submit = async () => {
@@ -83,7 +84,7 @@ export function SubscriptionDialog({ subscription, onClose }: { subscription: Su
             helperText={errs.name}
           />
           <TextField size="small" label="URL" value={url} onChange={(e) => setUrl(e.target.value)} />
-          <IntervalInput label="自动更新" value={interval} onChange={setIntervalMins} defaultMins={1440} />
+          <IntervalInput label="自动更新" value={interval} onChange={setIntervalMins} onValidityChange={setIntervalValid} defaultMins={1440} />
           <FormControl size="small">
             <InputLabel id="s-fallback">备用出口</InputLabel>
             <Select
@@ -105,7 +106,7 @@ export function SubscriptionDialog({ subscription, onClose }: { subscription: Su
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>取消</Button>
-        <Button variant="contained" disabled={save.isPending} onClick={() => void submit()}>
+        <Button variant="contained" disabled={save.isPending || !intervalValid} onClick={() => void submit()}>
           保存
         </Button>
       </DialogActions>

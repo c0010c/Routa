@@ -26,10 +26,12 @@ interface Props {
   /** Minutes used when the switch is turned on without a previous value. */
   defaultMins: number;
   label?: string;
+  /** Called whenever validity changes; an invalid entry is never emitted via onChange. */
+  onValidityChange?: (valid: boolean) => void;
 }
 
 /** Enable switch + number + unit (分钟/小时/天); always emits whole minutes within 1..=525600. */
-export function IntervalInput({ value, onChange, defaultMins, label = "启用" }: Props) {
+export function IntervalInput({ value, onChange, defaultMins, label = "启用", onValidityChange }: Props) {
   const init = split(value ?? defaultMins);
   const [enabled, setEnabled] = useState(value !== null);
   const [unit, setUnit] = useState<Unit>(init.unit);
@@ -41,9 +43,11 @@ export function IntervalInput({ value, onChange, defaultMins, label = "启用" }
     const mins = n * factor(u);
     if (t.trim() === "" || !Number.isInteger(n) || !Number.isInteger(mins) || mins < MIN || mins > MAX) {
       setError("超出范围");
+      onValidityChange?.(false);
       return;
     }
     setError(undefined);
+    onValidityChange?.(true);
     onChange(mins);
   };
 
@@ -51,6 +55,7 @@ export function IntervalInput({ value, onChange, defaultMins, label = "启用" }
     setEnabled(on);
     if (!on) {
       setError(undefined);
+      onValidityChange?.(true);
       onChange(null);
     } else {
       commit(text, unit);

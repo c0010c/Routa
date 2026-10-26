@@ -229,12 +229,12 @@ pub async fn core_restart(rt: Rt<'_>) -> Result<(), ()> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn open_log_dir(rt: Rt<'_>) -> Result<(), ()> {
+pub async fn open_log_dir(rt: Rt<'_>) -> Result<(), String> {
     std::process::Command::new("explorer.exe")
         .arg(rt.core_workdir())
         .spawn()
         .map(|_| ())
-        .map_err(|_| ())
+        .map_err(|e| format!("无法打开日志目录: {e}"))
 }
 
 #[cfg(test)]
