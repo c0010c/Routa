@@ -28,3 +28,6 @@ base64 = "0.23.1"
 
 [dev-dependencies]
 tempfile = "3"
+
+[target."cfg(windows)".dependencies]
+ipconfig = "0.3.4"

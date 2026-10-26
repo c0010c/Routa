@@ -1,4 +1,5 @@
 pub mod model;
+pub mod netif;
 pub mod store;
 pub mod subscription;
 
