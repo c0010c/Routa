@@ -486,15 +486,21 @@ impl Inner {
         let (sub, port) = {
             let mut eng = self.engine.lock().await;
             let sub = eng.model.subscriptions.iter().find(|s| &s.id == id)?.clone();
-            let core_up = eng.core.is_some();
+            let core_pid = eng.core.as_ref().map(|c| c.pid);
             let Engine { model, alloc, .. } = &mut *eng;
             let fetch = fetch_listener_ports(model, alloc);
             let st = self.status.lock().unwrap();
             let port = sub.fallback_exit.as_ref().and_then(|exit| {
                 let ok = st.health.exits.get(exit).is_some_and(|h| h.status == ExitStatus::Ok);
-                (core_up && ok)
-                    .then(|| fetch.iter().find(|(e, _)| e == exit).map(|(_, p)| *p))
-                    .flatten()
+                let pid = core_pid.filter(|_| ok)?;
+                let port = fetch.iter().find(|(e, _)| e == exit).map(|(_, p)| *p)?;
+                // The URL carries the subscription token: only hand it to a
+                // port our own mihomo listens on.
+                let owned = self.ports.listening_owners(&[port]).get(&port) == Some(&pid);
+                if !owned {
+                    eprintln!("runtime: fetch port {port} is not held by mihomo; skipping the fallback");
+                }
+                owned.then_some(port)
             });
             (sub, port)
         };

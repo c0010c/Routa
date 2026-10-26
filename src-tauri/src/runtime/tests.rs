@@ -852,3 +852,50 @@ async fn controller_port_or_core_path_change_restarts_core() {
     assert_eq!(h.launcher.count(), 3);
     h.rt.shutdown().await;
 }
+
+#[tokio::test]
+async fn fallback_fetch_only_through_a_port_our_core_owns() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).respond_with(ResponseTemplate::new(403)).mount(&server).await;
+
+    let sub_id = SubscriptionId("sub-1".into());
+    let mut m = model_with_listener(false);
+    m.subscriptions.push(Subscription {
+        id: sub_id.clone(),
+        name: "订阅".into(),
+        url: format!("{}/sub?token=x", server.uri()),
+        update_interval_mins: None,
+        fallback_exit: Some(ExitId("exit-1".into())),
+        last_updated: None,
+        last_result: None,
+        nodes: vec![],
+    });
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    let yaml = last_reload(&h.api);
+    let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml).unwrap();
+    let fetch = v["listeners"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|l| l["name"] == "__fetch__exit-1")
+        .expect("fetch listener");
+    let port = fetch["port"].as_u64().unwrap() as u16;
+    let reason = |r: FetchResult| match r {
+        FetchResult::Failed { reason } => reason,
+        other => panic!("{other:?}"),
+    };
+
+    // Another process holds the fetch port: no proxy attempt at all.
+    h.ports.0.lock().unwrap().insert(port, PID + 1);
+    let r = reason(h.rt.refresh_subscription(sub_id.clone()).await);
+    assert_eq!(r, "HTTP 403");
+
+    // Our mihomo holds it: the fallback is tried.
+    h.ports.0.lock().unwrap().insert(port, PID);
+    let r = reason(h.rt.refresh_subscription(sub_id).await);
+    assert!(r.contains("通过出口失败"), "{r}");
+}
