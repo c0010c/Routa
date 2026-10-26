@@ -46,6 +46,10 @@ function useApiMutation<A extends unknown[], T>(
   const apply = useApplyResult();
   return useMutation({
     mutationFn: async (a: A) => unwrap(await run(...a)),
+    onError: (e) => {
+      // Validation errors are shown in-form by the caller; everything else must be visible.
+      if (!isValidationError(e)) apply.showError(e instanceof Error ? e.message : "操作失败");
+    },
     onSuccess: (data) => {
       if (typeof data === "object" && data !== null && isApplyOutcome(data)) apply.show(data);
       void qc.invalidateQueries({ queryKey: ["model"] });

@@ -1,0 +1,144 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { Exit, Model, RuntimeStatus } from "../bindings";
+
+vi.mock("../bindings", () => ({
+  commands: {
+    getModel: vi.fn(),
+    getStatus: vi.fn(),
+    saveExit: vi.fn(),
+  },
+}));
+
+import { commands } from "../bindings";
+import { ExitDialog } from "./ExitDialog";
+
+const node = (name: string) => ({ name, proxy_type: "ss", server: "s", raw: null });
+const model: Model = {
+  subscriptions: [
+    {
+      id: "s1",
+      name: "机场A",
+      url: "u",
+      update_interval_mins: null,
+      fallback_exit: null,
+      last_updated: null,
+      last_result: null,
+      nodes: [node("香港1"), node("日本1")],
+    },
+  ],
+  exits: [],
+  listeners: [],
+  settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
+};
+
+const status: RuntimeStatus = {
+  core: "Running",
+  last_apply: null,
+  health: {
+    exits: {
+      e1: {
+        status: "Ok",
+        effective_members: [],
+        missing_members: [{ subscription_id: "s1", name: "已删节点" }],
+        interface: null,
+      },
+    },
+    listeners: {},
+  },
+  delays: { "机场A/香港1": { ms: 88, tested_at: 0 } },
+  traffic: null,
+  interfaces: [
+    { guid: "{G1}", friendly_name: "以太网", description: "", is_up: true, ipv4: ["192.168.1.2"], ipv6: [], mihomo_name: "以太网" },
+    { guid: "{G2}", friendly_name: "WLAN", description: "", is_up: true, ipv4: ["169.254.1.1"], ipv6: [], mihomo_name: "WLAN" },
+  ],
+  failed_listeners: [],
+  startup_error: null,
+  save_error: null,
+};
+
+function renderDialog(exit: Exit) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <ExitDialog exit={exit} onClose={vi.fn()} />
+    </QueryClientProvider>,
+  );
+}
+
+async function pickType(label: string) {
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "类型" }));
+  fireEvent.click(await screen.findByRole("option", { name: label }));
+}
+
+describe("ExitDialog", () => {
+  beforeEach(() => {
+    vi.mocked(commands.getModel).mockResolvedValue(model);
+    vi.mocked(commands.getStatus).mockResolvedValue(status);
+  });
+
+  it("shows strategy select and multi node picker for groups, hides picker for direct", async () => {
+    renderDialog({ id: "e0", name: "x", kind: "Direct", interface: null });
+    await waitFor(() => expect(commands.getStatus).toHaveBeenCalled());
+    expect(screen.queryByRole("combobox", { name: "节点" })).not.toBeInTheDocument();
+
+    await pickType("策略组");
+    expect(screen.getByRole("combobox", { name: "策略" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "成员" })).toBeInTheDocument();
+
+    await pickType("节点");
+    expect(screen.queryByRole("combobox", { name: "策略" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "节点" })).toBeInTheDocument();
+
+    await pickType("直连");
+    expect(screen.queryByRole("combobox", { name: "节点" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "成员" })).not.toBeInTheDocument();
+  });
+
+  it("groups nodes by subscription with latency, and searches", async () => {
+    renderDialog({ id: "e0", name: "x", kind: "Direct", interface: null });
+    await pickType("节点");
+    await waitFor(() => expect(commands.getModel).toHaveBeenCalled());
+    const input = screen.getByRole("combobox", { name: "节点" });
+    await waitFor(() => expect(commands.getStatus).toHaveBeenCalled());
+    act(() => input.focus());
+    fireEvent.mouseDown(input);
+    expect(await screen.findByText("机场A")).toBeInTheDocument();
+    expect(await screen.findByText("88 ms")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "日本" } });
+    await waitFor(() => expect(screen.queryByText("香港1")).not.toBeInTheDocument());
+    expect(screen.getByText("日本1")).toBeInTheDocument();
+  });
+
+  it("lists interfaces with an unavailable chip and system default", async () => {
+    renderDialog({ id: "e0", name: "x", kind: "Direct", interface: "{GONE}" });
+    await waitFor(() => expect(commands.getStatus).toHaveBeenCalled());
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "网卡" }));
+    const list = await screen.findByRole("listbox");
+    expect(within(list).getByText("系统默认")).toBeInTheDocument();
+    expect(within(list).getByText("以太网")).toBeInTheDocument();
+    expect(within(list).getAllByText("不可用")).toHaveLength(1);
+    expect(within(list).getByText("（已移除的网卡）")).toBeInTheDocument();
+  });
+
+  it("removes missing members on demand", async () => {
+    renderDialog({
+      id: "e1",
+      name: "组",
+      kind: {
+        Group: {
+          strategy: "UrlTest",
+          members: [
+            { subscription_id: "s1", name: "香港1" },
+            { subscription_id: "s1", name: "已删节点" },
+          ],
+          selected: null,
+        },
+      },
+      interface: null,
+    });
+    expect(await screen.findByText(/失效成员：已删节点/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "移除失效成员" }));
+    await waitFor(() => expect(screen.queryByText(/失效成员：/)).not.toBeInTheDocument());
+  });
+});

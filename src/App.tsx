@@ -4,6 +4,8 @@ import { HashRouter, Route, Routes } from "react-router-dom";
 import { useRuntimeEvents } from "./api/events";
 import { ApplyResultProvider } from "./components/ApplyResultSnackbar";
 import { Layout, pages } from "./components/Layout";
+import { Exits } from "./pages/Exits";
+import { Listeners } from "./pages/Listeners";
 import { Overview } from "./pages/Overview";
 
 const queryClient = new QueryClient();
@@ -23,8 +25,10 @@ export default function App() {
           <Layout>
             <Routes>
               <Route path="/" element={<Overview />} />
+              <Route path="/listeners" element={<Listeners />} />
+              <Route path="/exits" element={<Exits />} />
               {pages
-                .filter((p) => p.path !== "/")
+                .filter((p) => !["/", "/listeners", "/exits"].includes(p.path))
                 .map((p) => (
                   <Route
                     key={p.path}

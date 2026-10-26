@@ -29,9 +29,10 @@ export function ApplyResultSnackbar({
 
 interface ApplyResultApi {
   show: (outcome: ApplyOutcome) => void;
+  showError: (message: string) => void;
 }
 
-const ApplyResultContext = createContext<ApplyResultApi>({ show: () => {} });
+const ApplyResultContext = createContext<ApplyResultApi>({ show: () => {}, showError: () => {} });
 
 export function useApplyResult(): ApplyResultApi {
   return useContext(ApplyResultContext);
@@ -39,12 +40,23 @@ export function useApplyResult(): ApplyResultApi {
 
 export function ApplyResultProvider({ children }: { children: ReactNode }) {
   const [outcome, setOutcome] = useState<ApplyOutcome | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const show = useCallback((o: ApplyOutcome) => setOutcome(o), []);
-  const api = useMemo(() => ({ show }), [show]);
+  const showError = useCallback((m: string) => setError(m), []);
+  const api = useMemo(() => ({ show, showError }), [show, showError]);
   return (
     <ApplyResultContext.Provider value={api}>
       {children}
       <ApplyResultSnackbar outcome={outcome} onClose={() => setOutcome(null)} />
+      <Snackbar
+        open={error !== null}
+        onClose={(_, reason) => reason !== "clickaway" && setError(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert severity="error" variant="filled" onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      </Snackbar>
     </ApplyResultContext.Provider>
   );
 }
