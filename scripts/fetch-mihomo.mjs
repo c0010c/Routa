@@ -29,7 +29,7 @@ async function download(attempts = 5) {
   for (let i = 1; i <= attempts; i++) {
     try {
       console.log(`downloading ${url} (attempt ${i}/${attempts})`);
-      const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(120_000) });
+      const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(900_000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return Buffer.from(await res.arrayBuffer());
     } catch (e) {
@@ -41,7 +41,14 @@ async function download(attempts = 5) {
   throw new Error(`download failed after ${attempts} attempts: ${lastErr}`);
 }
 
-const zip = await download();
+// Local zip: `--zip <path>` or MIHOMO_ZIP env var skips the download (digest is still verified).
+const zipArgIdx = process.argv.indexOf("--zip");
+const localZip = zipArgIdx !== -1 ? process.argv[zipArgIdx + 1] : process.env.MIHOMO_ZIP;
+if (zipArgIdx !== -1 && !localZip) {
+  console.error("--zip requires a path");
+  process.exit(1);
+}
+const zip = localZip ? readFileSync(resolve(localZip)) : await download();
 const zipDigest = sha256(zip);
 if (zipDigest !== ZIP_SHA256) {
   console.error(`zip sha256 mismatch: expected ${ZIP_SHA256}, got ${zipDigest}`);
@@ -52,8 +59,9 @@ const work = mkdtempSync(join(tmpdir(), "mihomo-"));
 try {
   const zipPath = join(work, "mihomo.zip");
   writeFileSync(zipPath, zip);
-  // bsdtar (Windows 10+) and GNU/BSD tar can all extract zip archives
-  execFileSync("tar", ["-xf", zipPath, "-C", work], { stdio: "inherit" });
+  // Use Windows' bundled bsdtar explicitly: bare `tar` in Git Bash is GNU tar, which cannot extract zip
+  const bsdtar = join(process.env.SystemRoot ?? "C:\Windows", "System32", "tar.exe");
+  execFileSync(bsdtar, ["-xf", zipPath, "-C", work], { stdio: "inherit" });
   const extracted = join(work, `mihomo-windows-amd64.exe`);
   if (!existsSync(extracted)) throw new Error("mihomo-windows-amd64.exe not found in archive");
   const exeDigest = sha256(readFileSync(extracted));

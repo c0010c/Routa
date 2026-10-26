@@ -12,8 +12,8 @@ pub fn run() {
     #[cfg(debug_assertions)]
     builder
         .export(
-            specta_typescript::Typescript::default(),
-            "../src/bindings.ts",
+            specta_typescript::Typescript::default().header("// @ts-nocheck"),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings.ts"),
         )
         .expect("failed to export typescript bindings");
 

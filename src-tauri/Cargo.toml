@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "mihomo_mapper"
-crate-type = ["staticlib", "cdylib", "rlib"]
+name = "mihomo_mapper_lib"
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
