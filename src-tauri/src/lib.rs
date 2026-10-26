@@ -1,3 +1,5 @@
+pub mod model;
+
 use tauri_specta::{collect_commands, Builder};
 
 #[tauri::command]
