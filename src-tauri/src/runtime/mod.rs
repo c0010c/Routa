@@ -11,6 +11,7 @@ mod tasks;
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -54,6 +55,9 @@ pub struct RuntimeStatus {
     /// Problems found while loading persisted state (e.g. a corrupt state.json
     /// that was moved aside).
     pub startup_error: Option<String>,
+    /// Last state.json / traffic.json save failure; cleared once that file
+    /// saves successfully again.
+    pub save_error: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
@@ -105,6 +109,10 @@ struct Inner {
     /// false when a corrupt file could not be moved aside: never overwrite it.
     persist_model: bool,
     persist_totals: bool,
+    /// (state.json error, traffic.json error) feeding `RuntimeStatus::save_error`.
+    save_errors: Mutex<(Option<String>, Option<String>)>,
+    /// Set by `shutdown`: nothing may launch a core or start work afterwards.
+    shut_down: AtomicBool,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -164,6 +172,9 @@ fn uncut(o: &ApplyOutcome) -> usize {
     }
 }
 
+/// Returned by every call made after `shutdown`.
+const SHUT_DOWN: &str = "程序已退出，操作未执行";
+
 fn core_not_running() -> ApplyOutcome {
     ApplyOutcome::FailedCoreStopped { error: "mihomo 未运行，配置将在内核启动后生效".into() }
 }
@@ -181,11 +192,39 @@ impl Inner {
         self.emit_status();
     }
 
+    fn is_shut_down(&self) -> bool {
+        self.shut_down.load(Ordering::SeqCst)
+    }
+
+    /// Records one file's save result in `status.save_error`; emits on change.
+    fn note_save(&self, model_file: bool, result: io::Result<()>) {
+        let new = result.err().map(|e| {
+            if model_file {
+                format!("保存配置失败：{e}，修改在重启后会丢失")
+            } else {
+                format!("保存流量统计失败：{e}")
+            }
+        });
+        if let Some(msg) = &new {
+            eprintln!("runtime: {msg}");
+        }
+        let changed = {
+            let mut errs = self.save_errors.lock().unwrap();
+            let slot = if model_file { &mut errs.0 } else { &mut errs.1 };
+            let changed = *slot != new;
+            *slot = new;
+            let joined: Vec<&str> = [&errs.0, &errs.1].into_iter().flatten().map(String::as_str).collect();
+            self.status.lock().unwrap().save_error = (!joined.is_empty()).then(|| joined.join("\n"));
+            changed
+        };
+        if changed {
+            self.emit_status();
+        }
+    }
+
     fn save_model(&self, m: &Model) {
         if self.persist_model {
-            if let Err(e) = self.store.save_model(m) {
-                eprintln!("runtime: save state.json failed: {e}");
-            }
+            self.note_save(true, self.store.save_model(m));
         }
     }
 
@@ -194,9 +233,7 @@ impl Inner {
             return;
         }
         let totals = self.traffic.lock().unwrap().totals.clone();
-        if let Err(e) = self.store.save_totals(&totals) {
-            eprintln!("runtime: save traffic.json failed: {e}");
-        }
+        self.note_save(false, self.store.save_totals(&totals));
     }
 
     /// Replaces the model (already validated) and persists it.
@@ -223,6 +260,9 @@ impl Inner {
     /// (Re)starts mihomo: fresh secret, empty config, launch, wait for the
     /// API, fresh Applier, then apply the latest model.
     async fn start_core(self: &Arc<Self>, eng: &mut Engine) -> Result<(), String> {
+        if self.is_shut_down() {
+            return Err(SHUT_DOWN.into());
+        }
         self.drop_core(eng).await;
         self.set_core_state(CoreState::Starting);
         let res = self.launch_core(eng).await;
@@ -357,6 +397,9 @@ impl Inner {
     /// listener when that exit is healthy), records the result, saves, and
     /// re-applies when the nodes changed. `None` if the subscription is gone.
     async fn update_one_subscription(self: &Arc<Self>, id: &SubscriptionId) -> Option<FetchResult> {
+        if self.is_shut_down() {
+            return Some(FetchResult::Failed { reason: SHUT_DOWN.into() });
+        }
         let (sub, port) = {
             let mut eng = self.engine.lock().await;
             let sub = eng.model.subscriptions.iter().find(|s| &s.id == id)?.clone();
@@ -376,8 +419,16 @@ impl Inner {
         let result = update_subscription(&sub, port).await;
 
         let mut eng = self.engine.lock().await;
+        if self.is_shut_down() {
+            return Some(FetchResult::Failed { reason: SHUT_DOWN.into() });
+        }
         let mut m = eng.model.clone();
         let target = m.subscriptions.iter_mut().find(|s| &s.id == id)?;
+        if target.url != sub.url {
+            // Edited while the fetch was in flight: the result belongs to the
+            // old URL. Record nothing (not even last_updated).
+            return Some(FetchResult::Failed { reason: "订阅地址已更改，本次结果已丢弃".into() });
+        }
         let old_nodes = target.nodes.clone();
         record_result(target, result, now_unix());
         let fetch_result = target.last_result.clone();
@@ -400,6 +451,9 @@ impl Inner {
 
     async fn refresh_interfaces(self: &Arc<Self>) -> bool {
         let mut eng = self.engine.lock().await;
+        if self.is_shut_down() {
+            return false;
+        }
         let current = self.nics.list();
         if self.status.lock().unwrap().interfaces == current {
             return false;
@@ -428,14 +482,15 @@ impl Inner {
 
     async fn test_delays(&self, names: Vec<String>) -> Vec<(String, DelayResult)> {
         let api = self.live.lock().unwrap().api.clone();
-        let url = self.model.lock().unwrap().settings.delay_test_url.clone();
-        let results = match api {
-            Some(api) => test_many(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS).await,
-            None => names
+        let Some(api) = api.filter(|_| !self.is_shut_down()) else {
+            // No core to test through: report failures, keep the DelayBook.
+            return names
                 .into_iter()
                 .map(|n| (n, DelayResult { ms: None, tested_at: now_unix() }))
-                .collect(),
+                .collect();
         };
+        let url = self.model.lock().unwrap().settings.delay_test_url.clone();
+        let results = test_many(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS).await;
         {
             let mut st = self.status.lock().unwrap();
             for (name, r) in &results {
@@ -473,6 +528,7 @@ impl Runtime {
             interfaces,
             failed_listeners: Vec::new(),
             startup_error: (!errors.is_empty()).then(|| errors.join("\n")),
+            save_error: None,
         };
         let inner = Inner {
             store,
@@ -493,6 +549,8 @@ impl Runtime {
             traffic: Mutex::new(TrafficAggregator::new(totals)),
             persist_model,
             persist_totals,
+            save_errors: Mutex::new((None, None)),
+            shut_down: AtomicBool::new(false),
             tasks: Mutex::new(Vec::new()),
         };
         Self { inner: Arc::new(inner) }
@@ -500,9 +558,13 @@ impl Runtime {
 
     /// Starts mihomo (empty config → latest model) and the background tasks.
     /// The tasks run even if the first start fails; the supervisor retries.
+    /// After `shutdown` it does nothing and returns an error.
     pub async fn start(&self) -> anyhow::Result<()> {
         let res = {
             let mut eng = self.inner.engine.lock().await;
+            if self.inner.is_shut_down() {
+                anyhow::bail!(SHUT_DOWN);
+            }
             eng.supervise = true;
             if eng.core.is_none() {
                 self.inner.start_core(&mut eng).await
@@ -520,7 +582,9 @@ impl Runtime {
     }
 
     /// Stops the background tasks, persists traffic totals, stops mihomo.
+    /// Final: later calls do not launch a core or start work.
     pub async fn shutdown(&self) {
+        self.inner.shut_down.store(true, Ordering::SeqCst);
         for t in self.inner.tasks.lock().unwrap().drain(..) {
             t.abort();
         }
@@ -532,9 +596,13 @@ impl Runtime {
     }
 
     /// clone → f → validate → save → evaluate → generate → apply.
-    /// Validation errors leave everything untouched.
+    /// Validation errors leave everything untouched. After `shutdown` nothing
+    /// is saved or applied and `FailedCoreStopped` is returned.
     pub async fn mutate(&self, f: impl FnOnce(&mut Model)) -> Result<ApplyOutcome, Vec<ValidationError>> {
         let mut eng = self.inner.engine.lock().await;
+        if self.inner.is_shut_down() {
+            return Ok(ApplyOutcome::FailedCoreStopped { error: SHUT_DOWN.into() });
+        }
         let mut m = eng.model.clone();
         f(&mut m);
         validate(&m)?;
@@ -550,6 +618,9 @@ impl Runtime {
     /// (Re)starts mihomo with the latest model and re-enables supervision.
     pub async fn restart_core(&self) {
         let mut eng = self.inner.engine.lock().await;
+        if self.inner.is_shut_down() {
+            return;
+        }
         eng.supervise = true;
         let _ = self.inner.start_core(&mut eng).await;
     }
@@ -585,6 +656,7 @@ impl Runtime {
     }
 
     /// Tests `names` through mihomo and records the results in `status().delays`.
+    /// Without a running core every result is `ms: None` and nothing is recorded.
     pub async fn test_delays(&self, names: Vec<String>) -> Vec<(String, DelayResult)> {
         self.inner.test_delays(names).await
     }

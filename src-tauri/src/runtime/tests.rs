@@ -532,3 +532,106 @@ fn runtime_futures_are_send(rt: &Runtime) {
     send(rt.test_delays(vec![]));
     send(rt.reset_traffic());
 }
+
+#[tokio::test(start_paused = true)]
+async fn save_failure_is_reported_in_status() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    // A directory where state.json should be: the atomic rename fails.
+    let state = h.data.join("state.json");
+    std::fs::remove_file(&state).unwrap();
+    std::fs::create_dir(&state).unwrap();
+
+    let out = h.rt.mutate(|m| m.listeners[0].name = "改名".into()).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::Reloaded { .. }), "{out:?}");
+    let err = h.rt.status().save_error.expect("save_error");
+    assert!(err.contains("保存配置失败"), "{err}");
+
+    std::fs::remove_dir(&state).unwrap();
+    h.rt.mutate(|m| m.listeners[0].name = "再改".into()).await.unwrap();
+    assert_eq!(h.rt.status().save_error, None);
+    assert_eq!(Store::open(h.data.clone()).unwrap().load_model().unwrap().listeners[0].name, "再改");
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_core_launch_after_shutdown() {
+    let mut m = model_with_listener(false);
+    m.settings.delay_test_interval_mins = Some(10);
+    let h = harness(&m);
+    h.api.set_delay("直连出口", Ok(42));
+    h.rt.start().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(h.rt.status().delays.get("直连出口").unwrap().ms, Some(42));
+    h.rt.shutdown().await;
+    let state_before = std::fs::read_to_string(h.data.join("state.json")).unwrap();
+    let reloads_before = h.api.reloads.lock().unwrap().len();
+
+    h.rt.restart_core().await;
+    assert!(h.rt.start().await.is_err());
+    let out = h.rt.mutate(|m| m.listeners[0].name = "x".into()).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::FailedCoreStopped { .. }), "{out:?}");
+    assert!(matches!(
+        h.rt.refresh_subscription(SubscriptionId("none".into())).await,
+        FetchResult::Failed { .. }
+    ));
+    // No core: Nones go to the caller only, the DelayBook keeps old results.
+    let res = h.rt.test_delays(vec!["直连出口".into()]).await;
+    assert_eq!(res[0].1.ms, None);
+    assert_eq!(h.rt.status().delays.get("直连出口").unwrap().ms, Some(42));
+    assert!(!h.rt.refresh_interfaces().await);
+    tokio::time::sleep(Duration::from_secs(120)).await;
+
+    assert_eq!(h.launcher.count(), 1);
+    assert_eq!(h.rt.status().core, CoreState::Stopped);
+    assert_eq!(std::fs::read_to_string(h.data.join("state.json")).unwrap(), state_before);
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads_before);
+    assert_eq!(h.rt.model(), m);
+}
+
+#[tokio::test]
+async fn stale_fetch_discarded_when_url_changed() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(
+                    "proxies:\n  - {name: a, type: ss, server: 1.1.1.1, port: 1, cipher: aes-128-gcm, password: x}\n",
+                )
+                .set_delay(Duration::from_millis(500)),
+        )
+        .mount(&server)
+        .await;
+
+    let sub_id = SubscriptionId("sub-1".into());
+    let mut m = model_with_listener(false);
+    m.subscriptions.push(Subscription {
+        id: sub_id.clone(),
+        name: "订阅".into(),
+        url: format!("{}/old", server.uri()),
+        update_interval_mins: Some(60),
+        fallback_exit: None,
+        last_updated: None,
+        last_result: None,
+        nodes: vec![],
+    });
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    let new_url = format!("{}/new", server.uri());
+
+    let (res, _) = tokio::join!(h.rt.refresh_subscription(sub_id.clone()), async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let u = new_url.clone();
+        h.rt.mutate(move |m| m.subscriptions[0].url = u).await.unwrap();
+    });
+
+    assert!(matches!(&res, FetchResult::Failed { reason } if reason.contains("已更改")), "{res:?}");
+    let sub = h.rt.model().subscriptions[0].clone();
+    assert_eq!(sub.url, new_url);
+    assert!(sub.nodes.is_empty());
+    assert_eq!(sub.last_updated, None);
+    assert_eq!(sub.last_result, None);
+}
