@@ -21,4 +21,11 @@ describe("ConfirmDeleteDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
+
+  it("makes delete the emphasised danger action", () => {
+    render(<ConfirmDeleteDialog text="确定删除？" onConfirm={async () => {}} onClose={vi.fn()} />);
+    const del = screen.getByRole("button", { name: "删除" });
+    expect(del).toHaveClass("MuiButton-contained");
+    expect(del).toHaveClass("MuiButton-colorError");
+  });
 });

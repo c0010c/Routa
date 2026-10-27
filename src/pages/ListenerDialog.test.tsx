@@ -174,4 +174,14 @@ describe("newListener", () => {
     const p = newListener([{ ...listener, port: 65535 }, { ...listener, port: 1024 }]).port;
     expect(p).toBe(1025);
   });
+
+  it("uses a switch for auth and explains the listen address", async () => {
+    renderDialog(listener);
+    const auth = screen.getByRole("switch", { name: "启用认证" });
+    expect(screen.queryByRole("checkbox", { name: "启用认证" })).toBeNull();
+    expect(screen.getByText("0.0.0.0 表示局域网内其他设备也能连接；只本机使用请填 127.0.0.1")).toBeInTheDocument();
+    fireEvent.click(auth);
+    expect(screen.getByLabelText("用户名")).toBeInTheDocument();
+    await waitFor(() => expect(commands.getModel).toHaveBeenCalled());
+  });
 });

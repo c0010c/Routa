@@ -1,7 +1,6 @@
 import {
   Alert,
   Button,
-  Checkbox,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -117,38 +116,47 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
             error={!!errs.name}
             helperText={errs.name}
           />
+          <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start" }}>
+            <TextField
+              label="端口"
+              size="small"
+              type="number"
+              value={portText}
+              onChange={(e) => {
+                setPortText(e.target.value);
+                setPortLocal(undefined);
+                setErrs((x) => ({ ...x, port: undefined }));
+              }}
+              error={!!portError}
+              helperText={portError}
+              sx={{ flex: 1 }}
+            />
+            <FormControl size="small" sx={{ flex: 2 }}>
+              <InputLabel id="l-type">类型</InputLabel>
+              <Select
+                labelId="l-type"
+                label="类型"
+                value={l.listener_type}
+                onChange={(e) => setL({ ...l, listener_type: e.target.value as ListenerType })}
+              >
+                {TYPES.map((t) => (
+                  <MenuItem key={t.value} value={t.value}>
+                    {t.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Stack>
           <TextField
-            label="端口"
+            label="监听地址"
             size="small"
-            type="number"
-            value={portText}
-            onChange={(e) => {
-              setPortText(e.target.value);
-              setPortLocal(undefined);
-              setErrs((x) => ({ ...x, port: undefined }));
-            }}
-            error={!!portError}
-            helperText={portError}
+            value={l.listen}
+            onChange={(e) => setL({ ...l, listen: e.target.value })}
+            helperText="0.0.0.0 表示局域网内其他设备也能连接；只本机使用请填 127.0.0.1"
           />
-          <FormControl size="small">
-            <InputLabel id="l-type">类型</InputLabel>
-            <Select
-              labelId="l-type"
-              label="类型"
-              value={l.listener_type}
-              onChange={(e) => setL({ ...l, listener_type: e.target.value as ListenerType })}
-            >
-              {TYPES.map((t) => (
-                <MenuItem key={t.value} value={t.value}>
-                  {t.label}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <TextField label="监听地址" size="small" value={l.listen} onChange={(e) => setL({ ...l, listen: e.target.value })} />
           <FormControlLabel
             control={
-              <Checkbox
+              <Switch
                 checked={l.auth !== null}
                 onChange={(e) => setL({ ...l, auth: e.target.checked ? { username: "", password: "" } : null })}
               />
