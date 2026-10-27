@@ -28,15 +28,15 @@ export function TailscaleStateChip({ node }: { node: ManualNode }) {
 /** Login state with the authorization link when one is pending. */
 export function TailscaleLoginState({ node }: { node: ManualNode }) {
   const s = useTailscaleState(node);
-  // Remembers which URL was copied, so a fresh URL offers 复制链接 again.
-  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  // Copy result per URL, so a fresh URL offers 复制链接 again.
+  const [copy, setCopy] = useState<{ url: string; ok: boolean } | null>(null);
   const url = s !== "Unknown" && "NeedsLogin" in s ? s.NeedsLogin.url : null;
   return (
     <Stack spacing={1} sx={{ mt: 1, alignItems: "flex-start" }}>
       <TailscaleStateChip node={node} />
       {s !== "Unknown" && "NeedsLogin" in s && url === null && (
         <Typography variant="body2" color="text.secondary">
-          正在获取授权链接…
+          正在获取授权链接…若长时间没有出现，请检查网络或该实例的网卡设置
         </Typography>
       )}
       {url !== null && (
@@ -48,15 +48,24 @@ export function TailscaleLoginState({ node }: { node: ManualNode }) {
             <Button
               size="small"
               variant="outlined"
-              onClick={() => {
-                navigator.clipboard.writeText(url).then(
-                  () => setCopiedUrl(url),
-                  (e) => console.error("copy failed", e),
-                );
+              onClick={async () => {
+                try {
+                  // navigator.clipboard may be missing: that throws synchronously.
+                  await navigator.clipboard.writeText(url);
+                  setCopy({ url, ok: true });
+                } catch (e) {
+                  console.error("copy failed", e);
+                  setCopy({ url, ok: false });
+                }
               }}
             >
-              {copiedUrl === url ? "已复制" : "复制链接"}
+              {copy?.url === url && copy.ok ? "已复制" : "复制链接"}
             </Button>
+            {copy?.url === url && !copy.ok && (
+              <Typography variant="body2" color="error">
+                复制失败，请手动选择链接
+              </Typography>
+            )}
             <Typography variant="body2" color="text.secondary">
               在浏览器中打开此链接完成授权
             </Typography>

@@ -82,11 +82,33 @@ describe("Tailscale page", () => {
     expect(await within(card).findByRole("button", { name: "已复制" })).toBeInTheDocument();
   });
 
+  it("shows a visible message when copying fails", async () => {
+    const url = "https://login.tailscale.com/a/1654b85a0197ca";
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    renderPage(model, withState({ NeedsLogin: { url } }));
+    const card = await screen.findByRole("article", { name: "家里" });
+    fireEvent.click(await within(card).findByRole("button", { name: "复制链接" }));
+    expect(await within(card).findByText("复制失败，请手动选择链接")).toBeInTheDocument();
+    expect(writeText).toHaveBeenCalledWith(url);
+    expect(within(card).queryByRole("button", { name: "已复制" })).not.toBeInTheDocument();
+  });
+
+  it("shows the copy failure when the clipboard API is missing", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    renderPage(model, withState({ NeedsLogin: { url: "https://login.tailscale.com/a/abc" } }));
+    const card = await screen.findByRole("article", { name: "家里" });
+    fireEvent.click(await within(card).findByRole("button", { name: "复制链接" }));
+    expect(await within(card).findByText("复制失败，请手动选择链接")).toBeInTheDocument();
+  });
+
   it("NeedsLogin without a URL says the link is coming", async () => {
     renderPage(model, withState({ NeedsLogin: { url: null } }));
     const card = await screen.findByRole("article", { name: "家里" });
     expect(await within(card).findByText("待登录")).toBeInTheDocument();
-    expect(within(card).getByText("正在获取授权链接…")).toBeInTheDocument();
+    expect(within(card).getByText("正在获取授权链接…若长时间没有出现，请检查网络或该实例的网卡设置")).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "复制链接" })).not.toBeInTheDocument();
   });
 
