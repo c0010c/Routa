@@ -1,0 +1,18 @@
+allow-lan: false
+external-controller: 127.0.0.1:19197
+secret: spk-ts-b
+log-level: info
+mode: rule
+proxies:
+  - name: ts-b
+    type: tailscale
+    hostname: mihomo-spike
+    state-dir: tailscale/tb
+    ephemeral: true
+    udp: true
+    exit-node: auto:any
+listeners:
+  - {name: l-ts, type: mixed, listen: 127.0.0.1, port: 19201, proxy: ts-b}
+  - {name: l-other, type: mixed, listen: 127.0.0.1, port: 19202, proxy: DIRECT}
+rules:
+  - MATCH,REJECT

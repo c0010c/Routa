@@ -70,3 +70,18 @@ Conclusions:
 - T2: after a login, restart mihomo with the same `state-dir`; does it come up Running without a new URL?
 - T5: with a live long connection through the listener, `PUT /configs?force=true` changing only an unrelated listener port; does the connection survive, and how long does the tailscale re-handshake take? (Also check whether a reload re-creates the tsnet server and whether `ephemeral: true` nodes vanish from the tailnet on stop.)
 - Also: the "logged in" log/status signal, the auth-key path, and data-plane interface binding (UDP) after login.
+
+## Phase B (logged in; run by controller with the user authorizing the login URL) — config spike/ts-phaseb.yaml
+
+Login: user opened the URL from the log; log then showed `[Tailscale](ts-b) AuthLoop: state is Starting; done` (13:55:39, ~3.5 min after the URL line). Full-restart re-login line: `[Tailscale](ts-b) AuthLoop: state is Running; done`. Regex for logged-in: `\[Tailscale\]\((?P<name>[^)]+)\) AuthLoop: state is (?P<state>\w+); done` (Starting|Running = logged in).
+
+Data path:
+- Tailnet peer reachable through the node: `curl -x 127.0.0.1:19201 http://100.113.29.21:7897/` → 400 from the peer's proxy (TCP over tailscale works).
+- Internet via `exit-node: auto:any` did NOT work: domains → `dns resolve failed: couldn't find ip`; `http://1.1.1.1/` → `context deadline exceeded`. Unclear whether the tailnet has an approved exit node usable by this device — to ask the user.
+
+T2 (restart): full mihomo restart with the same state-dir → no new auth URL, `AuthLoop: state is Running; done`. First request after restart fails (502 after 5 s, node starts lazily on first dial, ~4 s to come up); next request OK.
+
+T5 (reload, PUT /configs?force=true changing only an unrelated listener port):
+- An existing long-lived stream through the tailscale node (slow HTTP stream to 100.113.29.21:19210) kept flowing across the reload (bytes kept growing for >20 s after).
+- The reload creates a NEW tsnet instance lazily: the first new connection after the reload failed (502 after 5 s) while the new instance started from the saved state (no re-login, ~4 s); subsequent new connections OK.
+- So: reload does not cut existing connections, but new connections see a ~5 s cold-start window (first request fails) after every reload/restart.
