@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Model } from "../bindings";
 
 vi.mock("../bindings", () => ({
@@ -79,5 +79,18 @@ describe("Settings", () => {
     expect(commands.saveSettings).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("间隔"), { target: { value: "2" } });
     expect(save).toBeEnabled();
+  });
+
+  it("groups settings into 常规 / 内核 / 测速 sections", async () => {
+    renderPage();
+    const general = await screen.findByRole("region", { name: "常规" });
+    const core = screen.getByRole("region", { name: "内核" });
+    const delay = screen.getByRole("region", { name: "测速" });
+    expect(within(general).getByText("开机自启")).toBeInTheDocument();
+    expect(within(core).getByLabelText("mihomo 内核路径")).toBeInTheDocument();
+    expect(within(core).getByLabelText("控制端口")).toBeInTheDocument();
+    expect(within(core).getByRole("button", { name: "打开日志目录" })).toBeInTheDocument();
+    expect(within(delay).getByText("自动测速")).toBeInTheDocument();
+    expect(within(delay).getByLabelText("测速 URL")).toBeInTheDocument();
   });
 });

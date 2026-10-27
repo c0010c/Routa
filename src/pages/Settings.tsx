@@ -1,10 +1,45 @@
-import { Alert, Button, FormControlLabel, Paper, Stack, Switch, TextField, Typography } from "@mui/material";
-import { useState } from "react";
+import { Alert, Box, Button, Card, Divider, Stack, Switch, TextField, Typography } from "@mui/material";
+import { Fragment, useState, type ReactNode } from "react";
 import { isValidationError, useModel, useOpenLogDir, useSaveSettings } from "../api/client";
 import type { Settings as SettingsModel } from "../bindings";
 import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { IntervalInput } from "../components/IntervalInput";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
+
+/** One Win11-style settings row: label and explanation on the left, control on the right. */
+function Row({ label, description, children }: { label: string; description?: string; children: ReactNode }) {
+  return (
+    <Stack direction="row" spacing={2} sx={{ alignItems: "center", px: 2, py: 1.5 }}>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography>{label}</Typography>
+        {description && (
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            {description}
+          </Typography>
+        )}
+      </Box>
+      {children}
+    </Stack>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode[] }) {
+  return (
+    <Stack component="section" aria-label={title} spacing={1}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+        {title}
+      </Typography>
+      <Card>
+        {children.map((c, i) => (
+          <Fragment key={i}>
+            {i > 0 && <Divider />}
+            {c}
+          </Fragment>
+        ))}
+      </Card>
+    </Stack>
+  );
+}
 
 function SettingsForm({ initial }: { initial: SettingsModel }) {
   const save = useSaveSettings();
@@ -57,48 +92,78 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
   return (
     <Stack spacing={2}>
       <Typography variant="h5">设置</Typography>
-      <Paper sx={{ p: 2 }}>
-        <Stack spacing={2} sx={{ maxWidth: 560 }}>
-          {errs.form.length > 0 && (
-            <Alert severity="error" role="alert">
-              {errs.form.map((m) => (
-                <div key={m}>{m}</div>
-              ))}
-            </Alert>
-          )}
-          <FormControlLabel
-            control={<Switch checked={autostart} onChange={(e) => setAutostart(e.target.checked)} />}
-            label="开机自启"
-          />
-          <TextField
-            size="small"
-            label="mihomo 内核路径"
-            value={corePath}
-            onChange={(e) => setCorePath(e.target.value)}
-            helperText="留空使用内置内核"
-          />
-          <TextField
-            size="small"
-            label="控制端口"
-            type="number"
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-            error={!!portError}
-            helperText={portError}
-          />
-          <IntervalInput label="自动测速" value={interval} onChange={setIntervalMins} onValidityChange={setIntervalValid} defaultMins={10} />
-          <TextField size="small" label="测速 URL" value={url} onChange={(e) => setUrl(e.target.value)} />
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <Button variant="contained" disabled={save.isPending || !intervalValid || !dirty} onClick={() => void submit()}>
-              保存
-            </Button>
-            <Typography variant="body2" sx={{ color: dirty ? "warning.main" : "text.secondary" }}>
-              {dirty ? "有未保存的修改" : "已保存"}
-            </Typography>
-            <Button onClick={() => openLogDir.mutate()}>打开日志目录</Button>
-          </Stack>
+      {errs.form.length > 0 && (
+        <Alert severity="error" role="alert">
+          {errs.form.map((m) => (
+            <div key={m}>{m}</div>
+          ))}
+        </Alert>
+      )}
+      <Stack spacing={2} sx={{ maxWidth: 760 }}>
+        <Section title="常规">
+          {[
+            <Row key="autostart" label="开机自启" description="登录 Windows 后自动启动 Routa">
+              <Switch
+                checked={autostart}
+                onChange={(e) => setAutostart(e.target.checked)}
+                slotProps={{ input: { "aria-label": "开机自启" } }}
+              />
+            </Row>,
+          ]}
+        </Section>
+        <Section title="内核">
+          {[
+            <Row key="path" label="mihomo 内核路径" description="留空使用内置内核">
+              <TextField
+                placeholder="内置内核"
+                value={corePath}
+                onChange={(e) => setCorePath(e.target.value)}
+                slotProps={{ htmlInput: { "aria-label": "mihomo 内核路径" } }}
+                sx={{ width: 260 }}
+              />
+            </Row>,
+            <Row key="port" label="控制端口" description="修改后 mihomo 会重启">
+              <TextField
+                type="number"
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                error={!!portError}
+                helperText={portError}
+                slotProps={{ htmlInput: { "aria-label": "控制端口" } }}
+                sx={{ width: 140 }}
+              />
+            </Row>,
+            <Row key="log" label="日志">
+              <Button variant="outlined" onClick={() => openLogDir.mutate()}>
+                打开日志目录
+              </Button>
+            </Row>,
+          ]}
+        </Section>
+        <Section title="测速">
+          {[
+            <Row key="auto" label="自动测速" description="按间隔对所有出口测延迟">
+              <IntervalInput value={interval} onChange={setIntervalMins} onValidityChange={setIntervalValid} defaultMins={10} />
+            </Row>,
+            <Row key="url" label="测速 URL">
+              <TextField
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                slotProps={{ htmlInput: { "aria-label": "测速 URL" } }}
+                sx={{ width: 320 }}
+              />
+            </Row>,
+          ]}
+        </Section>
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+          <Button variant="contained" disabled={save.isPending || !intervalValid || !dirty} onClick={() => void submit()}>
+            保存
+          </Button>
+          <Typography variant="body2" sx={{ color: dirty ? "warning.main" : "text.secondary" }}>
+            {dirty ? "有未保存的修改" : "已保存"}
+          </Typography>
         </Stack>
-      </Paper>
+      </Stack>
     </Stack>
   );
 }
