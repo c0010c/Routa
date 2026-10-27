@@ -1,9 +1,12 @@
 import {
   Alert,
+  Box,
   Button,
-  Card,
-  CardActions,
-  CardContent,
+  Divider,
+  List,
+  ListItemButton,
+  ListItemText,
+  ListSubheader,
   Paper,
   Stack,
   Table,
@@ -15,16 +18,22 @@ import {
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import { Link as RouterLink } from "react-router-dom";
 import {
+  useDeleteManualNode,
+  useDeleteNodeGroup,
   useDeleteSubscription,
   useModel,
   useRefreshSubscription,
   useStatus,
   useTestDelays,
 } from "../api/client";
-import type { Subscription } from "../bindings";
+import type { DelayBook, ManualNode, Model, NodeGroup, Subscription } from "../bindings";
 import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { MANUAL_PREFIX } from "../lib/refs";
+import { ManualNodeDialog, newManualNode, type ManualNodeMode } from "./ManualNodeDialog";
+import { NodeGroupDialog, newNodeGroup } from "./NodeGroupDialog";
 import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
 
 function formatInterval(mins: number | null): string {
@@ -38,22 +47,65 @@ function formatTime(secs: number | null): string {
   return secs === null ? "从未更新" : new Date(secs * 1000).toLocaleString("zh-CN");
 }
 
-const proxyName = (s: Subscription, node: string) => `${s.name}/${node}`;
+const subProxyName = (s: Subscription, node: string) => `${s.name}/${node}`;
+const manualProxyName = (n: ManualNode) => `${MANUAL_PREFIX}/${n.name}`;
+
+type Selection = { kind: "sub"; id: string } | { kind: "ungrouped" } | { kind: "group"; id: string };
+
+const sameSel = (a: Selection, b: Selection) =>
+  a.kind === b.kind && (a.kind === "ungrouped" || (b.kind !== "ungrouped" && a.id === b.id));
+
+interface Row {
+  key: string;
+  name: string;
+  type: string;
+  server: string;
+  proxyName: string;
+  manual?: ManualNode;
+}
+
+function manualRow(n: ManualNode): Row {
+  if ("Tailscale" in n.kind) {
+    return { key: n.id, name: n.name, type: "tailscale", server: n.kind.Tailscale.hostname, proxyName: manualProxyName(n), manual: n };
+  }
+  const raw = n.kind.Proxy.raw;
+  const o = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
+  const s = (v: unknown) => (typeof v === "string" || typeof v === "number" ? String(v) : "");
+  return { key: n.id, name: n.name, type: s(o.type), server: s(o.server), proxyName: manualProxyName(n), manual: n };
+}
+
+/** Falls back to the first subscription (or 未分组) when the selected item is gone. */
+function resolveSelection(model: Model, sel: Selection | null): Selection {
+  if (sel?.kind === "sub" && model.subscriptions.some((s) => s.id === sel.id)) return sel;
+  if (sel?.kind === "group" && model.node_groups.some((g) => g.id === sel.id)) return sel;
+  if (sel?.kind === "ungrouped") return sel;
+  const first = model.subscriptions[0];
+  return first ? { kind: "sub", id: first.id } : { kind: "ungrouped" };
+}
 
 export function Nodes() {
   const model = useModel();
   const status = useStatus();
-  const del = useDeleteSubscription();
+  const delSub = useDeleteSubscription();
+  const delNode = useDeleteManualNode();
+  const delGroup = useDeleteNodeGroup();
   const refresh = useRefreshSubscription();
   const test = useTestDelays();
   const apply = useApplyResult();
-  const [editing, setEditing] = useState<Subscription | null>(null);
-  const [deleting, setDeleting] = useState<Subscription | null>(null);
+  const [picked, setPicked] = useState<Selection | null>(null);
+  const [editingSub, setEditingSub] = useState<Subscription | null>(null);
+  const [deletingSub, setDeletingSub] = useState<Subscription | null>(null);
+  const [editingNode, setEditingNode] = useState<{ node: ManualNode; mode?: ManualNodeMode } | null>(null);
+  const [deletingNode, setDeletingNode] = useState<ManualNode | null>(null);
+  const [editingGroup, setEditingGroup] = useState<NodeGroup | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
 
   if (!model.data || !status.data) return <Typography>加载中…</Typography>;
-  const subs = model.data.subscriptions;
+  const m = model.data;
+  const subs = m.subscriptions;
   const delays = status.data.delays;
+  const sel = resolveSelection(m, picked);
 
   const doRefresh = async (s: Subscription) => {
     setRefreshingId(s.id);
@@ -68,112 +120,251 @@ export function Nodes() {
     }
   };
 
-  const allNames = subs.flatMap((s) => s.nodes.map((n) => proxyName(s, n.name)));
+  const allNames = [
+    ...subs.flatMap((s) => s.nodes.map((n) => subProxyName(s, n.name))),
+    ...m.manual_nodes.map(manualProxyName),
+  ];
+
+  const ungrouped = m.manual_nodes.filter((n) => n.groups.length === 0);
+  const inGroup = (id: string) => m.manual_nodes.filter((n) => n.groups.includes(id));
+
+  let title: string;
+  let rows: Row[];
+  let selectedSub: Subscription | undefined;
+  if (sel.kind === "sub") {
+    selectedSub = subs.find((s) => s.id === sel.id)!;
+    title = selectedSub.name;
+    rows = selectedSub.nodes.map((n) => ({
+      key: n.name,
+      name: n.name,
+      type: n.proxy_type,
+      server: n.server,
+      proxyName: subProxyName(selectedSub!, n.name),
+    }));
+  } else if (sel.kind === "ungrouped") {
+    title = "未分组";
+    rows = ungrouped.map(manualRow);
+  } else {
+    title = m.node_groups.find((g) => g.id === sel.id)!.name;
+    rows = inGroup(sel.id).map(manualRow);
+  }
+  const newNodeGroups = sel.kind === "group" ? [sel.id] : [];
 
   return (
     <Stack spacing={2}>
       <Stack direction="row" sx={{ justifyContent: "space-between" }}>
         <Typography variant="h5">节点</Typography>
-        <Stack direction="row" spacing={1}>
-          <Button disabled={test.isPending || allNames.length === 0} onClick={() => test.mutate(allNames)}>
-            全部测速
-          </Button>
-          <Button variant="contained" onClick={() => setEditing(newSubscription())}>
-            新建订阅
-          </Button>
+        <Button disabled={test.isPending || allNames.length === 0} onClick={() => test.mutate(allNames)}>
+          全部测速
+        </Button>
+      </Stack>
+
+      <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start" }}>
+        <Paper component="nav" aria-label="节点分组" variant="outlined" sx={{ width: 300, flexShrink: 0 }}>
+          <List dense disablePadding>
+            <ListSubheader sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              订阅
+              <Button size="small" onClick={() => setEditingSub(newSubscription())}>
+                新建订阅
+              </Button>
+            </ListSubheader>
+            {subs.length === 0 && (
+              <Typography variant="body2" color="text.secondary" sx={{ px: 2, pb: 1 }}>
+                还没有订阅
+              </Typography>
+            )}
+            {subs.map((s) => {
+              const r = s.last_result;
+              return (
+                <Box key={s.id} sx={{ pb: 1 }}>
+                  <ListItemButton selected={sameSel(sel, { kind: "sub", id: s.id })} onClick={() => setPicked({ kind: "sub", id: s.id })}>
+                    <ListItemText
+                      primary={s.name}
+                      secondary={`${s.nodes.length} 个节点 · 最后更新：${formatTime(s.last_updated)} · 自动更新：${formatInterval(s.update_interval_mins)}`}
+                    />
+                  </ListItemButton>
+                  {r && "Ok" in r && (
+                    <Typography variant="body2" sx={{ px: 2 }}>
+                      上次更新成功，共 {r.Ok.node_count} 个节点
+                    </Typography>
+                  )}
+                  {r && "Failed" in r && (
+                    <Alert severity="error" sx={{ mx: 2, my: 0.5 }}>
+                      更新失败：{r.Failed.reason}
+                    </Alert>
+                  )}
+                  <Stack direction="row" sx={{ px: 1 }}>
+                    <Button
+                      size="small"
+                      aria-label={`立即更新 ${s.name}`}
+                      disabled={refreshingId === s.id}
+                      onClick={() => void doRefresh(s)}
+                    >
+                      立即更新
+                    </Button>
+                    <Button size="small" aria-label={`编辑 ${s.name}`} onClick={() => setEditingSub(s)}>
+                      编辑
+                    </Button>
+                    <Button size="small" color="error" aria-label={`删除 ${s.name}`} onClick={() => setDeletingSub(s)}>
+                      删除
+                    </Button>
+                  </Stack>
+                </Box>
+              );
+            })}
+            <Divider />
+            <ListSubheader>手动节点</ListSubheader>
+            <ListItemButton selected={sel.kind === "ungrouped"} onClick={() => setPicked({ kind: "ungrouped" })}>
+              <ListItemText primary="未分组" secondary={`${ungrouped.length} 个节点`} />
+            </ListItemButton>
+            {m.node_groups.map((g) => (
+              <Box key={g.id}>
+                <ListItemButton selected={sameSel(sel, { kind: "group", id: g.id })} onClick={() => setPicked({ kind: "group", id: g.id })}>
+                  <ListItemText primary={g.name} secondary={`${inGroup(g.id).length} 个节点`} />
+                </ListItemButton>
+                <Stack direction="row" sx={{ px: 1 }}>
+                  <Button size="small" aria-label={`改名 ${g.name}`} onClick={() => setEditingGroup(g)}>
+                    改名
+                  </Button>
+                  <Button size="small" color="error" aria-label={`删除组 ${g.name}`} onClick={() => setDeletingGroup(g)}>
+                    删除
+                  </Button>
+                </Stack>
+              </Box>
+            ))}
+            <ListItemButton onClick={() => setEditingGroup(newNodeGroup())}>
+              <ListItemText primary="+ 新建组" />
+            </ListItemButton>
+          </List>
+        </Paper>
+
+        <Stack spacing={1} sx={{ flexGrow: 1, minWidth: 0 }}>
+          <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+            <Typography variant="subtitle1">{title}</Typography>
+            {sel.kind !== "sub" && (
+              <Stack direction="row" spacing={1}>
+                <Button variant="contained" onClick={() => setEditingNode({ node: newManualNode(newNodeGroups), mode: "form" })}>
+                  新建节点
+                </Button>
+                <Button onClick={() => setEditingNode({ node: newManualNode(newNodeGroups), mode: "yaml" })}>粘贴 YAML</Button>
+              </Stack>
+            )}
+          </Stack>
+          {rows.length === 0 ? (
+            <Typography color="text.secondary">
+              {sel.kind === "sub" ? "这个订阅还没有节点。" : "还没有节点，点击「新建节点」或「粘贴 YAML」添加。"}
+            </Typography>
+          ) : (
+            <NodeTable
+              label={`${title} 的节点`}
+              rows={rows}
+              delays={delays}
+              testing={test.isPending}
+              onTest={(pn) => test.mutate([pn])}
+              onEdit={(n) => setEditingNode({ node: n })}
+              onDelete={setDeletingNode}
+            />
+          )}
         </Stack>
       </Stack>
 
-      {subs.length === 0 && <Typography color="text.secondary">还没有订阅，点击「新建订阅」添加。</Typography>}
-
-      {subs.map((s) => {
-        const r = s.last_result;
-        return (
-          <Card key={s.id} variant="outlined">
-            <CardContent>
-              <Typography variant="h6">{s.name}</Typography>
-              <Typography variant="body2" color="text.secondary">
-                {s.nodes.length} 个节点 · 最后更新：{formatTime(s.last_updated)} · 自动更新：
-                {formatInterval(s.update_interval_mins)}
-              </Typography>
-              {r && "Ok" in r && <Typography variant="body2">上次更新成功，共 {r.Ok.node_count} 个节点</Typography>}
-              {r && "Failed" in r && (
-                <Alert severity="error" sx={{ mt: 1 }}>
-                  更新失败：{r.Failed.reason}
-                </Alert>
-              )}
-            </CardContent>
-            <CardActions>
-              <Button
-                size="small"
-                aria-label={`立即更新 ${s.name}`}
-                disabled={refreshingId === s.id}
-                onClick={() => void doRefresh(s)}
-              >
-                立即更新
-              </Button>
-              <Button size="small" aria-label={`编辑 ${s.name}`} onClick={() => setEditing(s)}>
-                编辑
-              </Button>
-              <Button size="small" color="error" aria-label={`删除 ${s.name}`} onClick={() => setDeleting(s)}>
-                删除
-              </Button>
-            </CardActions>
-          </Card>
-        );
-      })}
-
-      {subs
-        .filter((s) => s.nodes.length > 0)
-        .map((s) => (
-          <Stack key={s.id} spacing={1}>
-            <Typography variant="subtitle1">{s.name}</Typography>
-            <TableContainer component={Paper}>
-              <Table size="small" aria-label={`${s.name} 的节点`}>
-                <TableHead>
-                  <TableRow>
-                    {["名称", "类型", "服务器", "延迟", "操作"].map((h) => (
-                      <TableCell key={h}>{h}</TableCell>
-                    ))}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {s.nodes.map((n) => {
-                    const pn = proxyName(s, n.name);
-                    const d = delays[pn];
-                    return (
-                      <TableRow key={n.name}>
-                        <TableCell>{n.name}</TableCell>
-                        <TableCell>{n.proxy_type}</TableCell>
-                        <TableCell>{n.server}</TableCell>
-                        <TableCell>{!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}</TableCell>
-                        <TableCell>
-                          <Button
-                            size="small"
-                            aria-label={`测速 ${n.name}`}
-                            disabled={test.isPending}
-                            onClick={() => test.mutate([pn])}
-                          >
-                            测速
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Stack>
-        ))}
-
-      {editing && <SubscriptionDialog key={editing.id} subscription={editing} onClose={() => setEditing(null)} />}
-      {deleting && (
+      {editingSub && <SubscriptionDialog key={editingSub.id} subscription={editingSub} onClose={() => setEditingSub(null)} />}
+      {deletingSub && (
         <ConfirmDeleteDialog
-          text={`确定删除订阅「${deleting.name}」吗？`}
-          onConfirm={() => del.mutateAsync(deleting.id)}
-          onClose={() => setDeleting(null)}
+          text={`确定删除订阅「${deletingSub.name}」吗？`}
+          onConfirm={() => delSub.mutateAsync(deletingSub.id)}
+          onClose={() => setDeletingSub(null)}
+        />
+      )}
+      {editingNode && (
+        <ManualNodeDialog
+          key={editingNode.node.id}
+          node={editingNode.node}
+          mode={editingNode.mode}
+          onClose={() => setEditingNode(null)}
+        />
+      )}
+      {deletingNode && (
+        <ConfirmDeleteDialog
+          text={`确定删除节点「${deletingNode.name}」吗？`}
+          onConfirm={() => delNode.mutateAsync(deletingNode.id)}
+          onClose={() => setDeletingNode(null)}
+        />
+      )}
+      {editingGroup && <NodeGroupDialog key={editingGroup.id} group={editingGroup} onClose={() => setEditingGroup(null)} />}
+      {deletingGroup && (
+        <ConfirmDeleteDialog
+          text={`确定删除组「${deletingGroup.name}」吗？组内节点不会被删除。`}
+          onConfirm={() => delGroup.mutateAsync(deletingGroup.id)}
+          onClose={() => setDeletingGroup(null)}
         />
       )}
     </Stack>
+  );
+}
+
+function NodeTable({
+  label,
+  rows,
+  delays,
+  testing,
+  onTest,
+  onEdit,
+  onDelete,
+}: {
+  label: string;
+  rows: Row[];
+  delays: DelayBook;
+  testing: boolean;
+  onTest: (proxyName: string) => void;
+  onEdit: (n: ManualNode) => void;
+  onDelete: (n: ManualNode) => void;
+}) {
+  return (
+    <TableContainer component={Paper}>
+      <Table size="small" aria-label={label}>
+        <TableHead>
+          <TableRow>
+            {["名称", "类型", "服务器", "延迟", "操作"].map((h) => (
+              <TableCell key={h}>{h}</TableCell>
+            ))}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((r) => {
+            const d = delays[r.proxyName];
+            const n = r.manual;
+            return (
+              <TableRow key={r.key}>
+                <TableCell>{r.name}</TableCell>
+                <TableCell>{r.type}</TableCell>
+                <TableCell>{r.server}</TableCell>
+                <TableCell>{!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}</TableCell>
+                <TableCell>
+                  <Button size="small" aria-label={`测速 ${r.name}`} disabled={testing} onClick={() => onTest(r.proxyName)}>
+                    测速
+                  </Button>
+                  {n && "Tailscale" in n.kind && (
+                    <Button size="small" component={RouterLink} to="/tailscale">
+                      去 Tailscale 页编辑
+                    </Button>
+                  )}
+                  {n && "Proxy" in n.kind && (
+                    <>
+                      <Button size="small" aria-label={`编辑 ${r.name}`} onClick={() => onEdit(n)}>
+                        编辑
+                      </Button>
+                      <Button size="small" color="error" aria-label={`删除 ${r.name}`} onClick={() => onDelete(n)}>
+                        删除
+                      </Button>
+                    </>
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 }
