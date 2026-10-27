@@ -20,7 +20,7 @@ import type { Exit, ExitKind, ExitMember, GroupStrategy, NodeRef } from "../bind
 import { InterfacePicker } from "../components/InterfacePicker";
 import { MemberPicker } from "../components/MemberPicker";
 import { NodePicker } from "../components/NodePicker";
-import { expandMembers, isGroupMember, isSubRef, isTailscaleRef, memberKey, nodeLabel } from "../lib/refs";
+import { expandMembers, isGroupMember, isSubRef, isTailscaleRef, memberKey, nodeKey, nodeLabel } from "../lib/refs";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
 
 type KindType = "Node" | "Group" | "Direct";
@@ -106,7 +106,8 @@ export function ExitDialog({ exit, onClose, onSaved }: { exit: Exit; onClose: ()
         Group: {
           strategy,
           members,
-          selected: selected && members.some((m) => memberKey(m) === memberKey(selected)) ? selected : null,
+          // `selected` may come from inside a whole-group member: compare against the expanded nodes.
+          selected: selected && expanded.some((r) => nodeKey(r) === nodeKey(selected)) ? selected : null,
         },
       };
     }

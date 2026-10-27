@@ -14,6 +14,11 @@ pub enum ValidationError {
     CoreRejected { message: String },
 }
 
+/// An id safe to use as a single path component (e.g. `tailscale/<id>`): non-empty, `[A-Za-z0-9-]` only.
+pub fn is_plain_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 const MAX_INTERVAL_MINS: u32 = 525_600;
 
 fn check_interval(field: String, v: Option<u32>, errors: &mut Vec<ValidationError>) {
@@ -63,14 +68,17 @@ fn validate_manual(model: &Model, errors: &mut Vec<ValidationError>) {
     check_unique("manual node", model.manual_nodes.iter().map(|n| n.name.as_str()), errors);
     check_unique("node group", model.node_groups.iter().map(|g| g.name.as_str()), errors);
 
-    for s in &model.subscriptions {
-        if s.name == super::resolve::MANUAL_PREFIX {
+    // Exit and subscription names share the proxy-name namespace with manual nodes ("手动/...").
+    let reserved = model.subscriptions.iter().map(|s| &s.name).chain(model.exits.iter().map(|e| &e.name));
+    for name in reserved {
+        if name == super::resolve::MANUAL_PREFIX {
             errors.push(ValidationError::InvalidName {
-                name: s.name.clone(),
+                name: name.clone(),
                 reason: "「手动」保留给手动节点".to_string(),
             });
         }
     }
+    let mut seen_group_ids = std::collections::HashSet::new();
     for g in &model.node_groups {
         if g.name.trim().is_empty() {
             errors.push(ValidationError::InvalidName {
@@ -78,14 +86,31 @@ fn validate_manual(model: &Model, errors: &mut Vec<ValidationError>) {
                 reason: "名称不能为空".to_string(),
             });
         }
+        let reason = if !is_plain_id(&g.id.0) {
+            Some("分组 id 无效")
+        } else if !seen_group_ids.insert(&g.id.0) {
+            Some("分组 id 重复")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            errors.push(ValidationError::InvalidName { name: g.name.clone(), reason: reason.to_string() });
+        }
     }
 
     let group_ids: std::collections::HashSet<&NodeGroupId> = model.node_groups.iter().map(|g| &g.id).collect();
     let manual_ids: std::collections::HashSet<&ManualNodeId> = model.manual_nodes.iter().map(|n| &n.id).collect();
 
+    let mut seen_node_ids = std::collections::HashSet::new();
     for n in &model.manual_nodes {
         check_name(&n.name, false, errors);
         let mut bad: Vec<&str> = Vec::new();
+        // The id names the Tailscale state dir (`tailscale/<id>`).
+        if !is_plain_id(&n.id.0) {
+            bad.push("节点 id 无效");
+        } else if !seen_node_ids.insert(&n.id.0) {
+            bad.push("节点 id 重复");
+        }
         match &n.kind {
             ManualNodeKind::Proxy { raw } => match raw.as_object() {
                 None => bad.push("代理配置必须是对象"),
@@ -501,6 +526,60 @@ mod tests {
             name: "手动".into(),
             reason: "「手动」保留给手动节点".into()
         }));
+    }
+
+    #[test]
+    fn exit_named_manual_rejected() {
+        let mut m = Model::default();
+        m.exits.push(exit("手动"));
+        assert!(errs(&m).contains(&ValidationError::InvalidName {
+            name: "手动".into(),
+            reason: "「手动」保留给手动节点".into()
+        }));
+    }
+
+    #[test]
+    fn manual_node_ids_validated() {
+        for bad in ["", "../x", "a/b", "a b", "a_b", ".", "a:b", "节点"] {
+            let mut m = Model::default();
+            m.manual_nodes.push(mnode(bad, "n", ss()));
+            assert!(
+                errs(&m).contains(&ValidationError::InvalidProxy { name: "n".into(), reason: "节点 id 无效".into() }),
+                "{bad:?}: {:?}",
+                errs(&m)
+            );
+        }
+        let mut m = Model::default();
+        m.manual_nodes.push(mnode("a", "n1", ss()));
+        m.manual_nodes.push(mnode("a", "n2", ss()));
+        assert!(errs(&m).contains(&ValidationError::InvalidProxy { name: "n2".into(), reason: "节点 id 重复".into() }));
+        let mut m = Model::default();
+        m.manual_nodes.push(ManualNode { id: ManualNodeId::new(), name: "n".into(), groups: vec![], kind: ss() });
+        m.manual_nodes.push(mnode("0f8fad5b-d9cb-469f-a165-70867728950e", "n2", ss()));
+        assert!(validate(&m).is_ok(), "{:?}", errs(&m));
+    }
+
+    #[test]
+    fn node_group_ids_validated() {
+        let mut m = Model::default();
+        m.node_groups.push(NodeGroup { id: NodeGroupId("".into()), name: "g0".into() });
+        m.node_groups.push(NodeGroup { id: NodeGroupId("g1".into()), name: "g1".into() });
+        m.node_groups.push(NodeGroup { id: NodeGroupId("g1".into()), name: "g2".into() });
+        let e = errs(&m);
+        assert!(e.contains(&ValidationError::InvalidName { name: "g0".into(), reason: "分组 id 无效".into() }), "{e:?}");
+        assert!(e.contains(&ValidationError::InvalidName { name: "g2".into(), reason: "分组 id 重复".into() }), "{e:?}");
+        let mut m = Model::default();
+        m.node_groups.push(NodeGroup { id: NodeGroupId::new(), name: "g".into() });
+        assert!(validate(&m).is_ok(), "{:?}", errs(&m));
+    }
+
+    #[test]
+    fn plain_id_check() {
+        assert!(is_plain_id("abc-DEF-123"));
+        assert!(is_plain_id(&ManualNodeId::new().0));
+        for bad in ["", ".", "..", "a/b", r"a\b", "a:b", "a.b", "a_b"] {
+            assert!(!is_plain_id(bad), "{bad:?}");
+        }
     }
 
     #[test]

@@ -19,6 +19,7 @@ vi.mock("../bindings", () => ({
 }));
 
 import { commands } from "../bindings";
+import { ApplyResultProvider } from "../components/ApplyResultSnackbar";
 import { collectProblems, Overview } from "./Overview";
 
 const model: Model = {
@@ -67,9 +68,11 @@ function renderOverview() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <Overview />
-      </MemoryRouter>
+      <ApplyResultProvider>
+        <MemoryRouter>
+          <Overview />
+        </MemoryRouter>
+      </ApplyResultProvider>
     </QueryClientProvider>,
   );
 }
@@ -100,6 +103,19 @@ describe("Overview", () => {
     await waitFor(() =>
       expect(commands.saveListener).toHaveBeenCalledWith(expect.objectContaining({ id: "l1", exit: "e2" })),
     );
+  });
+
+  it("shows a rejected inline exit save", async () => {
+    vi.mocked(commands.saveListener).mockResolvedValueOnce({
+      status: "error",
+      error: [{ InterfaceMismatch: { exit: "日本", node: "家里" } }],
+    });
+    renderOverview();
+    const row = (await screen.findAllByRole("row"))[1];
+    fireEvent.mouseDown(within(row).getByRole("combobox", { name: "办公 出口" }));
+    fireEvent.click(await screen.findByRole("option", { name: "日本" }));
+    await waitFor(() => expect(commands.saveListener).toHaveBeenCalled());
+    expect(await screen.findByText("出口「日本」与 Tailscale「家里」的网卡不一致")).toBeInTheDocument();
   });
 
   it("clears the exit with 不接", async () => {

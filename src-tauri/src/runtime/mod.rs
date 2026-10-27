@@ -539,14 +539,19 @@ impl Inner {
 
     /// mihomo recreates each Tailscale instance lazily on its first dial
     /// after a reload, so new connections would fail for a few seconds: dial
-    /// them now with a delay test. Fire-and-forget; failures are only results.
+    /// them now with a delay call. Fire-and-forget; the results (typically a
+    /// cold-start timeout) are not measurements, so they stay out of the DelayBook.
     fn prewarm_tailscales(self: &Arc<Self>, names: Vec<String>) {
         if names.is_empty() {
             return;
         }
-        let inner = Arc::clone(self);
+        let api = self.live.lock().unwrap().api.clone();
+        let Some(api) = api.filter(|_| !self.is_shut_down()) else {
+            return;
+        };
+        let url = self.model.lock().unwrap().settings.delay_test_url.clone();
         tokio::spawn(async move {
-            inner.test_delays(names).await;
+            test_many(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS).await;
         });
     }
 

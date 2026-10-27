@@ -168,6 +168,30 @@ describe("ExitDialog", () => {
     ]);
   });
 
+  it("keeps a selected node that comes from a whole-group member when saving", async () => {
+    vi.mocked(commands.saveExit).mockResolvedValue({ status: "ok", data: { NotRunning: null } } as never);
+    renderDialog({
+      id: "e4",
+      name: "选",
+      kind: {
+        Group: {
+          strategy: "Select",
+          members: [{ group: { Subscription: "s1" } }],
+          selected: { subscription_id: "s1", name: "日本1" },
+        },
+      },
+      interface: null,
+    });
+    expect(await screen.findByText(/展开后共 2 个节点/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "选2" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(commands.saveExit).toHaveBeenCalled());
+    const calls = vi.mocked(commands.saveExit).mock.calls;
+    const saved = calls[calls.length - 1][0];
+    expect(saved.name).toBe("选2");
+    expect((saved.kind as { Group: { selected: unknown } }).Group.selected).toEqual({ subscription_id: "s1", name: "日本1" });
+  });
+
   it("removes missing members on demand", async () => {
     renderDialog({
       id: "e1",

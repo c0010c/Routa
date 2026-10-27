@@ -141,8 +141,7 @@ pub mod ops {
 
     fn remove_tailscale_state(rt: &Runtime, id: &ManualNodeId) {
         // The id names a directory: never let it step outside tailscale/.
-        let plain = !id.0.is_empty() && id.0 != "." && id.0 != ".." && !id.0.contains(['/', '\\', ':']);
-        if !plain {
+        if !crate::model::validate::is_plain_id(&id.0) {
             eprintln!("delete_manual_node: refusing to remove state dir for id {:?}", id.0);
             return;
         }

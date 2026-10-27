@@ -941,7 +941,7 @@ fn ts_manual(name: &str, iface: Option<&str>) -> ManualNode {
     let mut o = TailscaleOpts::defaults_for(name);
     o.interface = iface.map(|g| InterfaceGuid(g.into()));
     ManualNode {
-        id: ManualNodeId(format!("ts-{name}")),
+        id: ManualNodeId(format!("ts-{}", name.bytes().map(|b| format!("{b:02x}")).collect::<String>())),
         name: name.into(),
         groups: vec![],
         kind: ManualNodeKind::Tailscale(o),
@@ -975,11 +975,14 @@ async fn applied_mutation_prewarms_tailscale_instances() {
     assert_eq!(delay_proxies(&h.api), vec!["手动/家里".to_string()]);
     assert_eq!(calls[0].1, h.rt.model().settings.delay_test_url);
     assert_eq!(calls[0].2, crate::stats::delay::DEFAULT_TIMEOUT_MS);
+    // The cold-start dial is not a measurement: nothing lands in the DelayBook.
+    assert!(h.rt.status().delays.get("手动/家里").is_none(), "{:?}", h.rt.status().delays);
 
     // A core (re)start prewarms too.
     h.rt.restart_core().await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(delay_proxies(&h.api).len(), 2);
+    assert!(h.rt.status().delays.get("手动/家里").is_none());
 }
 
 #[tokio::test(start_paused = true)]
