@@ -187,4 +187,70 @@ describe("ExitDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "移除失效成员" }));
     await waitFor(() => expect(screen.queryByText(/失效成员：/)).not.toBeInTheDocument());
   });
+
+  it("saves a whole group plus a manual node and shows the expanded count", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue({
+      ...model,
+      manual_nodes: [{ id: "m1", name: "家里", groups: [], kind: { Proxy: { raw: {} } } }],
+    });
+    vi.mocked(commands.saveExit).mockResolvedValue({ status: "ok", data: { NotRunning: null } } as never);
+    renderDialog({ id: "e3", name: "组", kind: { Group: { strategy: "UrlTest", members: [], selected: null } }, interface: null });
+    await waitFor(() => expect(commands.getModel).toHaveBeenCalled());
+    const input = screen.getByRole("combobox", { name: "成员" });
+    act(() => input.focus());
+    fireEvent.mouseDown(input);
+    fireEvent.click(await screen.findByRole("option", { name: /机场A（整组/ }));
+    fireEvent.mouseDown(input);
+    fireEvent.click(await screen.findByRole("option", { name: /家里/ }));
+    expect(await screen.findByText(/展开后共 3 个节点（已去重）/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(commands.saveExit).toHaveBeenCalled());
+    const saved = vi.mocked(commands.saveExit).mock.calls[0][0];
+    expect((saved.kind as { Group: { members: unknown[] } }).Group.members).toEqual([
+      { group: { Subscription: "s1" } },
+      { manual_id: "m1" },
+    ]);
+  });
+
+  it("locks the interface to the tailscale instance NIC", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue({
+      ...model,
+      manual_nodes: [
+        {
+          id: "t1",
+          name: "ts",
+          groups: [],
+          kind: { Tailscale: { hostname: "h", exit_node: "x", ephemeral: false, udp: true, auth_key: null, interface: "{G1}" } },
+        },
+      ],
+    });
+    vi.mocked(commands.saveExit).mockResolvedValue({ status: "ok", data: { NotRunning: null } } as never);
+    renderDialog({ id: "e4", name: "ts出口", kind: { Node: { node: { manual_id: "t1" } } }, interface: null });
+    expect(await screen.findByText(/跟随 Tailscale 实例：以太网/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "网卡" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(commands.saveExit).toHaveBeenCalled());
+    expect(vi.mocked(commands.saveExit).mock.calls[0][0].interface).toBe("{G1}");
+  });
+
+  it("warns before saving when a mixed exit NIC differs from the instance NIC", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue({
+      ...model,
+      manual_nodes: [
+        {
+          id: "t1",
+          name: "ts",
+          groups: [],
+          kind: { Tailscale: { hostname: "h", exit_node: "x", ephemeral: false, udp: true, auth_key: null, interface: "{G1}" } },
+        },
+      ],
+    });
+    renderDialog({
+      id: "e5",
+      name: "混合",
+      kind: { Group: { strategy: "UrlTest", members: [{ manual_id: "t1" }, { subscription_id: "s1", name: "香港1" }], selected: null } },
+      interface: "{G2}",
+    });
+    expect(await screen.findByText("「ts」的网卡是 以太网，需与出口一致")).toBeInTheDocument();
+  });
 });

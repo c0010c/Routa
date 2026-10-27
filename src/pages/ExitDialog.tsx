@@ -14,12 +14,13 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { isValidationError, useModel, useSaveExit, useStatus } from "../api/client";
 import type { Exit, ExitKind, ExitMember, GroupStrategy, NodeRef } from "../bindings";
 import { InterfacePicker } from "../components/InterfacePicker";
+import { MemberPicker } from "../components/MemberPicker";
 import { NodePicker } from "../components/NodePicker";
-import { isGroupMember, isNodeRef, memberKey } from "../lib/refs";
+import { expandMembers, isGroupMember, isSubRef, isTailscaleRef, memberKey, nodeLabel } from "../lib/refs";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
 
 type KindType = "Node" | "Group" | "Direct";
@@ -40,7 +41,7 @@ function kindType(k: ExitKind): KindType {
   return k === "Direct" ? "Direct" : "Node" in k ? "Node" : "Group";
 }
 
-export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void }) {
+export function ExitDialog({ exit, onClose, onSaved }: { exit: Exit; onClose: () => void; onSaved?: (e: Exit) => void }) {
   const model = useModel();
   const status = useStatus();
   const save = useSaveExit();
@@ -66,6 +67,31 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
   const missingKeys = new Set(missing.map(memberKey));
   const staleInForm = members.filter((m) => missingKeys.has(memberKey(m)));
 
+  const ifaceName = (g: string | null) =>
+    g === null ? "系统默认" : (status.data?.interfaces.find((i) => i.guid === g)?.friendly_name ?? "（已移除的网卡）");
+
+  const expanded = useMemo(() => {
+    const m = model.data;
+    if (!m || type === "Direct") return [];
+    if (type === "Node") return node ? expandMembers(m, [node]) : [];
+    return expandMembers(m, members);
+  }, [model.data, type, node, members]);
+  const instances = useMemo(() => {
+    const m = model.data;
+    if (!m) return [];
+    return expanded.flatMap((r) => {
+      if (isSubRef(r) || !isTailscaleRef(m, r)) return [];
+      const n = m.manual_nodes.find((x) => x.id === r.manual_id);
+      return n && typeof n.kind === "object" && "Tailscale" in n.kind
+        ? [{ name: n.name, iface: n.kind.Tailscale.interface }]
+        : [];
+    });
+  }, [model.data, expanded]);
+  const tsOnly = expanded.length > 0 && instances.length === expanded.length;
+  const effectiveIface = tsOnly ? instances[0].iface : iface;
+  const mismatched = tsOnly ? [] : instances.filter((i) => i.iface !== iface);
+  const [showExpanded, setShowExpanded] = useState(false);
+
   const submit = async () => {
     let kind: ExitKind;
     if (type === "Direct") kind = "Direct";
@@ -87,7 +113,9 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
     setNodeError(undefined);
     setErrs({ form: [] });
     try {
-      await save.mutateAsync({ ...exit, name, kind, interface: iface });
+      const saved = { ...exit, name, kind, interface: effectiveIface };
+      await save.mutateAsync(saved);
+      onSaved?.(saved);
       onClose();
     } catch (e) {
       if (isValidationError(e)) setErrs(fieldErrors(e.errors));
@@ -153,20 +181,7 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
                   ))}
                 </Select>
               </FormControl>
-              <NodePicker
-                multiple
-                label="成员"
-                value={members.filter(isNodeRef)}
-                // Whole-group members are edited by the later member picker; keep them untouched here.
-                onChange={(v) => {
-                  const keep = new Set(v.map(memberKey));
-                  const have = new Set(members.map(memberKey));
-                  setMembers([
-                    ...members.filter((x) => isGroupMember(x) || keep.has(memberKey(x))),
-                    ...v.filter((x) => !have.has(memberKey(x))),
-                  ]);
-                }}
-              />
+              <MemberPicker value={members} onChange={setMembers} />
               {staleInForm.length > 0 && (
                 <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
                   <Typography color="error" variant="body2">
@@ -183,7 +198,36 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
               )}
             </>
           )}
-          <InterfacePicker value={iface} onChange={setIface} />
+          {type !== "Direct" && expanded.length > 0 && (
+            <Box>
+              <Typography variant="body2">
+                展开后共 {expanded.length} 个节点（已去重）
+                <Button size="small" onClick={() => setShowExpanded((v) => !v)}>
+                  {showExpanded ? "收起" : "查看名单"}
+                </Button>
+              </Typography>
+              {showExpanded && model.data && (
+                <Typography variant="caption" color="text.secondary" component="div">
+                  {expanded.map((r) => nodeLabel(model.data!, r)).join("、")}
+                </Typography>
+              )}
+            </Box>
+          )}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Box sx={{ flex: 1 }}>
+              <InterfacePicker value={effectiveIface} onChange={setIface} disabled={tsOnly} />
+            </Box>
+            {tsOnly && (
+              <Typography variant="body2" color="text.secondary">
+                跟随 Tailscale 实例：{ifaceName(instances[0].iface)}
+              </Typography>
+            )}
+          </Box>
+          {mismatched.map((i) => (
+            <Alert key={i.name} severity="warning">
+              「{i.name}」的网卡是 {ifaceName(i.iface)}，需与出口一致
+            </Alert>
+          ))}
         </Stack>
       </DialogContent>
       <DialogActions>

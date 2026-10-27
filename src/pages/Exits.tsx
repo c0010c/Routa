@@ -13,7 +13,7 @@ import {
 import { useState } from "react";
 import { useDeleteExit, useModel, useStatus, useTestDelays } from "../api/client";
 import type { Exit, Model } from "../bindings";
-import { nodeLabel } from "../lib/refs";
+import { isGroupMember, nodeLabel } from "../lib/refs";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { ExitStatusChip } from "../components/StatusChips";
 import { ExitDialog, newExit } from "./ExitDialog";
@@ -25,7 +25,19 @@ function kindText(e: Exit): string {
 
 function nodeOrMembers(e: Exit, model: Model): string {
   if (e.kind === "Direct") return "—";
-  return "Node" in e.kind ? nodeLabel(model, e.kind.Node.node) :`${e.kind.Group.members.length} 个成员`;
+  if ("Node" in e.kind) return nodeLabel(model, e.kind.Node.node);
+  const names = e.kind.Group.members.map((mem) => {
+    if (!isGroupMember(mem)) return nodeLabel(model, mem);
+    if ("Subscription" in mem.group) {
+      const id = mem.group.Subscription;
+      const n = model.subscriptions.find((x) => x.id === id)?.name;
+      return n ? `${n}（整组）` : "（已删除的组）";
+    }
+    const id = mem.group.Custom;
+    const n = model.node_groups.find((x) => x.id === id)?.name;
+    return n ? `${n}（整组）` : "（已删除的组）";
+  });
+  return `${names.length} 个成员：${names.join("、")}`;
 }
 
 export function Exits() {

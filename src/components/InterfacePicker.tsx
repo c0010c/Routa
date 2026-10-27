@@ -6,9 +6,10 @@ import { isInterfaceUsable } from "../lib/interfaces";
 interface Props {
   value: InterfaceGuid | null;
   onChange: (v: InterfaceGuid | null) => void;
+  disabled?: boolean;
 }
 
-export function InterfacePicker({ value, onChange }: Props) {
+export function InterfacePicker({ value, onChange, disabled }: Props) {
   const status = useStatus();
   const interfaces = status.data?.interfaces ?? [];
   const removed = value !== null && !interfaces.some((i) => i.guid === value);
@@ -16,6 +17,7 @@ export function InterfacePicker({ value, onChange }: Props) {
     <FormControl size="small" fullWidth>
       <InputLabel id="iface-label">网卡</InputLabel>
       <Select
+        disabled={disabled}
         labelId="iface-label"
         label="网卡"
         value={value ?? ""}
