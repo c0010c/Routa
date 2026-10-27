@@ -10,6 +10,7 @@ use serde_yaml_ng::{Mapping, Value};
 
 use crate::model::health::{ExitHealth, ExitStatus, Health, ListenerStatus};
 use crate::model::*;
+use crate::netif::NetInterface;
 
 pub struct GenInput<'a> {
     pub model: &'a Model,
@@ -17,6 +18,9 @@ pub struct GenInput<'a> {
     pub secret: &'a str,
     /// Internal listeners used to fetch through an exit (Task 11).
     pub fetch_listeners: &'a [(ExitId, u16)],
+    /// Same adapter list `health` was evaluated against; resolves Tailscale
+    /// instance NICs.
+    pub nics: &'a [NetInterface],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,8 +52,10 @@ pub fn node_proxy_name(sub: &Subscription, node: &Node) -> String {
     format!("{}/{}", sub.name, node.name)
 }
 
-pub fn member_proxy_name(exit: &Exit, sub: &Subscription, node: &Node) -> String {
-    format!("{}/{}/{}", exit.name, sub.name, node.name)
+/// Per-exit copy of a copyable node: `<出口>/<base>`, where base is
+/// `<订阅>/<节点>` or `手动/<名>`.
+pub fn member_proxy_name(exit: &Exit, base_name: &str) -> String {
+    format!("{}/{}", exit.name, base_name)
 }
 
 fn s(x: &str) -> Value {
@@ -95,8 +101,8 @@ fn json_to_yaml(v: &serde_json::Value) -> Value {
 /// Subscription-supplied `interface-name`, `routing-mark` and `dialer-proxy`
 /// are stripped: they would bind traffic to a NIC the user did not choose, or
 /// reference a proxy that has been renamed. `None` if `raw` is not an object.
-fn proxy_copy(node: &Node, name: &str, interface: Option<&str>) -> Option<Value> {
-    let Value::Mapping(mut m) = json_to_yaml(&node.raw) else {
+fn proxy_copy(raw: &serde_json::Value, name: &str, interface: Option<&str>) -> Option<Value> {
+    let Value::Mapping(mut m) = json_to_yaml(raw) else {
         return None;
     };
     for k in ["interface-name", "routing-mark", "dialer-proxy"] {
@@ -109,12 +115,44 @@ fn proxy_copy(node: &Node, name: &str, interface: Option<&str>) -> Option<Value>
     Some(Value::Mapping(m))
 }
 
-fn find_node<'a>(model: &'a Model, r: &NodeRef) -> Option<(&'a Subscription, &'a Node)> {
-    // 过渡写法（Task 3 替换）：手动节点暂按“找不到”处理。
-    let NodeRef::Subscription { subscription_id, name } = r else { return None };
-    let sub = model.subscriptions.iter().find(|x| &x.id == subscription_id)?;
-    let node = sub.nodes.iter().find(|n| &n.name == name)?;
-    Some((sub, node))
+/// The instance's own NIC. `None`: configured but absent or unusable, so the
+/// instance must not be written (fail closed, never the default NIC).
+/// `Some(None)`: none configured, i.e. the system default.
+fn tailscale_iface<'n>(opts: &TailscaleOpts, nics: &'n [NetInterface]) -> Option<Option<&'n str>> {
+    match &opts.interface {
+        None => Some(None),
+        Some(g) => nics
+            .iter()
+            .find(|n| &n.guid == g)
+            .filter(|n| n.is_usable())
+            .map(|n| Some(n.mihomo_name.as_str())),
+    }
+}
+
+/// The single definition of a Tailscale instance; every exit references it
+/// by name and never copies it (copies would share hostname and state-dir).
+fn tailscale_proxy(node: &ManualNode, opts: &TailscaleOpts, iface: Option<&str>) -> Value {
+    let mut entries = vec![
+        ("name", s(&manual_proxy_name(node))),
+        ("type", s("tailscale")),
+        ("hostname", s(&opts.hostname)),
+        ("state-dir", s(&tailscale_state_dir(&node.id))),
+        ("ephemeral", Value::Bool(opts.ephemeral)),
+        ("udp", Value::Bool(opts.udp)),
+        ("exit-node", s(&opts.exit_node)),
+    ];
+    if let Some(k) = opts.auth_key.as_deref().filter(|k| !k.is_empty()) {
+        entries.push(("auth-key", s(k)));
+    }
+    if let Some(i) = iface {
+        entries.push(("interface-name", s(i)));
+    }
+    map(entries)
+}
+
+/// `None` when the instance must not be written (see `tailscale_iface`).
+fn tailscale_def(node: &ManualNode, opts: &TailscaleOpts, nics: &[NetInterface]) -> Option<Value> {
+    tailscale_iface(opts, nics).map(|i| tailscale_proxy(node, opts, i))
 }
 
 fn strategy_type(st: &GroupStrategy) -> &'static str {
@@ -126,35 +164,56 @@ fn strategy_type(st: &GroupStrategy) -> &'static str {
     }
 }
 
-/// Everything generated for one Ok exit: its proxy entries and optional group entry.
+/// Everything generated for one Ok exit: its own proxy entries, optional
+/// group entry, and the Tailscale definitions it references. `shared` is
+/// written once globally, so it only feeds the fingerprint.
 struct ExitParts {
     proxies: Vec<Value>,
     group: Option<Value>,
+    shared: Vec<Value>,
 }
 
 /// `None` when nothing could be emitted for the exit (treated as not Ok).
-fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth) -> Option<ExitParts> {
+fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth, nics: &[NetInterface]) -> Option<ExitParts> {
     let iface = h.interface.as_ref().map(|n| n.mihomo_name.as_str());
     let parts = match &exit.kind {
-        ExitKind::Node { .. } => {
-            let proxies = h
-                .effective_members
-                .iter()
-                .filter_map(|r| find_node(model, r))
-                .filter_map(|(_, n)| proxy_copy(n, &exit.name, iface))
-                .collect();
-            ExitParts { proxies, group: None }
-        }
+        ExitKind::Node { .. } => match h.effective_members.first().and_then(|r| resolve(model, r)) {
+            Some(Resolved::Copyable { raw, .. }) => ExitParts {
+                proxies: proxy_copy(raw, &exit.name, iface).into_iter().collect(),
+                group: None,
+                shared: vec![],
+            },
+            Some(Resolved::Tailscale { node, opts }) => {
+                let def = tailscale_def(node, opts, nics)?;
+                let group = map(vec![
+                    ("name", s(&exit.name)),
+                    ("type", s("select")),
+                    ("proxies", Value::Sequence(vec![s(&manual_proxy_name(node))])),
+                ]);
+                ExitParts { proxies: vec![], group: Some(group), shared: vec![def] }
+            }
+            None => return None,
+        },
         ExitKind::Group { strategy, .. } => {
             let mut proxies = Vec::new();
+            let mut shared = Vec::new();
             let mut names = Vec::new();
             for r in &h.effective_members {
-                if let Some((sub, n)) = find_node(model, r) {
-                    let name = member_proxy_name(exit, sub, n);
-                    if let Some(p) = proxy_copy(n, &name, iface) {
-                        proxies.push(p);
-                        names.push(s(&name));
+                match resolve(model, r) {
+                    Some(Resolved::Copyable { base_name, raw }) => {
+                        let name = member_proxy_name(exit, &base_name);
+                        if let Some(p) = proxy_copy(raw, &name, iface) {
+                            proxies.push(p);
+                            names.push(s(&name));
+                        }
                     }
+                    Some(Resolved::Tailscale { node, opts }) => {
+                        if let Some(def) = tailscale_def(node, opts, nics) {
+                            shared.push(def);
+                            names.push(s(&manual_proxy_name(node)));
+                        }
+                    }
+                    None => {}
                 }
             }
             let interval = model.settings.delay_test_interval_mins.map_or(0, |m| u64::from(m) * 60);
@@ -165,17 +224,17 @@ fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth) -> Option<ExitParts> {
                 ("url", s(&model.settings.delay_test_url)),
                 ("interval", Value::from(interval)),
             ]);
-            ExitParts { proxies, group: Some(group) }
+            ExitParts { proxies, group: Some(group), shared }
         }
         ExitKind::Direct => {
             let mut entries = vec![("name", s(&exit.name)), ("type", s("direct"))];
             if let Some(i) = iface {
                 entries.push(("interface-name", s(i)));
             }
-            ExitParts { proxies: vec![map(entries)], group: None }
+            ExitParts { proxies: vec![map(entries)], group: None, shared: vec![] }
         }
     };
-    (!parts.proxies.is_empty()).then_some(parts)
+    (!parts.proxies.is_empty() || !parts.shared.is_empty()).then_some(parts)
 }
 
 fn hash_yaml(v: &Value) -> u64 {
@@ -187,8 +246,10 @@ fn hash_yaml(v: &Value) -> u64 {
 
 /// What the exit routes through. The group's delay-test `url`/`interval`
 /// are left out: changing them must not cut every connection of the group.
+/// Referenced Tailscale definitions count: they are what the exit dials.
 fn fingerprint(parts: &ExitParts) -> u64 {
     let mut all = parts.proxies.clone();
+    all.extend(parts.shared.iter().cloned());
     if let Some(Value::Mapping(mut g)) = parts.group.clone() {
         g.remove("url");
         g.remove("interval");
@@ -231,7 +292,7 @@ pub fn empty_config(controller_port: u16, secret: &str) -> String {
 pub fn nodes_check_config(controller_port: u16, secret: &str, sub: &Subscription, nodes: &[Node]) -> String {
     let proxies = nodes
         .iter()
-        .filter_map(|n| proxy_copy(n, &node_proxy_name(sub, n), None))
+        .filter_map(|n| proxy_copy(&n.raw, &node_proxy_name(sub, n), None))
         .collect();
     base_config(controller_port, secret, proxies, vec![], vec![])
 }
@@ -246,9 +307,14 @@ pub fn generate(input: &GenInput) -> Generated {
         .flat_map(|sub| {
             sub.nodes
                 .iter()
-                .filter_map(move |n| proxy_copy(n, &node_proxy_name(sub, n), None))
+                .filter_map(move |n| proxy_copy(&n.raw, &node_proxy_name(sub, n), None))
         })
         .collect();
+    // Every manual node; each Tailscale instance exactly once.
+    proxies.extend(model.manual_nodes.iter().filter_map(|n| match &n.kind {
+        ManualNodeKind::Proxy { raw } => proxy_copy(raw, &manual_proxy_name(n), None),
+        ManualNodeKind::Tailscale(opts) => tailscale_def(n, opts, input.nics),
+    }));
 
     let mut groups = Vec::new();
     let mut selects = Vec::new();
@@ -259,15 +325,24 @@ pub fn generate(input: &GenInput) -> Generated {
         if h.status != ExitStatus::Ok {
             continue;
         }
-        let Some(parts) = exit_parts(model, exit, h) else { continue };
+        let Some(parts) = exit_parts(model, exit, h, input.nics) else { continue };
         fingerprints.insert(&exit.id, fingerprint(&parts));
         proxies.extend(parts.proxies);
         groups.extend(parts.group);
 
         if let ExitKind::Group { strategy: GroupStrategy::Select, selected: Some(sel), .. } = &exit.kind {
             if h.effective_members.contains(sel) {
-                if let Some((sub, n)) = find_node(model, sel).filter(|(_, n)| n.raw.is_object()) {
-                    selects.push((exit.name.clone(), member_proxy_name(exit, sub, n)));
+                let member = match resolve(model, sel) {
+                    Some(Resolved::Copyable { base_name, raw }) if raw.is_object() => {
+                        Some(member_proxy_name(exit, &base_name))
+                    }
+                    Some(Resolved::Tailscale { node, opts }) if tailscale_iface(opts, input.nics).is_some() => {
+                        Some(manual_proxy_name(node))
+                    }
+                    _ => None,
+                };
+                if let Some(member) = member {
+                    selects.push((exit.name.clone(), member));
                 }
             }
         }
@@ -340,7 +415,6 @@ pub fn generate(input: &GenInput) -> Generated {
 mod tests {
     use super::*;
     use crate::model::health::{evaluate, ExitStatus};
-    use crate::netif::NetInterface;
     use serde_json::json;
     use std::net::Ipv4Addr;
 
@@ -427,7 +501,7 @@ mod tests {
     }
     fn gen_with(m: &Model, nics: &[NetInterface], fetch: &[(ExitId, u16)]) -> Generated {
         let h = evaluate(m, nics);
-        generate(&GenInput { model: m, health: &h, secret: "sekret", fetch_listeners: fetch })
+        generate(&GenInput { model: m, health: &h, secret: "sekret", fetch_listeners: fetch, nics })
     }
     fn gen(m: &Model) -> Generated {
         gen_with(m, &nics(), &[])
@@ -522,7 +596,8 @@ mod tests {
         m.exits[2].interface = None;
         m.exits[0].interface = None; // no-NIC node exit
         let h = evaluate(&m, &nics());
-        let v = parse(&generate(&GenInput { model: &m, health: &h, secret: "s", fetch_listeners: &[] }).yaml);
+        let n = nics();
+        let v = parse(&generate(&GenInput { model: &m, health: &h, secret: "s", fetch_listeners: &[], nics: &n }).yaml);
         let ps = v["proxies"].as_sequence().unwrap();
         let get = |n: &str| ps.iter().find(|p| p["name"].as_str() == Some(n)).unwrap();
         for n in ["机场/HK 01", "出口A"] {
@@ -686,5 +761,226 @@ mod tests {
         assert_eq!(last["listen"], "127.0.0.1");
         assert_eq!(last["proxy"], "出口B");
         assert_eq!(g.plan.listeners.len(), 3);
+    }
+
+    fn mref(id: &str) -> NodeRef {
+        NodeRef::Manual { manual_id: ManualNodeId(id.into()) }
+    }
+    fn proxy_manual(id: &str, name: &str, groups: &[&str]) -> ManualNode {
+        ManualNode {
+            id: ManualNodeId(id.into()),
+            name: name.into(),
+            groups: groups.iter().map(|g| NodeGroupId((*g).into())).collect(),
+            kind: ManualNodeKind::Proxy {
+                raw: json!({"name":"orig","type":"socks5","server":"10.0.0.9","port":1080}),
+            },
+        }
+    }
+    fn ts_manual(id: &str, name: &str, groups: &[&str], iface: Option<&str>) -> ManualNode {
+        let mut opts = TailscaleOpts::defaults_for(name);
+        opts.interface = iface.map(|g| InterfaceGuid(g.into()));
+        ManualNode {
+            id: ManualNodeId(id.into()),
+            name: name.into(),
+            groups: groups.iter().map(|g| NodeGroupId((*g).into())).collect(),
+            kind: ManualNodeKind::Tailscale(opts),
+        }
+    }
+    fn custom(gid: &str) -> ExitMember {
+        ExitMember::Group { group: GroupRef::Custom(NodeGroupId(gid.into())) }
+    }
+    fn group_kind(members: Vec<ExitMember>) -> ExitKind {
+        ExitKind::Group { strategy: GroupStrategy::Fallback, members, selected: None }
+    }
+    fn find<'v>(v: &'v serde_yaml_ng::Value, key: &str, name: &str) -> Option<&'v serde_yaml_ng::Value> {
+        v[key].as_sequence().unwrap().iter().find(|p| p["name"].as_str() == Some(name))
+    }
+    fn seq(xs: &[&str]) -> serde_yaml_ng::Value {
+        serde_yaml_ng::to_value(xs).unwrap()
+    }
+    fn keys(p: &serde_yaml_ng::Value) -> Vec<String> {
+        p.as_mapping().unwrap().keys().map(|k| k.as_str().unwrap().to_string()).collect()
+    }
+    /// 出口B (Group, G2) holds custom group g1.
+    fn with_group_exit(nodes: Vec<ManualNode>) -> Model {
+        let mut m = base();
+        m.manual_nodes = nodes;
+        m.node_groups = vec![NodeGroup { id: NodeGroupId("g1".into()), name: "组".into() }];
+        m.exits[1].kind = group_kind(vec![custom("g1")]);
+        m
+    }
+
+    #[test]
+    fn manual_proxy_emitted_with_prefix() {
+        let m = with_group_exit(vec![proxy_manual("m1", "a", &["g1"])]);
+        let v = parse(&gen(&m).yaml);
+        let ps = names(&v, "proxies");
+        assert!(ps.contains(&"手动/a".to_string()), "{ps:?}");
+        assert!(ps.contains(&"出口B/手动/a".to_string()), "{ps:?}");
+        assert!(find(&v, "proxies", "手动/a").unwrap().get("interface-name").is_none());
+        assert_eq!(find(&v, "proxies", "出口B/手动/a").unwrap()["interface-name"], "WLAN");
+        assert_eq!(find(&v, "proxy-groups", "出口B").unwrap()["proxies"], seq(&["出口B/手动/a"]));
+    }
+
+    #[test]
+    fn renamed_manual_node_follows() {
+        let mut m = with_group_exit(vec![proxy_manual("m1", "a", &["g1"])]);
+        m.manual_nodes[0].name = "b".into();
+        let ps = names(&parse(&gen(&m).yaml), "proxies");
+        assert!(ps.contains(&"手动/b".to_string()) && ps.contains(&"出口B/手动/b".to_string()), "{ps:?}");
+        assert!(!ps.iter().any(|p| p.ends_with("手动/a")), "{ps:?}");
+    }
+
+    #[test]
+    fn tailscale_emitted_once_and_referenced() {
+        let mut m = with_group_exit(vec![ts_manual("t1", "ts", &["g1"], None)]);
+        m.exits[1].interface = None;
+        m.exits.push(Exit {
+            id: ExitId("ed".into()),
+            name: "出口D".into(),
+            kind: group_kind(vec![ExitMember::Node(mref("t1"))]),
+            interface: None,
+        });
+        let v = parse(&gen(&m).yaml);
+        let ts: Vec<_> =
+            v["proxies"].as_sequence().unwrap().iter().filter(|p| p["type"] == "tailscale").collect();
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0]["name"], "手动/ts");
+        assert_eq!(ts[0]["state-dir"], "tailscale/t1");
+        assert_eq!(ts[0]["hostname"], "mihomo-ts");
+        assert_eq!(ts[0]["exit-node"], "auto:any");
+        assert_eq!(ts[0]["udp"], true);
+        assert_eq!(ts[0]["ephemeral"], false);
+        assert_eq!(keys(ts[0]), ["name", "type", "hostname", "state-dir", "ephemeral", "udp", "exit-node"]);
+        for g in ["出口B", "出口D"] {
+            assert_eq!(find(&v, "proxy-groups", g).unwrap()["proxies"], seq(&["手动/ts"]), "{g}");
+        }
+    }
+
+    #[test]
+    fn tailscale_node_exit_wraps_select() {
+        let mut m = base();
+        m.manual_nodes = vec![ts_manual("t1", "ts", &[], None)];
+        m.exits[0].kind = ExitKind::Node { node: mref("t1") };
+        m.exits[0].interface = None;
+        let v = parse(&gen(&m).yaml);
+        let g = find(&v, "proxy-groups", "出口A").expect("wrapper group");
+        assert_eq!(g["type"], "select");
+        assert_eq!(g["proxies"], seq(&["手动/ts"]));
+        assert!(find(&v, "proxies", "出口A").is_none());
+        assert_eq!(find(&v, "listeners", "入口A").unwrap()["proxy"], "出口A");
+    }
+
+    #[test]
+    fn tailscale_interface_written() {
+        let mut m = base();
+        let mut t = ts_manual("t1", "ts", &[], Some("{G1}"));
+        if let ManualNodeKind::Tailscale(o) = &mut t.kind {
+            o.auth_key = Some("tskey-test".into());
+        }
+        m.manual_nodes = vec![t];
+        m.exits[0].kind = ExitKind::Node { node: mref("t1") };
+        let mut n = nics();
+        n[0].mihomo_name = "以太网 3".into();
+        let v = parse(&gen_with(&m, &n, &[]).yaml);
+        let p = find(&v, "proxies", "手动/ts").unwrap();
+        assert_eq!(p["interface-name"], "以太网 3");
+        assert_eq!(p["auth-key"], "tskey-test");
+        assert_eq!(&keys(p)[7..], ["auth-key", "interface-name"]);
+    }
+
+    #[test]
+    fn tailscale_with_missing_nic_not_emitted() {
+        let mut m = base();
+        m.manual_nodes = vec![ts_manual("t1", "ts", &[], Some("{GONE}"))];
+        m.exits[0].kind = ExitKind::Node { node: mref("t1") };
+        m.exits[0].interface = Some(InterfaceGuid("{GONE}".into()));
+        let h = evaluate(&m, &nics());
+        assert_eq!(h.exits[&ExitId("ea".into())].status, ExitStatus::InterfaceUnavailable);
+        let g = gen(&m);
+        let v = parse(&g.yaml);
+        assert!(!v["proxies"].as_sequence().unwrap().iter().any(|p| p["type"] == "tailscale"));
+        assert!(find(&v, "proxy-groups", "出口A").is_none());
+        assert!(find(&v, "listeners", "入口A").is_none());
+        assert!(!g.plan.listeners.contains_key("入口A"));
+
+        // A down NIC is not usable either.
+        let mut m = base();
+        m.manual_nodes = vec![ts_manual("t1", "ts", &[], Some("{G1}"))];
+        let mut n = nics();
+        n[0].is_up = false;
+        let v = parse(&gen_with(&m, &n, &[]).yaml);
+        assert!(find(&v, "proxies", "手动/ts").is_none());
+    }
+
+    #[test]
+    fn tailscale_group_member_without_nic_is_skipped() {
+        // Defense in depth: even when health says Ok, a group never references
+        // an instance whose definition was not written.
+        let mut m = with_group_exit(vec![
+            ts_manual("t1", "ts", &["g1"], Some("{GONE}")),
+            proxy_manual("m1", "a", &["g1"]),
+        ]);
+        m.exits[1].interface = None;
+        let v = parse(&gen(&m).yaml);
+        assert_eq!(find(&v, "proxy-groups", "出口B").unwrap()["proxies"], seq(&["出口B/手动/a"]));
+        // Only the missing instance: the exit is not emitted at all.
+        let mut m = with_group_exit(vec![ts_manual("t1", "ts", &["g1"], Some("{GONE}"))]);
+        m.exits[1].interface = None;
+        let g = gen(&m);
+        let v = parse(&g.yaml);
+        assert!(find(&v, "proxy-groups", "出口B").is_none());
+        assert!(!g.plan.listeners.contains_key("入口B"));
+    }
+
+    #[test]
+    fn group_dedupes_node_selected_twice() {
+        let mut m = base();
+        m.exits[1].kind = group_kind(vec![
+            ExitMember::Node(nref("HK 01")),
+            ExitMember::Group { group: GroupRef::Subscription(SubscriptionId("s1".into())) },
+        ]);
+        let v = parse(&gen(&m).yaml);
+        assert_eq!(
+            find(&v, "proxy-groups", "出口B").unwrap()["proxies"],
+            seq(&["出口B/机场/HK 01", "出口B/机场/JP 01"])
+        );
+        let ps = names(&v, "proxies");
+        assert_eq!(ps.iter().filter(|p| *p == "出口B/机场/HK 01").count(), 1);
+    }
+
+    #[test]
+    fn fingerprint_changes_when_tailscale_changes() {
+        let mk = |exit_node: &str| {
+            let mut m = with_group_exit(vec![ts_manual("t1", "ts", &["g1"], None)]);
+            m.exits[1].interface = None;
+            if let ManualNodeKind::Tailscale(o) = &mut m.manual_nodes[0].kind {
+                o.exit_node = exit_node.into();
+            }
+            m.manual_nodes.push(ts_manual("t2", "ts2", &[], None));
+            m.exits[0].kind = ExitKind::Node { node: mref("t2") };
+            m.exits[0].interface = None;
+            gen(&m).plan
+        };
+        let (a, b) = (mk("auto:any"), mk("100.64.0.1"));
+        let fp = |p: &EffectivePlan, l: &str| p.listeners[l].exit_fingerprint;
+        assert_ne!(fp(&a, "入口B"), fp(&b, "入口B"));
+        assert_eq!(fp(&a, "入口A"), fp(&b, "入口A"), "other instance unaffected");
+    }
+
+    #[test]
+    fn select_tailscale_member_uses_shared_name() {
+        let mut m = with_group_exit(vec![ts_manual("t1", "ts", &["g1"], None), proxy_manual("m1", "a", &["g1"])]);
+        m.exits[1].interface = None;
+        m.exits[1].kind = ExitKind::Group {
+            strategy: GroupStrategy::Select,
+            members: vec![custom("g1")],
+            selected: Some(mref("t1")),
+        };
+        assert_eq!(gen(&m).selects, vec![("出口B".to_string(), "手动/ts".to_string())]);
+        if let ExitKind::Group { selected, .. } = &mut m.exits[1].kind {
+            *selected = Some(mref("m1"));
+        }
+        assert_eq!(gen(&m).selects, vec![("出口B".to_string(), "出口B/手动/a".to_string())]);
     }
 }

@@ -277,6 +277,7 @@ impl Inner {
             health: &health,
             secret: CHECK_SECRET,
             fetch_listeners: &fetch,
+            nics: &nics,
         });
         match self.check_yaml(&m.settings, &generated.yaml).await {
             Ok(()) => Ok(()),
@@ -414,6 +415,7 @@ impl Inner {
                     health: &health,
                     secret: &run.secret,
                     fetch_listeners: &fetch,
+                    nics: &nics,
                 });
                 let plan = generated.plan.clone();
                 let CoreRun { handle, applier, secret, pid, .. } = run;
