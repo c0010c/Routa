@@ -235,6 +235,14 @@ describe("Overview", () => {
     expect(await screen.findByRole("dialog")).toHaveTextContent("新建出口");
   });
 
+  it("places the getting-started card below the core status card", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue({ ...model, listeners: [] });
+    renderOverview();
+    const guide = await screen.findByText("开始使用：三步让一个端口能上网");
+    const core = screen.getByText("内核运行中");
+    expect(core.compareDocumentPosition(guide) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("shows restart and stop while running", async () => {
     renderOverview();
     expect(await screen.findByText("内核运行中")).toBeInTheDocument();

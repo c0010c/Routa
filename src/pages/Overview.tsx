@@ -253,6 +253,7 @@ export function Overview() {
           ))}
         </Alert>
       )}
+      <CoreStatusCard core={s.core} controllerPort={m.settings.controller_port} />
       {needsGettingStarted(m) && (
         <GettingStarted
           model={m}
@@ -260,7 +261,6 @@ export function Overview() {
           onNewListener={() => setCreating(newListener(m.listeners))}
         />
       )}
-      <CoreStatusCard core={s.core} controllerPort={m.settings.controller_port} />
       <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 1.5 }}>
         <StatCard
           label="上传速率"

@@ -112,7 +112,7 @@ export function Exits() {
                         <RowActions
                           label={e.name}
                           items={[
-                            { label: "测速", onClick: () => test.mutate([e.name]) },
+                            { label: "测速", onClick: () => test.mutate([e.name]), disabled: test.isPending },
                             { label: "编辑", onClick: () => setEditing(e) },
                             { label: "删除", onClick: () => setDeleting(e), danger: true },
                           ]}

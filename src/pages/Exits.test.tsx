@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { Model, RuntimeStatus } from "../bindings";
 
 vi.mock("../bindings", () => ({
-  commands: { getModel: vi.fn(), getStatus: vi.fn() },
+  commands: { getModel: vi.fn(), getStatus: vi.fn(), testDelays: vi.fn(() => new Promise(() => {})) },
 }));
 
 import { commands } from "../bindings";
@@ -61,5 +61,14 @@ describe("Exits", () => {
     fireEvent.click(screen.getByRole("button", { name: "操作 直连" }));
     expect(screen.getByRole("menuitem", { name: "编辑 直连" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "删除 直连" })).toBeInTheDocument();
+  });
+
+  it("disables 测速 while a delay test is running", async () => {
+    renderExits(model);
+    fireEvent.click(await screen.findByRole("button", { name: "操作 直连" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "测速 直连" }));
+    await waitFor(() => expect(commands.testDelays).toHaveBeenCalledWith(["直连"]));
+    fireEvent.click(screen.getByRole("button", { name: "操作 直连" }));
+    expect(screen.getByRole("menuitem", { name: "测速 直连" })).toHaveAttribute("aria-disabled", "true");
   });
 });
