@@ -6,6 +6,7 @@ export interface RowAction {
   label: string;
   onClick: () => void;
   danger?: boolean;
+  disabled?: boolean;
 }
 
 /** A row's secondary actions behind a ··· button. Item names read "<action> <row label>". */
@@ -21,6 +22,7 @@ export function RowActions({ label, items }: { label: string; items: RowAction[]
           <MenuItem
             key={it.label}
             aria-label={`${it.label} ${label}`}
+            disabled={it.disabled}
             sx={it.danger ? { color: "error.main" } : undefined}
             onClick={() => {
               setAnchor(null);

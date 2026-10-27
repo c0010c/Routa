@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import type { Model, RuntimeStatus } from "../bindings";
 
 vi.mock("../bindings", () => ({
@@ -71,5 +72,35 @@ describe("Listeners", () => {
       </QueryClientProvider>,
     );
     expect(await screen.findByText("未接出口")).toBeInTheDocument();
+  });
+
+  function renderList(m: Model) {
+    vi.mocked(commands.getModel).mockResolvedValue(m);
+    vi.mocked(commands.getStatus).mockResolvedValue(status);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ApplyResultProvider>
+          <MemoryRouter>
+            <Listeners />
+          </MemoryRouter>
+        </ApplyResultProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("shows an empty state instead of an empty table", async () => {
+    renderList({ ...model, listeners: [] });
+    expect(await screen.findByText("还没有监听器")).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader")).toBeNull();
+    expect(screen.getByRole("link", { name: "回概览页按步骤开始 →" })).toBeInTheDocument();
+  });
+
+  it("keeps the enable switch inline and edit/delete in the row menu", async () => {
+    renderList(model);
+    expect(await screen.findByRole("switch", { name: "启用 下载" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "操作 下载" }));
+    expect(screen.getByRole("menuitem", { name: "编辑 下载" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "删除 下载" })).toBeInTheDocument();
   });
 });

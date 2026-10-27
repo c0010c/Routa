@@ -1,5 +1,5 @@
+import InputOutlined from "@mui/icons-material/InputOutlined";
 import {
-  Box,
   Button,
   Link,
   Paper,
@@ -18,6 +18,8 @@ import { Link as RouterLink } from "react-router-dom";
 import { useDeleteListener, useModel, useSaveListener, useStatus } from "../api/client";
 import type { Listener } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { EmptyState } from "../components/EmptyState";
+import { RowActions } from "../components/RowActions";
 import { ListenerStatusChip } from "../components/StatusChips";
 import { listenerNotEffective } from "../lib/format";
 import { ListenerDialog, newListener } from "./ListenerDialog";
@@ -45,59 +47,61 @@ export function Listeners() {
           新建监听器
         </Button>
       </Stack>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              {["名称", "端口", "类型", "认证", "出口", "状态", "启用", "操作"].map((h) => (
-                <TableCell key={h}>{h}</TableCell>
-              ))}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {m.listeners.map((l) => {
-              const ls = s.health.listeners[l.id];
-              return (
-                <TableRow key={l.id}>
-                  <TableCell>{l.name}</TableCell>
-                  <TableCell>{l.port}</TableCell>
-                  <TableCell>{TYPE_TEXT[l.listener_type]}</TableCell>
-                  <TableCell>{l.auth ? l.auth.username : "无"}</TableCell>
-                  <TableCell>{m.exits.find((e) => e.id === l.exit)?.name ?? "未接出口"}</TableCell>
-                  <TableCell>{ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={listenerNotEffective(s, l.id)} /> : "—"}</TableCell>
-                  <TableCell>
-                    <Switch
-                      checked={l.user_enabled}
-                      slotProps={{ input: { "aria-label": `启用 ${l.name}` } }}
-                      onChange={(e) => save.mutate({ ...l, user_enabled: e.target.checked })}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Button size="small" aria-label={`编辑 ${l.name}`} onClick={() => setEditing(l)}>
-                      编辑
-                    </Button>
-                    <Button size="small" color="error" aria-label={`删除 ${l.name}`} onClick={() => setDeleting(l)}>
-                      删除
-                    </Button>
-                  </TableCell>
+      {m.listeners.length === 0 ? (
+        <EmptyState
+          icon={<InputOutlined />}
+          title="还没有监听器"
+          description="监听器是本地代理端口。新建后去概览页给它接出口。"
+          action={
+            <Link component={RouterLink} to="/">
+              回概览页按步骤开始 →
+            </Link>
+          }
+        />
+      ) : (
+          <TableContainer component={Paper}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  {["名称", "端口", "类型", "认证", "出口", "状态", "启用", ""].map((h) => (
+                    <TableCell key={h}>{h}</TableCell>
+                  ))}
                 </TableRow>
-              );
-            })}
-            {m.listeners.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={8} sx={{ textAlign: "center", color: "text.secondary", py: 3 }}>
-                  监听器是本地代理端口。新建后去概览页给它接出口。
-                  <Box sx={{ mt: 1 }}>
-                    <Link component={RouterLink} to="/">
-                      回概览页按步骤开始 →
-                    </Link>
-                  </Box>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              </TableHead>
+              <TableBody>
+                {m.listeners.map((l) => {
+                  const ls = s.health.listeners[l.id];
+                  return (
+                    <TableRow key={l.id}>
+                      <TableCell>{l.name}</TableCell>
+                      <TableCell>{l.port}</TableCell>
+                      <TableCell>{TYPE_TEXT[l.listener_type]}</TableCell>
+                      <TableCell>{l.auth ? l.auth.username : "无"}</TableCell>
+                      <TableCell>{m.exits.find((e) => e.id === l.exit)?.name ?? "未接出口"}</TableCell>
+                      <TableCell>{ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={listenerNotEffective(s, l.id)} /> : "—"}</TableCell>
+                      <TableCell>
+                        <Switch
+                          checked={l.user_enabled}
+                          slotProps={{ input: { "aria-label": `启用 ${l.name}` } }}
+                          onChange={(e) => save.mutate({ ...l, user_enabled: e.target.checked })}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <RowActions
+                          label={l.name}
+                          items={[
+                            { label: "编辑", onClick: () => setEditing(l) },
+                            { label: "删除", onClick: () => setDeleting(l), danger: true },
+                          ]}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+      )}
       {editing && <ListenerDialog key={editing.id} listener={editing} onClose={() => setEditing(null)} />}
       {deleting && (
         <ConfirmDeleteDialog

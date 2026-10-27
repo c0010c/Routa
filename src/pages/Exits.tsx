@@ -1,5 +1,5 @@
+import AltRouteOutlined from "@mui/icons-material/AltRouteOutlined";
 import {
-  Box,
   Button,
   Link,
   Paper,
@@ -18,6 +18,9 @@ import { useDeleteExit, useModel, useStatus, useTestDelays } from "../api/client
 import type { Exit, Model } from "../bindings";
 import { isGroupMember, nodeLabel } from "../lib/refs";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { DelayText } from "../components/DelayText";
+import { EmptyState } from "../components/EmptyState";
+import { RowActions } from "../components/RowActions";
 import { ExitStatusChip } from "../components/StatusChips";
 import { ExitDialog, newExit } from "./ExitDialog";
 
@@ -63,68 +66,65 @@ export function Exits() {
           新建出口
         </Button>
       </Stack>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              {["名称", "类型", "节点/成员", "网卡", "延迟", "使用它的监听器", "状态", "操作"].map((h) => (
-                <TableCell key={h}>{h}</TableCell>
-              ))}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {m.exits.map((e) => {
-              const h = s.health.exits[e.id];
-              const d = s.delays[e.name];
-              const iface = e.interface
-                ? (s.interfaces.find((i) => i.guid === e.interface)?.friendly_name ??
-                  h?.interface?.friendly_name ??
-                  "（已移除的网卡）")
-                : "系统默认";
-              const users = m.listeners.filter((l) => l.exit === e.id).map((l) => l.name);
-              return (
-                <TableRow key={e.id}>
-                  <TableCell>{e.name}</TableCell>
-                  <TableCell>{kindText(e)}</TableCell>
-                  <TableCell>{nodeOrMembers(e, m)}</TableCell>
-                  <TableCell>{iface}</TableCell>
-                  <TableCell>{!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}</TableCell>
-                  <TableCell>{users.length > 0 ? users.join("、") : "—"}</TableCell>
-                  <TableCell>{h ? <ExitStatusChip status={h.status} /> : "—"}</TableCell>
-                  <TableCell>
-                    <Button
-                      size="small"
-                      aria-label={`测速 ${e.name}`}
-                      disabled={test.isPending}
-                      onClick={() => test.mutate([e.name])}
-                    >
-                      测速
-                    </Button>
-                    <Button size="small" aria-label={`编辑 ${e.name}`} onClick={() => setEditing(e)}>
-                      编辑
-                    </Button>
-                    <Button size="small" color="error" aria-label={`删除 ${e.name}`} onClick={() => setDeleting(e)}>
-                      删除
-                    </Button>
-                  </TableCell>
+      {m.exits.length === 0 ? (
+        <EmptyState
+          icon={<AltRouteOutlined />}
+          title="还没有出口"
+          description="出口决定流量从哪出去。建好后在概览页把监听器接上它。"
+          action={
+            <Link component={RouterLink} to="/">
+              回概览页按步骤开始 →
+            </Link>
+          }
+        />
+      ) : (
+          <TableContainer component={Paper}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  {["名称", "类型", "节点/成员", "网卡", "延迟", "使用它的监听器", "状态", ""].map((h) => (
+                    <TableCell key={h}>{h}</TableCell>
+                  ))}
                 </TableRow>
-              );
-            })}
-            {m.exits.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={8} sx={{ textAlign: "center", color: "text.secondary", py: 3 }}>
-                  出口决定流量从哪出去。建好后在概览页把监听器接上它。
-                  <Box sx={{ mt: 1 }}>
-                    <Link component={RouterLink} to="/">
-                      回概览页按步骤开始 →
-                    </Link>
-                  </Box>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              </TableHead>
+              <TableBody>
+                {m.exits.map((e) => {
+                  const h = s.health.exits[e.id];
+                  const d = s.delays[e.name];
+                  const iface = e.interface
+                    ? (s.interfaces.find((i) => i.guid === e.interface)?.friendly_name ??
+                      h?.interface?.friendly_name ??
+                      "（已移除的网卡）")
+                    : "系统默认";
+                  const users = m.listeners.filter((l) => l.exit === e.id).map((l) => l.name);
+                  return (
+                    <TableRow key={e.id}>
+                      <TableCell>{e.name}</TableCell>
+                      <TableCell>{kindText(e)}</TableCell>
+                      <TableCell>{nodeOrMembers(e, m)}</TableCell>
+                      <TableCell>{iface}</TableCell>
+                      <TableCell>
+                        <DelayText ms={d?.ms} />
+                      </TableCell>
+                      <TableCell>{users.length > 0 ? users.join("、") : "—"}</TableCell>
+                      <TableCell>{h ? <ExitStatusChip status={h.status} /> : "—"}</TableCell>
+                      <TableCell>
+                        <RowActions
+                          label={e.name}
+                          items={[
+                            { label: "测速", onClick: () => test.mutate([e.name]) },
+                            { label: "编辑", onClick: () => setEditing(e) },
+                            { label: "删除", onClick: () => setDeleting(e), danger: true },
+                          ]}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+      )}
       {editing && <ExitDialog key={editing.id} exit={editing} onClose={() => setEditing(null)} />}
       {deleting && (
         <ConfirmDeleteDialog

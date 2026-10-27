@@ -154,7 +154,8 @@ describe("Tailscale page", () => {
 
   it("keeps the hostname when an existing instance is renamed", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑 家里" }));
+    fireEvent.click(await screen.findByRole("button", { name: "操作 家里" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "编辑 家里" }));
     await screen.findByText("编辑 Tailscale 实例");
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "办公室" } });
     expect(screen.getByLabelText("hostname")).toHaveValue("mihomo-家里");
@@ -182,8 +183,15 @@ describe("Tailscale page", () => {
   it("shows the DanglingRef error when deleting a referenced instance", async () => {
     renderPage();
     vi.mocked(commands.deleteManualNode).mockResolvedValue({ status: "error", error: [{ DanglingRef: { what: "出口「出口甲」" } }] });
-    fireEvent.click(await screen.findByRole("button", { name: "删除 家里" }));
+    fireEvent.click(await screen.findByRole("button", { name: "操作 家里" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "删除 家里" }));
     fireEvent.click(await screen.findByRole("button", { name: "删除" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("出口甲");
+  });
+
+  it("shows an empty state without instances", async () => {
+    renderPage({ ...model, manual_nodes: [], exits: [] });
+    expect(await screen.findByText("还没有 Tailscale 实例")).toBeInTheDocument();
+    expect(screen.getByText("点击「新建实例」添加。")).toBeInTheDocument();
   });
 });

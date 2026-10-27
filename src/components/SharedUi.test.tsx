@@ -37,6 +37,14 @@ describe("RowActions", () => {
   });
 });
 
+describe("RowActions disabled item", () => {
+  it("renders a disabled item that cannot be chosen", () => {
+    render(<RowActions label="机场A" items={[{ label: "立即更新", onClick: vi.fn(), disabled: true }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "操作 机场A" }));
+    expect(screen.getByRole("menuitem", { name: "立即更新 机场A" })).toHaveAttribute("aria-disabled", "true");
+  });
+});
+
 describe("DelayText", () => {
   const colorOf = (text: string) => getComputedStyle(screen.getByText(text)).color;
   const renderDelay = (ms: number | null | undefined) =>

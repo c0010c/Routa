@@ -78,6 +78,26 @@ function renderNodes(st: RuntimeStatus = status) {
 }
 
 describe("Nodes", () => {
+  it("uses outlined buttons for secondary actions", async () => {
+    renderNodes();
+    const nav = await screen.findByRole("navigation", { name: "节点分组" });
+    fireEvent.click(within(nav).getByText("未分组"));
+    expect(screen.getByRole("button", { name: "全部测速" })).toHaveClass("MuiButton-outlined");
+    expect(screen.getByRole("button", { name: "粘贴 YAML" })).toHaveClass("MuiButton-outlined");
+    expect(screen.getByRole("button", { name: "新建节点" })).toHaveClass("MuiButton-contained");
+  });
+
+  it("puts node and subscription edit/delete in row menus", async () => {
+    renderNodes();
+    const nav = await screen.findByRole("navigation", { name: "节点分组" });
+    fireEvent.click(within(nav).getByRole("button", { name: "操作 机场A" }));
+    expect(screen.getByRole("menuitem", { name: "编辑 机场A" })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.click(within(nav).getByText("未分组"));
+    fireEvent.click(screen.getByRole("button", { name: "操作 家用 socks" }));
+    expect(screen.getByRole("menuitem", { name: "删除 家用 socks" })).toBeInTheDocument();
+  });
+
   it("shows the failure reason on the card and keeps the old nodes listed", async () => {
     renderNodes();
     expect(await screen.findByText(/订阅返回了 HTML 页面/)).toBeInTheDocument();

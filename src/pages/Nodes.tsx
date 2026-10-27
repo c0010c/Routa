@@ -1,3 +1,4 @@
+import HubOutlined from "@mui/icons-material/HubOutlined";
 import {
   Alert,
   Box,
@@ -33,6 +34,9 @@ import {
 import type { DelayBook, ManualNode, Model, NodeGroup, Subscription } from "../bindings";
 import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { DelayText } from "../components/DelayText";
+import { EmptyState } from "../components/EmptyState";
+import { RowActions } from "../components/RowActions";
 import { MANUAL_PREFIX } from "../lib/refs";
 import { ManualNodeDialog, newManualNode, type ManualNodeMode } from "./ManualNodeDialog";
 import { NodeGroupDialog, newNodeGroup } from "./NodeGroupDialog";
@@ -167,7 +171,7 @@ export function Nodes() {
           <List dense disablePadding>
             <ListSubheader sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               订阅
-              <Button size="small" onClick={() => setEditingSub(newSubscription())}>
+              <Button size="small" variant="outlined" onClick={() => setEditingSub(newSubscription())}>
                 新建订阅
               </Button>
             </ListSubheader>
@@ -180,12 +184,26 @@ export function Nodes() {
               const r = s.last_result;
               return (
                 <Box key={s.id} sx={{ pb: 1 }}>
-                  <ListItemButton selected={sameSel(sel, { kind: "sub", id: s.id })} onClick={() => setPicked({ kind: "sub", id: s.id })}>
-                    <ListItemText
-                      primary={s.name}
-                      secondary={`${s.nodes.length} 个节点 · 最后更新：${formatTime(s.last_updated)} · 自动更新：${formatInterval(s.update_interval_mins)}`}
+                  <Stack direction="row" sx={{ alignItems: "center", pr: 0.5 }}>
+                    <ListItemButton
+                      selected={sameSel(sel, { kind: "sub", id: s.id })}
+                      onClick={() => setPicked({ kind: "sub", id: s.id })}
+                      sx={{ flex: 1, minWidth: 0 }}
+                    >
+                      <ListItemText
+                        primary={s.name}
+                        secondary={`${s.nodes.length} 个节点 · 最后更新：${formatTime(s.last_updated)} · 自动更新：${formatInterval(s.update_interval_mins)}`}
+                      />
+                    </ListItemButton>
+                    <RowActions
+                      label={s.name}
+                      items={[
+                        { label: "立即更新", onClick: () => void doRefresh(s), disabled: refreshingId === s.id },
+                        { label: "编辑", onClick: () => setEditingSub(s) },
+                        { label: "删除", onClick: () => setDeletingSub(s), danger: true },
+                      ]}
                     />
-                  </ListItemButton>
+                  </Stack>
                   {r && "Ok" in r && (
                     <Typography variant="body2" sx={{ px: 2 }}>
                       上次更新成功，共 {r.Ok.node_count} 个节点
@@ -196,22 +214,6 @@ export function Nodes() {
                       更新失败：{r.Failed.reason}
                     </Alert>
                   )}
-                  <Stack direction="row" sx={{ px: 1 }}>
-                    <Button
-                      size="small"
-                      aria-label={`立即更新 ${s.name}`}
-                      disabled={refreshingId === s.id}
-                      onClick={() => void doRefresh(s)}
-                    >
-                      立即更新
-                    </Button>
-                    <Button size="small" aria-label={`编辑 ${s.name}`} onClick={() => setEditingSub(s)}>
-                      编辑
-                    </Button>
-                    <Button size="small" color="error" aria-label={`删除 ${s.name}`} onClick={() => setDeletingSub(s)}>
-                      删除
-                    </Button>
-                  </Stack>
                 </Box>
               );
             })}
@@ -222,16 +224,21 @@ export function Nodes() {
             </ListItemButton>
             {m.node_groups.map((g) => (
               <Box key={g.id}>
-                <ListItemButton selected={sameSel(sel, { kind: "group", id: g.id })} onClick={() => setPicked({ kind: "group", id: g.id })}>
-                  <ListItemText primary={g.name} secondary={`${inGroup(g.id).length} 个节点`} />
-                </ListItemButton>
-                <Stack direction="row" sx={{ px: 1 }}>
-                  <Button size="small" aria-label={`改名 ${g.name}`} onClick={() => setEditingGroup(g)}>
-                    改名
-                  </Button>
-                  <Button size="small" color="error" aria-label={`删除组 ${g.name}`} onClick={() => setDeletingGroup(g)}>
-                    删除
-                  </Button>
+                <Stack direction="row" sx={{ alignItems: "center", pr: 0.5 }}>
+                  <ListItemButton
+                    selected={sameSel(sel, { kind: "group", id: g.id })}
+                    onClick={() => setPicked({ kind: "group", id: g.id })}
+                    sx={{ flex: 1, minWidth: 0 }}
+                  >
+                    <ListItemText primary={g.name} secondary={`${inGroup(g.id).length} 个节点`} />
+                  </ListItemButton>
+                  <RowActions
+                    label={`组 ${g.name}`}
+                    items={[
+                      { label: "改名", onClick: () => setEditingGroup(g) },
+                      { label: "删除", onClick: () => setDeletingGroup(g), danger: true },
+                    ]}
+                  />
                 </Stack>
               </Box>
             ))}
@@ -249,14 +256,18 @@ export function Nodes() {
                 <Button variant="contained" onClick={() => setEditingNode({ node: newManualNode(newNodeGroups), mode: "form" })}>
                   新建节点
                 </Button>
-                <Button onClick={() => setEditingNode({ node: newManualNode(newNodeGroups), mode: "yaml" })}>粘贴 YAML</Button>
+                <Button variant="outlined" onClick={() => setEditingNode({ node: newManualNode(newNodeGroups), mode: "yaml" })}>
+                  粘贴 YAML
+                </Button>
               </Stack>
             )}
           </Stack>
           {rows.length === 0 ? (
-            <Typography color="text.secondary">
-              {sel.kind === "sub" ? "这个订阅还没有节点。" : "还没有节点，点击「新建节点」或「粘贴 YAML」添加。"}
-            </Typography>
+            <EmptyState
+              icon={<HubOutlined />}
+              title={sel.kind === "sub" ? "这个订阅还没有节点" : "还没有节点"}
+              description={sel.kind === "sub" ? undefined : "点击「新建节点」或「粘贴 YAML」添加。"}
+            />
           ) : (
             <NodeTable
               label={`${title} 的节点`}
@@ -315,13 +326,6 @@ export function visibleRows(rows: Row[], delays: DelayBook, query: string, byDel
   return [...out].sort((a, b) => ms(a) - ms(b));
 }
 
-function delayColor(ms: number | null): string {
-  if (ms === null) return "error.main";
-  if (ms < 300) return "success.main";
-  if (ms < 800) return "warning.main";
-  return "error.main";
-}
-
 const ellipsis = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
 
 function NodeTable({
@@ -345,7 +349,7 @@ function NodeTable({
   const [byDelay, setByDelay] = useState(false);
   const shown = visibleRows(rows, delays, query, byDelay);
   // Manual rows carry edit/delete (or the Tailscale link); subscription rows only 测速.
-  const actionsWidth = rows.some((r) => r.manual) ? 220 : 80;
+  const actionsWidth = rows.some((r) => r.manual) ? 200 : 80;
   return (
     <Stack spacing={1}>
       <TextField
@@ -368,7 +372,7 @@ function NodeTable({
                   延迟
                 </TableSortLabel>
               </TableCell>
-              <TableCell sx={{ width: actionsWidth }}>操作</TableCell>
+              <TableCell sx={{ width: actionsWidth }} />
             </TableRow>
           </TableHead>
           <TableBody>
@@ -398,8 +402,8 @@ function NodeTable({
                   <TableCell sx={ellipsis} title={r.server}>
                     {r.server}
                   </TableCell>
-                  <TableCell sx={{ whiteSpace: "nowrap", color: d ? delayColor(d.ms) : undefined }}>
-                    {!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
+                    <DelayText ms={d?.ms} />
                   </TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>
                     <Button size="small" aria-label={`测速 ${r.name}`} disabled={testing} onClick={() => onTest(r.proxyName)}>
@@ -411,14 +415,13 @@ function NodeTable({
                       </Button>
                     )}
                     {n && "Proxy" in n.kind && (
-                      <>
-                        <Button size="small" aria-label={`编辑 ${r.name}`} onClick={() => onEdit(n)}>
-                          编辑
-                        </Button>
-                        <Button size="small" color="error" aria-label={`删除 ${r.name}`} onClick={() => onDelete(n)}>
-                          删除
-                        </Button>
-                      </>
+                      <RowActions
+                        label={r.name}
+                        items={[
+                          { label: "编辑", onClick: () => onEdit(n) },
+                          { label: "删除", onClick: () => onDelete(n), danger: true },
+                        ]}
+                      />
                     )}
                   </TableCell>
                 </TableRow>
