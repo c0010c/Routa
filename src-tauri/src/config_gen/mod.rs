@@ -110,8 +110,10 @@ fn proxy_copy(node: &Node, name: &str, interface: Option<&str>) -> Option<Value>
 }
 
 fn find_node<'a>(model: &'a Model, r: &NodeRef) -> Option<(&'a Subscription, &'a Node)> {
-    let sub = model.subscriptions.iter().find(|x| x.id == r.subscription_id)?;
-    let node = sub.nodes.iter().find(|n| n.name == r.name)?;
+    // 过渡写法（Task 3 替换）：手动节点暂按“找不到”处理。
+    let NodeRef::Subscription { subscription_id, name } = r else { return None };
+    let sub = model.subscriptions.iter().find(|x| &x.id == subscription_id)?;
+    let node = sub.nodes.iter().find(|n| &n.name == name)?;
     Some((sub, node))
 }
 
@@ -365,7 +367,7 @@ mod tests {
         }
     }
     fn nref(n: &str) -> NodeRef {
-        NodeRef { subscription_id: SubscriptionId("s1".into()), name: n.into() }
+        NodeRef::Subscription { subscription_id: SubscriptionId("s1".into()), name: n.into() }
     }
     fn base() -> Model {
         let sub = Subscription {
@@ -406,7 +408,7 @@ mod tests {
                     "出口B",
                     ExitKind::Group {
                         strategy: GroupStrategy::UrlTest,
-                        members: vec![nref("HK 01"), nref("JP 01")],
+                        members: [nref("HK 01"), nref("JP 01")].map(ExitMember::Node).into(),
                         selected: None,
                     },
                     "{G2}",
@@ -419,6 +421,8 @@ mod tests {
                 lis("lc", "入口C", ListenerType::Socks, "0.0.0.0", 7893, None, "ec"),
             ],
             settings: Settings::default(),
+            manual_nodes: vec![],
+            node_groups: vec![],
         }
     }
     fn gen_with(m: &Model, nics: &[NetInterface], fetch: &[(ExitId, u16)]) -> Generated {
@@ -495,7 +499,7 @@ mod tests {
         m.exits[0].kind = ExitKind::Node { node: nref(weird) };
         m.exits[1].kind = ExitKind::Group {
             strategy: GroupStrategy::Fallback,
-            members: vec![nref(weird)],
+            members: vec![ExitMember::Node(nref(weird))],
             selected: None,
         };
         let mut n = nics();
@@ -610,7 +614,7 @@ mod tests {
         let mut m = base();
         m.exits[1].kind = ExitKind::Group {
             strategy: GroupStrategy::Fallback,
-            members: vec![nref("HK 01"), nref("JP 01")],
+            members: [nref("HK 01"), nref("JP 01")].map(ExitMember::Node).into(),
             selected: None,
         };
         assert_ne!(fp(&m), before, "a strategy change still counts");
@@ -667,7 +671,7 @@ mod tests {
         let mut m = base();
         m.exits[1].kind = ExitKind::Group {
             strategy: GroupStrategy::Select,
-            members: vec![nref("HK 01"), nref("JP 01")],
+            members: [nref("HK 01"), nref("JP 01")].map(ExitMember::Node).into(),
             selected: Some(nref("JP 01")),
         };
         let fetch = [(ExitId("eb".into()), 9100), (ExitId("zz".into()), 9101)];

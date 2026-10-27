@@ -89,7 +89,7 @@ pub mod ops {
                 return bad("出口不存在");
             };
             match &mut e.kind {
-                ExitKind::Group { members, selected, .. } if members.contains(&member) => {
+                ExitKind::Group { members, selected, .. } if members.contains(&ExitMember::Node(member.clone())) => {
                     *selected = Some(member);
                     Ok(())
                 }
@@ -326,7 +326,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let rt = runtime(&td);
         let sub_id = SubscriptionId::new();
-        let node = NodeRef { subscription_id: sub_id.clone(), name: "n1".into() };
+        let node = NodeRef::Subscription { subscription_id: sub_id.clone(), name: "n1".into() };
         let sub = Subscription {
             id: sub_id,
             name: "s".into(),
@@ -349,7 +349,7 @@ mod tests {
             name: "组".into(),
             kind: ExitKind::Group {
                 strategy: GroupStrategy::Select,
-                members: vec![node.clone()],
+                members: vec![ExitMember::Node(node.clone())],
                 selected: None,
             },
             interface: None,
@@ -412,7 +412,7 @@ mod tests {
         let rt = runtime(&td);
         let direct = direct_exit("直连");
         ops::save_exit(&rt, direct.clone()).await.unwrap();
-        let node = NodeRef { subscription_id: SubscriptionId::new(), name: "n".into() };
+        let node = NodeRef::Subscription { subscription_id: SubscriptionId::new(), name: "n".into() };
         let missing = ops::select_group_member(&rt, ExitId::new(), node.clone()).await;
         assert!(matches!(missing.unwrap_err()[0], ValidationError::DanglingRef { .. }));
         let not_group = ops::select_group_member(&rt, direct.id, node.clone()).await;

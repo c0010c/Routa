@@ -107,7 +107,7 @@ pub async fn update_subscription(
 pub fn record_result(sub: &mut Subscription, result: Result<Vec<Node>, FetchError>, now: i64) {
     match result {
         Ok(nodes) => {
-            sub.last_result = Some(FetchResult::Ok { node_count: nodes.len() as u32 });
+            sub.last_result = Some(FetchResult::Ok { node_count: nodes.len() as u32, skipped_tailscale: 0 });
             sub.nodes = nodes;
         }
         Err(e) => {
@@ -209,7 +209,7 @@ mod tests {
         let r = update_subscription(&sb, None).await;
         record_result(&mut sb, r, 1000);
         assert_eq!(sb.nodes.len(), 2);
-        assert_eq!(sb.last_result, Some(FetchResult::Ok { node_count: 2 }));
+        assert_eq!(sb.last_result, Some(FetchResult::Ok { node_count: 2, skipped_tailscale: 0 }));
         assert_eq!(sb.last_updated, Some(1000));
     }
 
@@ -314,7 +314,7 @@ mod tests {
                 s
             })
             .collect();
-        Model { subscriptions, exits: vec![], listeners: vec![], settings: Default::default() }
+        Model { subscriptions, ..Default::default() }
     }
 
     #[test]

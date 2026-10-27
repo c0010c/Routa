@@ -123,6 +123,7 @@ async fn real_core_two_listeners_direct_exit() {
         exits: vec![exit],
         listeners: vec![l1, l2],
         settings: Settings { controller_port: ctrl, ..Settings::default() },
+        ..Model::default()
     };
     store.save_model(&model).unwrap();
 

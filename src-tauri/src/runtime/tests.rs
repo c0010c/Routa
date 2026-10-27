@@ -455,7 +455,7 @@ async fn subscription_due_is_fetched_and_applied() {
     let sub_id = SubscriptionId("sub-1".into());
     let mut m = model_with_listener(false);
     m.exits[0].kind = ExitKind::Node {
-        node: NodeRef { subscription_id: sub_id.clone(), name: "a".into() },
+        node: NodeRef::Subscription { subscription_id: sub_id.clone(), name: "a".into() },
     };
     m.subscriptions.push(Subscription {
         id: sub_id.clone(),
@@ -475,7 +475,7 @@ async fn subscription_due_is_fetched_and_applied() {
 
     let model = h.rt.model();
     assert_eq!(model.subscriptions[0].nodes.len(), 1);
-    assert_eq!(model.subscriptions[0].last_result, Some(FetchResult::Ok { node_count: 1 }));
+    assert_eq!(model.subscriptions[0].last_result, Some(FetchResult::Ok { node_count: 1, skipped_tailscale: 0 }));
     assert!(model.subscriptions[0].last_updated.is_some());
     let saved = Store::open(h.data.clone()).unwrap().load_model().unwrap();
     assert_eq!(saved, model);

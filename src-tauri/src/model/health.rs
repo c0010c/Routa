@@ -40,10 +40,12 @@ pub struct Health {
 }
 
 fn node_resolves(model: &Model, r: &NodeRef) -> bool {
+    // 过渡写法（Task 3 替换）：手动节点暂按“找不到”处理。
+    let NodeRef::Subscription { subscription_id, name } = r else { return false };
     model
         .subscriptions
         .iter()
-        .any(|s| s.id == r.subscription_id && s.nodes.iter().any(|n| n.name == r.name))
+        .any(|s| &s.id == subscription_id && s.nodes.iter().any(|n| &n.name == name))
 }
 
 fn exit_health(model: &Model, exit: &Exit, nics: &[NetInterface]) -> ExitHealth {
@@ -56,7 +58,14 @@ fn exit_health(model: &Model, exit: &Exit, nics: &[NetInterface]) -> ExitHealth 
             }
         }
         ExitKind::Group { members, .. } => {
-            members.iter().cloned().partition(|m| node_resolves(model, m))
+            // 过渡写法（Task 5 替换）：暂时只处理单节点成员，整组成员忽略。
+            members
+                .iter()
+                .filter_map(|m| match m {
+                    ExitMember::Node(r) => Some(r.clone()),
+                    ExitMember::Group { .. } => None,
+                })
+                .partition(|m| node_resolves(model, m))
         }
         ExitKind::Direct => (vec![], vec![]),
     };
@@ -139,7 +148,7 @@ mod tests {
     }
 
     fn nref(sub: &str, name: &str) -> NodeRef {
-        NodeRef { subscription_id: SubscriptionId(sub.into()), name: name.into() }
+        NodeRef::Subscription { subscription_id: SubscriptionId(sub.into()), name: name.into() }
     }
 
     fn exit(id: &str, kind: ExitKind, interface: Option<&str>) -> Exit {
@@ -200,7 +209,7 @@ mod tests {
             "e",
             ExitKind::Group {
                 strategy: GroupStrategy::Fallback,
-                members: vec![nref("s", "a"), nref("s", "gone"), nref("s", "c")],
+                members: [nref("s", "a"), nref("s", "gone"), nref("s", "c")].map(ExitMember::Node).into(),
                 selected: None,
             },
             None,
@@ -220,7 +229,7 @@ mod tests {
             "e",
             ExitKind::Group {
                 strategy: GroupStrategy::Select,
-                members: vec![nref("s", "x"), nref("zz", "a")],
+                members: [nref("s", "x"), nref("zz", "a")].map(ExitMember::Node).into(),
                 selected: None,
             },
             None,

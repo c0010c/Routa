@@ -23,16 +23,36 @@ macro_rules! id_type {
 id_type!(SubscriptionId);
 id_type!(ExitId);
 id_type!(ListenerId);
+id_type!(ManualNodeId);
+id_type!(NodeGroupId);
 
 /// Windows 网卡标识（GUID）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
 #[serde(transparent)]
 pub struct InterfaceGuid(pub String);
 
+/// 指向一个节点。untagged：旧 JSON `{subscription_id, name}` 直接落到
+/// `Subscription` 变体，存回去的形状也不变。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
-pub struct NodeRef {
-    pub subscription_id: SubscriptionId,
-    pub name: String,
+#[serde(untagged)]
+pub enum NodeRef {
+    Subscription { subscription_id: SubscriptionId, name: String },
+    Manual { manual_id: ManualNodeId },
+}
+
+/// 指向一组节点：一个订阅的全部节点，或一个自定义节点组。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
+pub enum GroupRef {
+    Subscription(SubscriptionId),
+    Custom(NodeGroupId),
+}
+
+/// 出口组的成员：单个节点，或整组节点。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
+#[serde(untagged)]
+pub enum ExitMember {
+    Node(NodeRef),
+    Group { group: GroupRef },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
@@ -46,7 +66,12 @@ pub struct Node {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
 pub enum FetchResult {
-    Ok { node_count: u32 },
+    Ok {
+        node_count: u32,
+        /// 解析时丢弃的 `type: tailscale` 条目数
+        #[serde(default)]
+        skipped_tailscale: u32,
+    },
     Failed { reason: String },
 }
 
@@ -83,7 +108,7 @@ pub enum ExitKind {
     },
     Group {
         strategy: GroupStrategy,
-        members: Vec<NodeRef>,
+        members: Vec<ExitMember>,
         selected: Option<NodeRef>,
     },
     Direct,
@@ -188,6 +213,67 @@ impl Default for Settings {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+#[serde(default)]
+pub struct TailscaleOpts {
+    pub hostname: String,
+    pub exit_node: String,
+    pub ephemeral: bool,
+    pub udp: bool,
+    pub auth_key: Option<String>,
+    /// None = 走系统默认网卡
+    pub interface: Option<InterfaceGuid>,
+}
+
+impl TailscaleOpts {
+    pub fn defaults_for(name: &str) -> Self {
+        Self {
+            hostname: format!("mihomo-{name}"),
+            exit_node: "auto:any".to_string(),
+            ephemeral: false,
+            udp: true,
+            auth_key: None,
+            interface: None,
+        }
+    }
+}
+
+impl Default for TailscaleOpts {
+    fn default() -> Self {
+        Self::defaults_for("")
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+pub enum ManualNodeKind {
+    /// 原样的 mihomo proxy 映射
+    Proxy { raw: serde_json::Value },
+    Tailscale(TailscaleOpts),
+}
+
+impl Default for ManualNodeKind {
+    fn default() -> Self {
+        Self::Proxy { raw: serde_json::Value::Null }
+    }
+}
+
+/// 手动添加的节点。组成员关系存在节点上（`groups`）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, specta::Type)]
+#[serde(default)]
+pub struct ManualNode {
+    pub id: ManualNodeId,
+    pub name: String,
+    pub groups: Vec<NodeGroupId>,
+    pub kind: ManualNodeKind,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, specta::Type)]
+#[serde(default)]
+pub struct NodeGroup {
+    pub id: NodeGroupId,
+    pub name: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, specta::Type)]
 #[serde(default)]
 pub struct Model {
@@ -195,6 +281,8 @@ pub struct Model {
     pub exits: Vec<Exit>,
     pub listeners: Vec<Listener>,
     pub settings: Settings,
+    pub manual_nodes: Vec<ManualNode>,
+    pub node_groups: Vec<NodeGroup>,
 }
 
 #[cfg(test)]
@@ -236,15 +324,38 @@ mod tests {
     #[test]
     fn model_json_roundtrip() {
         let sub_id = SubscriptionId::new();
+        let group = NodeGroup { id: NodeGroupId::new(), name: "家用 🏠".into() };
+        let proxy_node = ManualNode {
+            id: ManualNodeId::new(),
+            name: "自建 🇯🇵".into(),
+            groups: vec![group.id.clone()],
+            kind: ManualNodeKind::Proxy {
+                raw: serde_json::json!({"name": "自建 🇯🇵", "type": "ss", "server": "5.6.7.8", "port": 8388}),
+            },
+        };
+        let ts_node = ManualNode {
+            id: ManualNodeId::new(),
+            name: "家里".into(),
+            groups: vec![],
+            kind: ManualNodeKind::Tailscale(TailscaleOpts {
+                auth_key: Some("tskey-x".into()),
+                interface: Some(InterfaceGuid("{def}".into())),
+                ..TailscaleOpts::defaults_for("家里")
+            }),
+        };
         let exit = Exit {
             id: ExitId::new(),
             name: "出口 🚀 \"q\": x".into(),
             kind: ExitKind::Group {
                 strategy: GroupStrategy::UrlTest,
-                members: vec![NodeRef {
-                    subscription_id: sub_id.clone(),
-                    name: "香港 🇭🇰 01".into(),
-                }],
+                members: vec![
+                    ExitMember::Node(NodeRef::Subscription {
+                        subscription_id: sub_id.clone(),
+                        name: "香港 🇭🇰 01".into(),
+                    }),
+                    ExitMember::Node(NodeRef::Manual { manual_id: proxy_node.id.clone() }),
+                    ExitMember::Group { group: GroupRef::Custom(group.id.clone()) },
+                ],
                 selected: None,
             },
             interface: Some(InterfaceGuid("{abc}".into())),
@@ -263,7 +374,7 @@ mod tests {
                 update_interval_mins: Some(1440),
                 fallback_exit: None,
                 last_updated: Some(1_700_000_000),
-                last_result: Some(FetchResult::Ok { node_count: 1 }),
+                last_result: Some(FetchResult::Ok { node_count: 1, skipped_tailscale: 2 }),
                 nodes: vec![Node {
                     name: "香港 🇭🇰 01".into(),
                     proxy_type: "ss".into(),
@@ -282,9 +393,51 @@ mod tests {
             ],
             listeners: vec![l],
             settings: Settings::default(),
+            manual_nodes: vec![proxy_node, ts_node],
+            node_groups: vec![group],
         };
         let json = serde_json::to_string(&m).unwrap();
         let back: Model = serde_json::from_str(&json).unwrap();
         assert_eq!(m, back);
+    }
+
+    #[test]
+    fn old_node_refs_load_as_subscription_refs() {
+        let json = r#"{"exits":[{"id":"e1","name":"g","kind":{"Group":{"strategy":"Select",
+            "members":[{"subscription_id":"s1","name":"HK"}],
+            "selected":{"subscription_id":"s1","name":"HK"}}}}]}"#;
+        let m: Model = serde_json::from_str(json).unwrap();
+        let hk = NodeRef::Subscription { subscription_id: SubscriptionId("s1".into()), name: "HK".into() };
+        let ExitKind::Group { members, selected, .. } = &m.exits[0].kind else { panic!() };
+        assert_eq!(members, &vec![ExitMember::Node(hk.clone())]);
+        assert_eq!(selected, &Some(hk));
+        // 存回去的结构与旧格式一致
+        let back = serde_json::to_value(&m.exits[0].kind).unwrap();
+        assert_eq!(back["Group"]["members"][0], serde_json::json!({"subscription_id":"s1","name":"HK"}));
+        assert!(m.manual_nodes.is_empty() && m.node_groups.is_empty());
+    }
+
+    #[test]
+    fn new_refs_roundtrip() {
+        let members = vec![
+            ExitMember::Node(NodeRef::Manual { manual_id: ManualNodeId("m1".into()) }),
+            ExitMember::Group { group: GroupRef::Subscription(SubscriptionId("s1".into())) },
+            ExitMember::Group { group: GroupRef::Custom(NodeGroupId("g1".into())) },
+        ];
+        let j = serde_json::to_string(&members).unwrap();
+        assert_eq!(serde_json::from_str::<Vec<ExitMember>>(&j).unwrap(), members);
+    }
+
+    #[test]
+    fn old_fetch_result_loads() {
+        let r: FetchResult = serde_json::from_str(r#"{"Ok":{"node_count":3}}"#).unwrap();
+        assert_eq!(r, FetchResult::Ok { node_count: 3, skipped_tailscale: 0 });
+    }
+
+    #[test]
+    fn tailscale_defaults() {
+        let t = TailscaleOpts::defaults_for("家里");
+        assert_eq!((t.hostname.as_str(), t.exit_node.as_str(), t.ephemeral, t.udp), ("mihomo-家里", "auto:any", false, true));
+        assert_eq!((t.auth_key, t.interface), (None, None));
     }
 }
