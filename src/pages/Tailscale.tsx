@@ -19,7 +19,10 @@ function referencingExits(model: Model, id: string): string[] {
   return model.exits
     .filter((e) => {
       if (typeof e.kind === "string") return false;
-      if ("Node" in e.kind) return "manual_id" in e.kind.Node && e.kind.Node.manual_id === id;
+      if ("Node" in e.kind) {
+        const r = e.kind.Node.node;
+        return "manual_id" in r && r.manual_id === id;
+      }
       return expandMembers(model, e.kind.Group.members).some((r) => "manual_id" in r && r.manual_id === id);
     })
     .map((e) => e.name);

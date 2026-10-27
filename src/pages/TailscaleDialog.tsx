@@ -45,6 +45,8 @@ export function TailscaleDialog({ node, onClose }: { node: ManualNode; onClose: 
   const [name, setName] = useState(node.name);
   const [hostname, setHostname] = useState(initial.hostname);
   // The hostname tracks the name until the user edits it by hand.
+  // Existing instances never change hostname implicitly: a new hostname registers as a new tailnet machine.
+  const isExisting = !!model.data?.manual_nodes.some((n) => n.id === node.id);
   const [hostTouched, setHostTouched] = useState(initial.hostname !== defaultHostname(node.name));
   const [exitNode, setExitNode] = useState(initial.exit_node);
   const [ephemeral, setEphemeral] = useState(initial.ephemeral);
@@ -56,7 +58,7 @@ export function TailscaleDialog({ node, onClose }: { node: ManualNode; onClose: 
 
   const changeName = (v: string) => {
     setName(v);
-    if (!hostTouched) setHostname(defaultHostname(v));
+    if (!hostTouched && !isExisting) setHostname(defaultHostname(v));
     setErrs((x) => ({ ...x, name: undefined }));
   };
   const toggleGroup = (id: string) => setGroups((gs) => (gs.includes(id) ? gs.filter((g) => g !== id) : [...gs, id]));
@@ -68,7 +70,7 @@ export function TailscaleDialog({ node, onClose }: { node: ManualNode; onClose: 
       exit_node: exitNode.trim(),
       ephemeral,
       udp,
-      auth_key: authKey === "" ? null : authKey,
+      auth_key: authKey.trim() === "" ? null : authKey.trim(),
       interface: iface,
     };
     try {

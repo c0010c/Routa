@@ -79,6 +79,28 @@ describe("Tailscale page", () => {
     expect(n.kind).toMatchObject({ Tailscale: { hostname: "mihomo-家里", exit_node: "auto:any" } });
   });
 
+  it("lists exits of kind Node as references", async () => {
+    renderPage({
+      ...model,
+      exits: [{ id: "e2", name: "单点出口", interface: null, kind: { Node: { node: { manual_id: "t1" } } } }],
+    });
+    const card = await screen.findByRole("article", { name: "家里" });
+    expect(within(card).getByText("被出口引用：单点出口")).toBeInTheDocument();
+  });
+
+  it("keeps the hostname when an existing instance is renamed", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 家里" }));
+    await screen.findByText("编辑 Tailscale 实例");
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "办公室" } });
+    expect(screen.getByLabelText("hostname")).toHaveValue("mihomo-家里");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(commands.saveManualNode).toHaveBeenCalled());
+    const n = vi.mocked(commands.saveManualNode).mock.calls[0][0];
+    expect(n.name).toBe("办公室");
+    expect(n.kind).toMatchObject({ Tailscale: { hostname: "mihomo-家里" } });
+  });
+
   it("stops following the name once hostname is edited by hand", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "新建实例" }));
