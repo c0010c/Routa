@@ -1,7 +1,7 @@
 //! Fail-closed apply pipeline: write config, hot-reload, verify listeners,
 //! cut stale connections. Safety rule: better disconnected than leaking.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,8 +26,9 @@ pub enum ApplyOutcome {
         cut: usize,
         /// Affected connections that could not be closed even after a retry.
         /// If the connection list itself was unavailable this is the number of
-        /// affected listeners (a lower bound, at least 1). The caller must
-        /// escalate (restart the core) when it is > 0.
+        /// affected listeners (a lower bound, at least 1). Summed over both
+        /// cut passes, so only "> 0" is meaningful: the caller must escalate
+        /// (restart the core) then.
         uncut: usize,
         failed_listeners: Vec<FailedListener>,
     },
@@ -98,6 +99,14 @@ impl Applier {
             last_plan: None,
             last_yaml: None,
         }
+    }
+
+    /// Ids of the listeners in the config mihomo currently holds.
+    pub fn effective_listeners(&self) -> Vec<ListenerId> {
+        self.last_plan
+            .iter()
+            .flat_map(|p| p.listeners.values().map(|l| l.id.clone()))
+            .collect()
     }
 
     /// `Err((rejected, message))`; `rejected` is true only when mihomo
@@ -187,6 +196,68 @@ impl Applier {
         }
     }
 
+    /// Polls port owners until none of `ports` belongs to `core_pid` (max 2 s);
+    /// returns the ports still held at the end.
+    async fn ports_still_held(&self, ports: &[u16], core_pid: u32) -> Vec<u16> {
+        if ports.is_empty() {
+            return Vec::new();
+        }
+        let mut attempt = 0;
+        loop {
+            let owners = self.ports.listening_owners(ports);
+            let held: Vec<u16> = ports
+                .iter()
+                .copied()
+                .filter(|p| owners.get(p) == Some(&core_pid))
+                .collect();
+            if held.is_empty() || attempt >= PORT_POLL_MAX {
+                return held;
+            }
+            attempt += 1;
+            tokio::time::sleep(PORT_POLL_INTERVAL).await;
+        }
+    }
+
+    /// Loads an empty config so nothing can leak, then cuts every connection
+    /// of `old` and `new` (mihomo may have been running either plan, and
+    /// existing connections survive reloads, spike S5). Stops the core if
+    /// even the empty config fails.
+    async fn fail_closed(
+        &mut self,
+        error: String,
+        old: &EffectivePlan,
+        new: &EffectivePlan,
+        controller_port: u16,
+        secret: &str,
+        stop_core: impl AsyncFnOnce(),
+    ) -> ApplyOutcome {
+        let empty = empty_config(controller_port, secret);
+        match self.write_and_reload(&empty).await {
+            Ok(()) => {
+                self.last_yaml = Some(empty);
+                self.last_plan = Some(EffectivePlan {
+                    listeners: BTreeMap::new(),
+                });
+                let names: Vec<String> = old
+                    .listeners
+                    .keys()
+                    .chain(new.listeners.keys())
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                let (_, uncut) = self.cut(&names).await;
+                ApplyOutcome::FailedClosed { error, uncut }
+            }
+            Err((_, e2)) => {
+                stop_core().await;
+                ApplyOutcome::FailedCoreStopped {
+                    error: format!("{error}; empty config also failed: {e2}"),
+                }
+            }
+        }
+    }
+
     pub async fn apply(
         &mut self,
         generated: Generated,
@@ -209,8 +280,42 @@ impl Applier {
                         eprintln!("apply: restore select {group} -> {member} failed: {e}");
                     }
                 }
-                let (cut, uncut) = self.cut(&affected).await;
+                // A connection accepted on a port mihomo still holds would
+                // keep the old route: cut only once those ports are gone.
+                let new_ports: HashSet<u16> = generated.plan.listeners.values().map(|l| l.port).collect();
+                let released: Vec<u16> = old_plan
+                    .listeners
+                    .values()
+                    .map(|l| l.port)
+                    .filter(|p| !new_ports.contains(p))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                let still_held = self.ports_still_held(&released, core_pid).await;
+                if !still_held.is_empty() {
+                    let list: Vec<String> = still_held.iter().map(u16::to_string).collect();
+                    let error = format!("旧端口 {} 未能释放", list.join(", "));
+                    return self
+                        .fail_closed(error, &old_plan, &generated.plan, controller_port, secret, stop_core)
+                        .await;
+                }
+                let first_cut_at = tokio::time::Instant::now();
+                let (mut cut, mut uncut) = self.cut(&affected).await;
                 let failed_listeners = self.failed_listeners(&generated.plan, core_pid).await;
+                // Affected listeners whose port mihomo keeps (changed in place,
+                // or the port now belongs to another listener) cannot be
+                // watched via port owners: cut them once more a little later.
+                let same_port: Vec<String> = affected
+                    .iter()
+                    .filter(|n| new_ports.contains(&old_plan.listeners[*n].port))
+                    .cloned()
+                    .collect();
+                if !same_port.is_empty() {
+                    tokio::time::sleep_until(first_cut_at + PORT_POLL_INTERVAL).await;
+                    let (c2, u2) = self.cut(&same_port).await;
+                    cut += c2;
+                    uncut += u2;
+                }
                 ApplyOutcome::Reloaded {
                     cut,
                     uncut,
@@ -221,34 +326,8 @@ impl Applier {
                 // Either a tightening change was rejected (mihomo may keep
                 // routing the old way), or the outcome is ambiguous (timeout,
                 // transport error: mihomo may have applied the new config).
-                // Load an empty config so nothing can leak.
-                let empty = empty_config(controller_port, secret);
-                match self.write_and_reload(&empty).await {
-                    Ok(()) => {
-                        self.last_yaml = Some(empty);
-                        self.last_plan = Some(EffectivePlan {
-                            listeners: BTreeMap::new(),
-                        });
-                        // Existing connections survive reloads (spike S5), and
-                        // mihomo may have been running either plan: cut both.
-                        let mut names: Vec<String> = old_plan
-                            .listeners
-                            .keys()
-                            .chain(generated.plan.listeners.keys())
-                            .cloned()
-                            .collect();
-                        names.sort();
-                        names.dedup();
-                        let (_, uncut) = self.cut(&names).await;
-                        ApplyOutcome::FailedClosed { error, uncut }
-                    }
-                    Err((_, e2)) => {
-                        stop_core().await;
-                        ApplyOutcome::FailedCoreStopped {
-                            error: format!("{error}; empty config also failed: {e2}"),
-                        }
-                    }
-                }
+                self.fail_closed(error, &old_plan, &generated.plan, controller_port, secret, stop_core)
+                    .await
             }
             Err((_, error)) => {
                 // Rejected, non-tightening: mihomo still holds the previous config.
@@ -722,5 +801,156 @@ mod tests {
             matches!(out, ApplyOutcome::FailedClosed { uncut: 1, .. }),
             "{out:?}"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cuts_removed_listener_only_after_its_port_is_released() {
+        let ports = owning(&[7001, 7002]);
+        let (mut a, api, _d, _p) = setup(FakeApi::new(), ports.clone());
+        a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001), pl("b", "E1", 1, 7002)]));
+        api.set_connections(ConnectionsSnapshot {
+            connections: vec![conn("c1", "a")],
+            ..Default::default()
+        });
+        let (late_ports, late_api) = (ports.clone(), api.clone());
+        tokio::spawn(async move {
+            // Accepted by the old listener after the reload returned.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            late_api.connections.lock().unwrap().connections.push(conn("late", "a"));
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            late_ports.0.lock().unwrap().remove(&7001);
+        });
+        let out = a
+            .apply(
+                generated("new", plan(vec![pl("b", "E1", 1, 7002)])),
+                9097,
+                "s",
+                PID,
+                async || {},
+            )
+            .await;
+        assert_eq!(
+            out,
+            ApplyOutcome::Reloaded {
+                cut: 2,
+                uncut: 0,
+                failed_listeners: vec![]
+            }
+        );
+        assert_eq!(*api.closed.lock().unwrap(), vec!["c1", "late"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn moved_listener_waits_for_old_port() {
+        let ports = owning(&[7001, 7101]);
+        let (mut a, api, _d, _p) = setup(FakeApi::new(), ports.clone());
+        a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001)]));
+        let late = ports.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            late.0.lock().unwrap().remove(&7001);
+        });
+        let started = tokio::time::Instant::now();
+        let out = a
+            .apply(
+                generated("new", plan(vec![pl("a", "E1", 1, 7101)])),
+                9097,
+                "s",
+                PID,
+                async || {},
+            )
+            .await;
+        assert!(matches!(out, ApplyOutcome::Reloaded { uncut: 0, .. }), "{out:?}");
+        assert!(started.elapsed() >= Duration::from_millis(400));
+        assert_eq!(api.reloads.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn old_port_never_released_fails_closed() {
+        let (mut a, api, _d, path) = setup(FakeApi::new(), owning(&[7001, 7002]));
+        a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001), pl("b", "E1", 1, 7002)]));
+        api.set_connections(ConnectionsSnapshot {
+            connections: vec![conn("c1", "a"), conn("c2", "b"), conn("c3", "z")],
+            ..Default::default()
+        });
+        let out = a
+            .apply(
+                generated("NEW", plan(vec![pl("b", "E1", 1, 7002)])),
+                9097,
+                "s",
+                PID,
+                async || {},
+            )
+            .await;
+        match &out {
+            ApplyOutcome::FailedClosed { error, uncut: 0 } => assert!(error.contains("7001"), "{error}"),
+            _ => panic!("{out:?}"),
+        }
+        let reloads = api.reloads.lock().unwrap();
+        assert_eq!(reloads.len(), 2);
+        assert_eq!(reloads[1].1, empty_config(9097, "s"));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            empty_config(9097, "s")
+        );
+        assert_eq!(a.last_plan, Some(plan(vec![])));
+        assert!(a.effective_listeners().is_empty());
+        // Old ∪ new is cut.
+        assert_eq!(*api.closed.lock().unwrap(), vec!["c1", "c2"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn in_place_change_is_cut_twice() {
+        let (mut a, api, _d, _p) = setup(FakeApi::new(), owning(&[7001]));
+        a.last_plan = Some(plan(vec![pl("a", "E1", 1, 7001)]));
+        api.set_connections(ConnectionsSnapshot {
+            connections: vec![conn("c1", "a")],
+            ..Default::default()
+        });
+        let late_api = api.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            late_api.connections.lock().unwrap().connections.push(conn("late", "a"));
+        });
+        let out = a
+            .apply(
+                generated("new", plan(vec![pl("a", "E2", 1, 7001)])),
+                9097,
+                "s",
+                PID,
+                async || {},
+            )
+            .await;
+        assert_eq!(
+            out,
+            ApplyOutcome::Reloaded {
+                cut: 2,
+                uncut: 0,
+                failed_listeners: vec![]
+            }
+        );
+        assert_eq!(*api.closed.lock().unwrap(), vec!["c1", "late"]);
+    }
+
+    #[tokio::test]
+    async fn effective_listeners_follow_what_mihomo_holds() {
+        let api = FakeApi::with_reload_results(vec![Ok(()), Err(rejected())]);
+        let (mut a, _api, _d, _p) = setup(api, owning(&[7001, 7002]));
+        assert!(a.effective_listeners().is_empty());
+        a.apply(generated("A", plan(vec![pl("a", "E1", 1, 7001)])), 9097, "s", PID, async || {})
+            .await;
+        assert_eq!(a.effective_listeners(), vec![ListenerId("id-a".into())]);
+        // Adding b is rejected: mihomo keeps holding only a.
+        let out = a
+            .apply(
+                generated("AB", plan(vec![pl("a", "E1", 1, 7001), pl("b", "E1", 1, 7002)])),
+                9097,
+                "s",
+                PID,
+                async || {},
+            )
+            .await;
+        assert!(matches!(out, ApplyOutcome::FailedKeptPrevious { .. }), "{out:?}");
+        assert_eq!(a.effective_listeners(), vec![ListenerId("id-a".into())]);
     }
 }

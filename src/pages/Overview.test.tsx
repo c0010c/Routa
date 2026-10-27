@@ -45,6 +45,7 @@ const status: RuntimeStatus = {
   traffic: null,
   interfaces: [],
   failed_listeners: [],
+  effective_listeners: ["l1"],
   startup_error: null,
   save_error: null,
 };
@@ -95,6 +96,19 @@ describe("Overview", () => {
     const rows = await screen.findAllByRole("row");
     expect(within(rows[1]).getByText("未生效")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("配置未生效：bad config");
+  });
+
+  it("marks listeners not in effect when mihomo holds a config without them", async () => {
+    // A retry from the fail-closed empty config was rejected again.
+    vi.mocked(commands.getStatus).mockResolvedValue({
+      ...status,
+      last_apply: { FailedKeptPrevious: { error: "still bad" } },
+      effective_listeners: [],
+    });
+    renderOverview();
+    const rows = await screen.findAllByRole("row");
+    expect(within(rows[1]).getByText("未生效")).toBeInTheDocument();
+    expect(within(rows[1]).queryByText("运行中")).not.toBeInTheDocument();
   });
 
   it("enables start only when stopped", async () => {

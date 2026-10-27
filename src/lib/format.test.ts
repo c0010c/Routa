@@ -1,9 +1,9 @@
 import {
   applyOutcomeMessages,
-  configNotEffective,
   exitStatusLabel,
   formatBytes,
   formatRate,
+  listenerNotEffective,
   listenerStatusLabel,
 } from "./format";
 import type { RuntimeStatus } from "../bindings";
@@ -91,7 +91,7 @@ describe("applyOutcomeMessages", () => {
   });
 });
 
-describe("configNotEffective", () => {
+describe("listenerNotEffective", () => {
   const base: RuntimeStatus = {
     core: "Running",
     last_apply: null,
@@ -100,19 +100,28 @@ describe("configNotEffective", () => {
     traffic: null,
     interfaces: [],
     failed_listeners: [],
+    effective_listeners: ["l1"],
     startup_error: null,
     save_error: null,
   };
-  it("is false for a running core whose last apply did not close everything", () => {
-    expect(configNotEffective(base)).toBe(false);
-    expect(configNotEffective({ ...base, last_apply: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } })).toBe(false);
-    expect(configNotEffective({ ...base, last_apply: { FailedKeptPrevious: { error: "x" } } })).toBe(false);
+  it("is false for a listener in the config a running core holds", () => {
+    expect(listenerNotEffective(base, "l1")).toBe(false);
+    expect(listenerNotEffective({ ...base, last_apply: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } }, "l1")).toBe(false);
+    expect(listenerNotEffective({ ...base, last_apply: { FailedKeptPrevious: { error: "x" } } }, "l1")).toBe(false);
   });
   it("is true when the core is not running or the last apply closed everything", () => {
-    expect(configNotEffective({ ...base, core: "Stopped" })).toBe(true);
-    expect(configNotEffective({ ...base, core: "Starting" })).toBe(true);
-    expect(configNotEffective({ ...base, core: { Crashed: { exit_code: null } } })).toBe(true);
-    expect(configNotEffective({ ...base, last_apply: { FailedClosed: { error: "x", uncut: 0 } } })).toBe(true);
-    expect(configNotEffective({ ...base, last_apply: { FailedCoreStopped: { error: "x" } } })).toBe(true);
+    expect(listenerNotEffective({ ...base, core: "Stopped" }, "l1")).toBe(true);
+    expect(listenerNotEffective({ ...base, core: "Starting" }, "l1")).toBe(true);
+    expect(listenerNotEffective({ ...base, core: { Crashed: { exit_code: null } } }, "l1")).toBe(true);
+    expect(listenerNotEffective({ ...base, last_apply: { FailedClosed: { error: "x", uncut: 0 } } }, "l1")).toBe(true);
+    expect(listenerNotEffective({ ...base, last_apply: { FailedCoreStopped: { error: "x" } } }, "l1")).toBe(true);
+  });
+  it("is true when mihomo's current config lacks the listener", () => {
+    // Retry from the fail-closed empty config rejected again.
+    expect(
+      listenerNotEffective({ ...base, last_apply: { FailedKeptPrevious: { error: "x" } }, effective_listeners: [] }, "l1"),
+    ).toBe(true);
+    // A newly added listener whose apply was rejected.
+    expect(listenerNotEffective({ ...base, last_apply: { FailedKeptPrevious: { error: "x" } } }, "l2")).toBe(true);
   });
 });

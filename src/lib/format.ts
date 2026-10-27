@@ -1,4 +1,4 @@
-import type { ApplyOutcome, ExitStatus, ListenerStatus, RuntimeStatus } from "../bindings";
+import type { ApplyOutcome, ExitStatus, ListenerId, ListenerStatus, RuntimeStatus } from "../bindings";
 
 export type LabelColor = "success" | "default" | "warning" | "error";
 export interface Label {
@@ -37,11 +37,16 @@ export function exitStatusLabel(s: ExitStatus): Label {
   }
 }
 
-/** True when the saved config is not what mihomo runs: core not running, or the last apply closed everything. */
-export function configNotEffective(status: RuntimeStatus): boolean {
+/**
+ * True when listener `id` as saved is not what mihomo runs: core not running,
+ * the last apply closed everything, or mihomo's current config lacks it (e.g.
+ * a retry from the fail-closed empty config was rejected again).
+ */
+export function listenerNotEffective(status: RuntimeStatus, id: ListenerId): boolean {
   if (status.core !== "Running") return true;
   const a = status.last_apply;
-  return a !== null && ("FailedClosed" in a || "FailedCoreStopped" in a);
+  if (a !== null && ("FailedClosed" in a || "FailedCoreStopped" in a)) return true;
+  return !status.effective_listeners.includes(id);
 }
 
 export function listenerStatusLabel(s: ListenerStatus, isPortFailed: boolean, notEffective = false): Label {

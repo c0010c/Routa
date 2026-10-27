@@ -287,12 +287,15 @@ async fn interface_unplug_disables_listener() {
         ..Default::default()
     });
 
+    // mihomo closes the removed listener's socket.
+    h.ports.0.lock().unwrap().remove(&PORT);
     h.nics.0.lock().unwrap().clear();
     assert!(h.rt.refresh_interfaces().await);
 
     assert!(listener_names(&last_reload(&h.api)).is_empty());
     assert_eq!(h.api.closed.lock().unwrap().clone(), vec!["c1".to_string()]);
     let st = h.rt.status();
+    assert!(matches!(st.last_apply, Some(ApplyOutcome::Reloaded { .. })), "{:?}", st.last_apply);
     assert!(st.interfaces.is_empty());
     assert!(matches!(
         st.health.listeners[&ListenerId("lis-1".into())],
@@ -385,6 +388,8 @@ async fn uncut_connections_trigger_core_restart() {
         ..Default::default()
     });
     h.api.close_fails.lock().unwrap().insert("c1".into());
+    // mihomo closes the disabled listener's socket.
+    h.ports.0.lock().unwrap().remove(&PORT);
 
     let out = h.rt.mutate(|m| m.listeners[0].user_enabled = false).await.unwrap();
 
@@ -809,6 +814,38 @@ async fn failed_apply_is_retried() {
     let reloads = h.api.reloads.lock().unwrap().len();
     tokio::time::sleep(Duration::from_secs(61)).await;
     assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn effective_listeners_stay_empty_while_mihomo_holds_the_empty_config() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.start().await.unwrap();
+    let id = h.rt.model().listeners[0].id.clone();
+    assert_eq!(h.rt.status().effective_listeners, vec![id.clone()]);
+    let rejected = || crate::core::api::ApiError::Rejected { status: 400, message: "bad".into() };
+
+    h.api.reload_results.lock().unwrap().push_back(Err(rejected()));
+    let out = h.rt.mutate(|m| m.listeners[0].name = "改名".into()).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::FailedClosed { .. }), "{out:?}");
+    assert!(h.rt.status().effective_listeners.is_empty());
+
+    // The retry is rejected again; from the empty config that is no longer
+    // tightening, so it reports FailedKeptPrevious: still nothing in effect.
+    h.api.reload_results.lock().unwrap().push_back(Err(rejected()));
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    let st = h.rt.status();
+    assert!(matches!(st.last_apply, Some(ApplyOutcome::FailedKeptPrevious { .. })), "{:?}", st.last_apply);
+    assert!(st.effective_listeners.is_empty());
+
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    let st = h.rt.status();
+    assert!(matches!(st.last_apply, Some(ApplyOutcome::Reloaded { .. })), "{:?}", st.last_apply);
+    assert_eq!(st.effective_listeners, vec![id]);
+
+    h.rt.stop_core().await;
+    assert!(h.rt.status().effective_listeners.is_empty());
     h.rt.shutdown().await;
 }
 

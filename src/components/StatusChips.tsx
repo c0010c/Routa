@@ -9,7 +9,7 @@ export function ListenerStatusChip({
 }: {
   status: ListenerStatus;
   isPortFailed: boolean;
-  /** The config is not in effect (see `configNotEffective`). */
+  /** The listener is not in effect (see `listenerNotEffective`). */
   notEffective: boolean;
 }) {
   const l = listenerStatusLabel(status, isPortFailed, notEffective);

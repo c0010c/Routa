@@ -53,6 +53,7 @@ const status: RuntimeStatus = {
     { guid: "{G2}", friendly_name: "WLAN", description: "", is_up: true, ipv4: ["169.254.1.1"], ipv6: [], mihomo_name: "WLAN" },
   ],
   failed_listeners: [],
+  effective_listeners: [],
   startup_error: null,
   save_error: null,
 };

@@ -24,7 +24,7 @@ import {
 } from "../api/client";
 import type { ApplyOutcome, CoreState, Exit, Model, NodeRef, RuntimeStatus } from "../bindings";
 import { ListenerStatusChip } from "../components/StatusChips";
-import { configNotEffective, exitStatusLabel, formatBytes, formatRate } from "../lib/format";
+import { exitStatusLabel, formatBytes, formatRate, listenerNotEffective } from "../lib/format";
 
 const refKey = (r: NodeRef) => `${r.subscription_id}/${r.name}`;
 
@@ -126,7 +126,6 @@ export function Overview() {
   const tick = liveTick ?? s.traffic;
   const problems = collectProblems(m, s);
   const failedIds = new Set(s.failed_listeners.map((f) => f.id));
-  const notEffective = configNotEffective(s);
 
   return (
     <Stack spacing={2}>
@@ -173,7 +172,7 @@ export function Overview() {
               return (
                 <TableRow key={l.id}>
                   <TableCell>
-                    {ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={notEffective} /> : "—"}
+                    {ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={listenerNotEffective(s, l.id)} /> : "—"}
                   </TableCell>
                   <TableCell>{l.name}</TableCell>
                   <TableCell>{l.port}</TableCell>

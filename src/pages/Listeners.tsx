@@ -16,7 +16,7 @@ import { useDeleteListener, useModel, useSaveListener, useStatus } from "../api/
 import type { Listener } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { ListenerStatusChip } from "../components/StatusChips";
-import { configNotEffective } from "../lib/format";
+import { listenerNotEffective } from "../lib/format";
 import { ListenerDialog, newListener } from "./ListenerDialog";
 
 const TYPE_TEXT = { Mixed: "混合", Http: "HTTP", Socks: "SOCKS" } as const;
@@ -33,7 +33,6 @@ export function Listeners() {
   const m = model.data;
   const s = status.data;
   const failedIds = new Set(s.failed_listeners.map((f) => f.id));
-  const notEffective = configNotEffective(s);
 
   return (
     <Stack spacing={2}>
@@ -62,7 +61,7 @@ export function Listeners() {
                   <TableCell>{TYPE_TEXT[l.listener_type]}</TableCell>
                   <TableCell>{l.auth ? l.auth.username : "无"}</TableCell>
                   <TableCell>{m.exits.find((e) => e.id === l.exit)?.name ?? "—"}</TableCell>
-                  <TableCell>{ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={notEffective} /> : "—"}</TableCell>
+                  <TableCell>{ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={listenerNotEffective(s, l.id)} /> : "—"}</TableCell>
                   <TableCell>
                     <Switch
                       checked={l.user_enabled}

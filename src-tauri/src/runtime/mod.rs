@@ -57,6 +57,10 @@ pub struct RuntimeStatus {
     pub traffic: Option<TrafficTick>,
     pub interfaces: Vec<NetInterface>,
     pub failed_listeners: Vec<FailedListener>,
+    /// Listeners in the config mihomo currently holds (empty when no core
+    /// runs or after a fail-closed apply). An active listener missing here is
+    /// not in effect, whatever `last_apply` says.
+    pub effective_listeners: Vec<ListenerId>,
     /// Problems found while loading persisted state (e.g. a corrupt state.json
     /// that was moved aside).
     pub startup_error: Option<String>,
@@ -308,10 +312,13 @@ impl Inner {
                 eprintln!("runtime: stopping mihomo failed: {e}");
             }
         }
-        let mut live = self.live.lock().unwrap();
-        live.api = None;
-        live.name_to_id.clear();
-        live.stream_rate = None;
+        {
+            let mut live = self.live.lock().unwrap();
+            live.api = None;
+            live.name_to_id.clear();
+            live.stream_rate = None;
+        }
+        self.status.lock().unwrap().effective_listeners.clear();
     }
 
     /// (Re)starts mihomo: fresh secret, empty config, launch, wait for the
@@ -417,6 +424,7 @@ impl Inner {
                         }
                     })
                     .await;
+                self.status.lock().unwrap().effective_listeners = applier.effective_listeners();
                 let mut live = self.live.lock().unwrap();
                 match &out {
                     ApplyOutcome::Reloaded { .. } => {
@@ -619,6 +627,7 @@ impl Runtime {
             traffic: None,
             interfaces,
             failed_listeners: Vec::new(),
+            effective_listeners: Vec::new(),
             startup_error: (!errors.is_empty()).then(|| errors.join("\n")),
             save_error: None,
         };

@@ -221,6 +221,12 @@ export type NodeRef = { subscription_id: SubscriptionId; name: string }
 export type Rate = { up: number; down: number }
 export type RuntimeStatus = { core: CoreState; last_apply: ApplyOutcome | null; health: Health; delays: DelayBook; traffic: TrafficTick | null; interfaces: NetInterface[]; failed_listeners: FailedListener[]; 
 /**
+ * Listeners in the config mihomo currently holds (empty when no core
+ * runs or after a fail-closed apply). An active listener missing here is
+ * not in effect, whatever `last_apply` says.
+ */
+effective_listeners: ListenerId[]; 
+/**
  * Problems found while loading persisted state (e.g. a corrupt state.json
  * that was moved aside).
  */

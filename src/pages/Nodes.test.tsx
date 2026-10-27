@@ -38,6 +38,7 @@ const status: RuntimeStatus = {
   traffic: null,
   interfaces: [],
   failed_listeners: [],
+  effective_listeners: [],
   startup_error: null,
   save_error: null,
 };
