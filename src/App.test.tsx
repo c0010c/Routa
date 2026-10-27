@@ -16,6 +16,6 @@ describe("App", () => {
     const labels = within(nav)
       .getAllByRole("link")
       .map((l) => l.textContent);
-    expect(labels).toEqual(["概览", "Listener", "出口", "节点", "Tailscale", "设置"]);
+    expect(labels).toEqual(["概览", "监听器", "出口", "节点", "Tailscale", "设置"]);
   });
 });

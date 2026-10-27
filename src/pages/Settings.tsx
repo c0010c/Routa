@@ -20,6 +20,13 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
   const [portError, setPortError] = useState<string>();
 
+  const dirty =
+    autostart !== saved.autostart ||
+    corePath.trim() !== (saved.core_path ?? "") ||
+    port !== String(saved.controller_port) ||
+    interval !== saved.delay_test_interval_mins ||
+    url !== saved.delay_test_url;
+
   const submit = async () => {
     const p = Number(port);
     if (!Number.isInteger(p) || p < 1 || p > 65535) {
@@ -81,10 +88,13 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
           />
           <IntervalInput label="自动测速" value={interval} onChange={setIntervalMins} onValidityChange={setIntervalValid} defaultMins={10} />
           <TextField size="small" label="测速 URL" value={url} onChange={(e) => setUrl(e.target.value)} />
-          <Stack direction="row" spacing={1}>
-            <Button variant="contained" disabled={save.isPending || !intervalValid} onClick={() => void submit()}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <Button variant="contained" disabled={save.isPending || !intervalValid || !dirty} onClick={() => void submit()}>
               保存
             </Button>
+            <Typography variant="body2" sx={{ color: dirty ? "warning.main" : "text.secondary" }}>
+              {dirty ? "有未保存的修改" : "已保存"}
+            </Typography>
             <Button onClick={() => openLogDir.mutate()}>打开日志目录</Button>
           </Stack>
         </Stack>

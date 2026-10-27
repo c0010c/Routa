@@ -15,6 +15,7 @@ vi.mock("../bindings", () => ({
     saveListener: vi.fn(async () => ({ status: "ok", data: { NotRunning: { error: "" } } })),
     groupNow: vi.fn(async () => ({ status: "ok", data: { 香港自动: "香港自动/机场A/HK 03" } })),
     saveExit: vi.fn(),
+    deleteListener: vi.fn(async () => ({ status: "ok", data: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } })),
   },
 }));
 
@@ -149,8 +150,8 @@ describe("Overview", () => {
 
   it("opens the new-listener dialog", async () => {
     renderOverview();
-    fireEvent.click(await screen.findByRole("button", { name: "+ 新建监听器" }));
-    expect(await screen.findByText("新建 Listener")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "新建监听器" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("新建监听器");
   });
 
   it("marks port-failed listeners ahead of Active", async () => {
@@ -185,6 +186,47 @@ describe("Overview", () => {
     const rows = await screen.findAllByRole("row");
     expect(within(rows[1]).getByText("未生效")).toBeInTheDocument();
     expect(within(rows[1]).queryByText("运行中")).not.toBeInTheDocument();
+  });
+
+  it("edits a listener from its row", async () => {
+    renderOverview();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 办公" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("编辑监听器");
+    expect(screen.getByLabelText("名称")).toHaveValue("办公");
+  });
+
+  it("deletes a listener after confirming", async () => {
+    renderOverview();
+    fireEvent.click(await screen.findByRole("button", { name: "删除 下载" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("确定删除监听器「下载」吗？");
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(commands.deleteListener).toHaveBeenCalledWith("l2"));
+  });
+
+  it("asks before resetting traffic totals", async () => {
+    renderOverview();
+    fireEvent.click(await screen.findByRole("button", { name: "清零" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("清零累计流量？");
+    expect(commands.resetTraffic).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "清零" }));
+    await waitFor(() => expect(commands.resetTraffic).toHaveBeenCalled());
+  });
+
+  it("hides the getting-started card once a listener has an exit", async () => {
+    renderOverview();
+    await screen.findAllByRole("row");
+    expect(screen.queryByText("开始使用：三步让一个端口能上网")).not.toBeInTheDocument();
+  });
+
+  it("shows the getting-started card and an empty row with no listeners", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue({ ...model, listeners: [] });
+    renderOverview();
+    expect(await screen.findByText("开始使用：三步让一个端口能上网")).toBeInTheDocument();
+    expect(screen.getByText("还没有监听器")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建出口" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("新建出口");
   });
 
   it("enables start only when stopped", async () => {

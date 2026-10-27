@@ -1,7 +1,10 @@
 import {
   Alert,
-  Box,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   MenuItem,
   Paper,
   Select,
@@ -18,6 +21,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   useCoreControl,
+  useDeleteListener,
   useGroupNow,
   useModel,
   useResetTraffic,
@@ -28,6 +32,8 @@ import {
 } from "../api/client";
 import type { ApplyOutcome, CoreState, Exit, Listener, Model, RuntimeStatus } from "../bindings";
 import { expandMembers, nodeKey, nodeLabel } from "../lib/refs";
+import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { GettingStarted, needsGettingStarted } from "../components/GettingStarted";
 import { ListenerStatusChip } from "../components/StatusChips";
 import { ExitDialog, newExit } from "./ExitDialog";
 import { ListenerDialog, newListener } from "./ListenerDialog";
@@ -61,7 +67,7 @@ export function collectProblems(model: Model, status: RuntimeStatus): string[] {
     out.push(`出口「${name}」${exitStatusLabel(h.status).text}`);
   }
   for (const f of status.failed_listeners) {
-    out.push(`Listener「${f.name}」端口 ${f.port} 被占用`);
+    out.push(`监听器「${f.name}」端口 ${f.port} 被占用`);
   }
   for (const s of model.subscriptions) {
     if (s.last_result && "Failed" in s.last_result) {
@@ -143,11 +149,16 @@ export function Overview() {
   const liveTick = useTraffic();
   const reset = useResetTraffic();
   const saveListener = useSaveListener();
+  const delListener = useDeleteListener();
   const [params] = useSearchParams();
   const paramHighlight = params.get("highlight");
   const [highlight, setHighlight] = useState<string | null>(null);
   const [creating, setCreating] = useState<Listener | null>(null);
+  const [editing, setEditing] = useState<Listener | null>(null);
+  const [deleting, setDeleting] = useState<Listener | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
   const [newExitFor, setNewExitFor] = useState<Listener | null>(null);
+  const [creatingExit, setCreatingExit] = useState<Exit | null>(null);
   const highlightRef = useRef<HTMLTableRowElement | null>(null);
   const groupNames = (model.data?.exits ?? [])
     .filter((e) => typeof e.kind === "object" && "Group" in e.kind)
@@ -175,12 +186,25 @@ export function Overview() {
 
   return (
     <Stack spacing={2}>
+      <Stack direction="row" sx={{ justifyContent: "space-between" }}>
+        <Typography variant="h5">概览</Typography>
+        <Button variant="contained" onClick={() => setCreating(newListener(m.listeners))}>
+          新建监听器
+        </Button>
+      </Stack>
       {problems.length > 0 && (
         <Alert severity="error" role="alert">
           {problems.map((p) => (
             <div key={p}>{p}</div>
           ))}
         </Alert>
+      )}
+      {needsGettingStarted(m) && (
+        <GettingStarted
+          model={m}
+          onNewExit={() => setCreatingExit(newExit())}
+          onNewListener={() => setCreating(newListener(m.listeners))}
+        />
       )}
       <CoreControls core={s.core} />
       <Stack direction="row" spacing={3} sx={{ alignItems: "center" }}>
@@ -190,7 +214,7 @@ export function Overview() {
         <Typography>
           累计 ↑ {formatBytes(tick?.totals.total.up ?? 0)} ↓ {formatBytes(tick?.totals.total.down ?? 0)}
         </Typography>
-        <Button size="small" variant="outlined" onClick={() => reset.mutate()}>
+        <Button size="small" variant="outlined" onClick={() => setConfirmReset(true)}>
           清零
         </Button>
       </Stack>
@@ -198,7 +222,7 @@ export function Overview() {
         <Table size="small">
           <TableHead>
             <TableRow>
-              {["状态", "监听器", "出口", "当前节点", "网卡", "延迟", "实时 ↑↓", "累计"].map((h) => (
+              {["状态", "监听器", "出口", "当前节点", "网卡", "延迟", "实时 ↑↓", "累计", "操作"].map((h) => (
                 <TableCell key={h}>{h}</TableCell>
               ))}
             </TableRow>
@@ -242,7 +266,11 @@ export function Overview() {
                         else saveListener.mutate({ ...l, exit: v === "" ? null : v });
                       }}
                       inputProps={{ "aria-label": `${l.name} 出口` }}
-                      sx={{ minWidth: 140 }}
+                      sx={{
+                        minWidth: 140,
+                        // A just-created listener without an exit: point at where to pick one.
+                        ...(l.id === paramHighlight && !exit ? { outline: "2px solid", outlineColor: "warning.main" } : {}),
+                      }}
                     >
                       <MenuItem value="">不接</MenuItem>
                       {m.exits.map((x) => (
@@ -262,18 +290,56 @@ export function Overview() {
                   <TableCell>
                     ↑ {formatBytes(total?.up ?? 0)} ↓ {formatBytes(total?.down ?? 0)}
                   </TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
+                    <Button size="small" aria-label={`编辑 ${l.name}`} onClick={() => setEditing(l)}>
+                      编辑
+                    </Button>
+                    <Button size="small" color="error" aria-label={`删除 ${l.name}`} onClick={() => setDeleting(l)}>
+                      删除
+                    </Button>
+                  </TableCell>
                 </TableRow>
               );
             })}
+            {m.listeners.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={9} sx={{ textAlign: "center", color: "text.secondary", py: 3 }}>
+                  还没有监听器
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </TableContainer>
-      <Box>
-        <Button variant="outlined" size="small" onClick={() => setCreating(newListener(m.listeners))}>
-          + 新建监听器
-        </Button>
-      </Box>
       {creating && <ListenerDialog key={creating.id} listener={creating} onClose={() => setCreating(null)} />}
+      {confirmReset && (
+        <Dialog open onClose={() => setConfirmReset(false)} maxWidth="xs">
+          <DialogTitle>清零累计流量？</DialogTitle>
+          <DialogContent>所有监听器的累计流量都会归零，无法撤销。</DialogContent>
+          <DialogActions>
+            <Button onClick={() => setConfirmReset(false)}>取消</Button>
+            <Button
+              color="error"
+              variant="contained"
+              onClick={() => {
+                reset.mutate();
+                setConfirmReset(false);
+              }}
+            >
+              清零
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
+      {editing && <ListenerDialog key={editing.id} listener={editing} onClose={() => setEditing(null)} />}
+      {deleting && (
+        <ConfirmDeleteDialog
+          text={`确定删除监听器「${deleting.name}」吗？`}
+          onConfirm={() => delListener.mutateAsync(deleting.id)}
+          onClose={() => setDeleting(null)}
+        />
+      )}
+      {creatingExit && <ExitDialog key={creatingExit.id} exit={creatingExit} onClose={() => setCreatingExit(null)} />}
       {newExitFor && (
         <ExitDialog
           key={newExitFor.id}

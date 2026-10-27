@@ -1,5 +1,7 @@
 import {
+  Box,
   Button,
+  Link,
   Paper,
   Stack,
   Table,
@@ -11,6 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import { Link as RouterLink } from "react-router-dom";
 import { useDeleteExit, useModel, useStatus, useTestDelays } from "../api/client";
 import type { Exit, Model } from "../bindings";
 import { isGroupMember, nodeLabel } from "../lib/refs";
@@ -64,7 +67,7 @@ export function Exits() {
         <Table size="small">
           <TableHead>
             <TableRow>
-              {["名称", "类型", "节点/成员", "网卡", "延迟", "被引用的 Listener", "状态", "操作"].map((h) => (
+              {["名称", "类型", "节点/成员", "网卡", "延迟", "使用它的监听器", "状态", "操作"].map((h) => (
                 <TableCell key={h}>{h}</TableCell>
               ))}
             </TableRow>
@@ -107,6 +110,18 @@ export function Exits() {
                 </TableRow>
               );
             })}
+            {m.exits.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={8} sx={{ textAlign: "center", color: "text.secondary", py: 3 }}>
+                  出口决定流量从哪出去。建好后在概览页把监听器接上它。
+                  <Box sx={{ mt: 1 }}>
+                    <Link component={RouterLink} to="/">
+                      回概览页按步骤开始 →
+                    </Link>
+                  </Box>
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </TableContainer>

@@ -1,7 +1,6 @@
 import {
   Alert,
   Button,
-  Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -18,6 +17,7 @@ import { isValidationError, useModel, useSaveSubscription } from "../api/client"
 import type { Subscription } from "../bindings";
 import { IntervalInput } from "../components/IntervalInput";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
+import { FormDialog } from "../components/FormDialog";
 
 export function newSubscription(): Subscription {
   return {
@@ -61,7 +61,7 @@ export function SubscriptionDialog({ subscription, onClose }: { subscription: Su
   const exits = model.data?.exits ?? [];
   const isEdit = model.data?.subscriptions.some((s) => s.id === subscription.id);
   return (
-    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+    <FormDialog onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{isEdit ? "编辑订阅" : "新建订阅"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
@@ -110,6 +110,6 @@ export function SubscriptionDialog({ subscription, onClose }: { subscription: Su
           保存
         </Button>
       </DialogActions>
-    </Dialog>
+    </FormDialog>
   );
 }

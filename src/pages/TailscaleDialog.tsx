@@ -2,7 +2,6 @@ import {
   Alert,
   Button,
   Checkbox,
-  Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -19,6 +18,7 @@ import { isValidationError, useModel, useSaveManualNode } from "../api/client";
 import type { ManualNode, TailscaleOpts } from "../bindings";
 import { InterfacePicker } from "../components/InterfacePicker";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
+import { FormDialog } from "../components/FormDialog";
 
 export const EXIT_NODE_HELP = "auto:any 在当前内核下可能无法自动选中出口节点，建议填写出口节点的 IP 或名称";
 
@@ -85,7 +85,7 @@ export function TailscaleDialog({ node, onClose }: { node: ManualNode; onClose: 
   const isEdit = model.data?.manual_nodes.some((n) => n.id === node.id);
   const canSave = name.trim() !== "" && hostname.trim() !== "" && exitNode.trim() !== "";
   return (
-    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+    <FormDialog onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{isEdit ? "编辑 Tailscale 实例" : "新建 Tailscale 实例"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
@@ -154,6 +154,6 @@ export function TailscaleDialog({ node, onClose }: { node: ManualNode; onClose: 
           保存
         </Button>
       </DialogActions>
-    </Dialog>
+    </FormDialog>
   );
 }

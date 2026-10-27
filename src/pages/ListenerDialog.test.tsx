@@ -39,6 +39,11 @@ function Loc() {
   return <div data-testid="loc">{loc.pathname + loc.search}</div>;
 }
 
+async function modelLoaded() {
+  await waitFor(() => expect(commands.getModel).toHaveBeenCalled());
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 function renderDialog(l: Listener, onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -68,6 +73,30 @@ describe("ListenerDialog", () => {
     renderDialog({ ...listener, id: "new1", name: "新" });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/?highlight=new1"));
+  });
+
+  it("wires a new listener to the only exit", async () => {
+    const exit = { id: "e1", name: "直连", kind: "Direct" as const, interface: null };
+    vi.mocked(commands.getModel).mockResolvedValue({ ...model, exits: [exit] });
+    vi.mocked(commands.saveListener).mockResolvedValue({ status: "ok", data: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } });
+    vi.mocked(commands.saveListener).mockClear();
+    renderDialog({ ...listener, id: "new2", name: "新" });
+    await modelLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(commands.saveListener).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(commands.saveListener).mock.calls[0][0].exit).toBe("e1");
+  });
+
+  it("leaves the exit empty when there are several", async () => {
+    const e = (id: string) => ({ id, name: id, kind: "Direct" as const, interface: null });
+    vi.mocked(commands.getModel).mockResolvedValue({ ...model, exits: [e("a"), e("b")] });
+    vi.mocked(commands.saveListener).mockResolvedValue({ status: "ok", data: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } });
+    vi.mocked(commands.saveListener).mockClear();
+    renderDialog({ ...listener, id: "new3", name: "新" });
+    await modelLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(commands.saveListener).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(commands.saveListener).mock.calls[0][0].exit).toBeNull();
   });
 
   it("does not navigate when editing", async () => {

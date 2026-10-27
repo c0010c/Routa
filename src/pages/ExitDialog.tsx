@@ -2,7 +2,6 @@ import {
   Alert,
   Box,
   Button,
-  Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -22,6 +21,7 @@ import { MemberPicker } from "../components/MemberPicker";
 import { NodePicker } from "../components/NodePicker";
 import { expandMembers, isGroupMember, isSubRef, isTailscaleRef, memberKey, nodeKey, nodeLabel } from "../lib/refs";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
+import { FormDialog } from "../components/FormDialog";
 
 type KindType = "Node" | "Group" | "Direct";
 
@@ -125,7 +125,7 @@ export function ExitDialog({ exit, onClose, onSaved }: { exit: Exit; onClose: ()
 
   const isEdit = model.data?.exits.some((x) => x.id === exit.id);
   return (
-    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+    <FormDialog onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{isEdit ? "编辑出口" : "新建出口"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
@@ -237,6 +237,6 @@ export function ExitDialog({ exit, onClose, onSaved }: { exit: Exit; onClose: ()
           保存
         </Button>
       </DialogActions>
-    </Dialog>
+    </FormDialog>
   );
 }

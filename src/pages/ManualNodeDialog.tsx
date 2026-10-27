@@ -2,7 +2,6 @@ import {
   Alert,
   Button,
   Checkbox,
-  Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -21,6 +20,7 @@ import { useEffect, useState } from "react";
 import { isValidationError, useModel, useSaveManualNode } from "../api/client";
 import { commands, type JsonValue, type ManualNode, type ManualNodeKind, type TailscaleOpts } from "../bindings";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
+import { FormDialog } from "../components/FormDialog";
 
 type Raw = Partial<{ [key in string]: JsonValue }>;
 type FormType = "socks5" | "http";
@@ -172,7 +172,7 @@ export function ManualNodeDialog({
   const isEdit = model.data?.manual_nodes.some((n) => n.id === node.id);
   const canSave = mode === "form" ? name.trim() !== "" && server.trim() !== "" && portValid : text.trim() !== "";
   return (
-    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+    <FormDialog onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{isEdit ? "编辑节点" : "新建节点"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
@@ -267,6 +267,6 @@ export function ManualNodeDialog({
           保存
         </Button>
       </DialogActions>
-    </Dialog>
+    </FormDialog>
   );
 }

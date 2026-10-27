@@ -1,8 +1,9 @@
-import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField } from "@mui/material";
+import { Alert, Button, DialogActions, DialogContent, DialogTitle, Stack, TextField } from "@mui/material";
 import { useState } from "react";
 import { isValidationError, useModel, useSaveNodeGroup } from "../api/client";
 import type { NodeGroup } from "../bindings";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
+import { FormDialog } from "../components/FormDialog";
 
 export function newNodeGroup(): NodeGroup {
   return { id: crypto.randomUUID(), name: "" };
@@ -26,7 +27,7 @@ export function NodeGroupDialog({ group, onClose }: { group: NodeGroup; onClose:
 
   const isEdit = model.data?.node_groups.some((g) => g.id === group.id);
   return (
-    <Dialog open onClose={onClose} fullWidth maxWidth="xs">
+    <FormDialog onClose={onClose} fullWidth maxWidth="xs">
       <DialogTitle>{isEdit ? "重命名组" : "新建组"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
@@ -57,6 +58,6 @@ export function NodeGroupDialog({ group, onClose }: { group: NodeGroup; onClose:
           保存
         </Button>
       </DialogActions>
-    </Dialog>
+    </FormDialog>
   );
 }

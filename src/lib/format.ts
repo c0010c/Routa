@@ -73,7 +73,7 @@ export function applyOutcomeMessages(o: ApplyOutcome): string[] {
   const uncutLine = "部分旧连接未能断开，正在重启 mihomo";
   if ("Reloaded" in o) {
     const lines = o.Reloaded.failed_listeners.map(
-      (f) => `端口 ${f.port} 已被其他程序占用，Listener「${f.name}」未启动`,
+      (f) => `端口 ${f.port} 已被其他程序占用，监听器「${f.name}」未启动`,
     );
     if (o.Reloaded.uncut > 0) lines.push(uncutLine);
     return lines;

@@ -1,5 +1,7 @@
 import {
+  Box,
   Button,
+  Link,
   Paper,
   Stack,
   Switch,
@@ -12,6 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import { Link as RouterLink } from "react-router-dom";
 import { useDeleteListener, useModel, useSaveListener, useStatus } from "../api/client";
 import type { Listener } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
@@ -37,9 +40,9 @@ export function Listeners() {
   return (
     <Stack spacing={2}>
       <Stack direction="row" sx={{ justifyContent: "space-between" }}>
-        <Typography variant="h5">Listener</Typography>
+        <Typography variant="h5">监听器</Typography>
         <Button variant="contained" onClick={() => setEditing(newListener(m.listeners))}>
-          新建 Listener
+          新建监听器
         </Button>
       </Stack>
       <TableContainer component={Paper}>
@@ -80,13 +83,25 @@ export function Listeners() {
                 </TableRow>
               );
             })}
+            {m.listeners.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={8} sx={{ textAlign: "center", color: "text.secondary", py: 3 }}>
+                  监听器是本地代理端口。新建后去概览页给它接出口。
+                  <Box sx={{ mt: 1 }}>
+                    <Link component={RouterLink} to="/">
+                      回概览页按步骤开始 →
+                    </Link>
+                  </Box>
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </TableContainer>
       {editing && <ListenerDialog key={editing.id} listener={editing} onClose={() => setEditing(null)} />}
       {deleting && (
         <ConfirmDeleteDialog
-          text={`确定删除 Listener「${deleting.name}」吗？`}
+          text={`确定删除监听器「${deleting.name}」吗？`}
           onConfirm={() => del.mutateAsync(deleting.id)}
           onClose={() => setDeleting(null)}
         />

@@ -2,7 +2,6 @@ import {
   Alert,
   Button,
   Checkbox,
-  Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -19,7 +18,10 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isValidationError, useModel, useSaveListener } from "../api/client";
 import type { Listener, ListenerType } from "../bindings";
+import { useApplyResult } from "../components/ApplyResultSnackbar";
+import { applyOutcomeMessages } from "../lib/format";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
+import { FormDialog } from "../components/FormDialog";
 
 function proposePort(existing: Listener[]): number {
   if (existing.length === 0) return 7891;
@@ -54,6 +56,7 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
   const model = useModel();
   const save = useSaveListener();
   const navigate = useNavigate();
+  const apply = useApplyResult();
   const [l, setL] = useState<Listener>(listener);
   const [portText, setPortText] = useState(String(listener.port));
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
@@ -69,10 +72,22 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
     }
     setPortLocal(undefined);
     setErrs({ form: [] });
+    // A new listener is wired to the only exit right away; with several, the overview prompts for one.
+    const exits = model.data?.exits ?? [];
+    const autoExit = !isEdit && l.exit === null && exits.length === 1 ? exits[0] : undefined;
     try {
-      await save.mutateAsync({ ...l, port });
+      const outcome = await save.mutateAsync({ ...l, port, exit: autoExit?.id ?? l.exit });
       onClose();
-      if (!isEdit) navigate(`/?highlight=${l.id}`);
+      if (isEdit) return;
+      navigate(`/?highlight=${l.id}`);
+      // Apply problems have their own snackbar; don't cover them.
+      if (applyOutcomeMessages(outcome).length > 0) return;
+      if (autoExit) apply.showMessage(`已创建，并接上了唯一的出口「${autoExit.name}」`, "success");
+      else if (l.exit === null)
+        apply.showMessage(
+          exits.length > 0 ? "已创建，请在高亮的下拉框里给它选一个出口" : "已创建，还没有出口：在下拉框里选「+ 新建出口…」",
+          "success",
+        );
     } catch (e) {
       if (isValidationError(e)) setErrs(fieldErrors(e.errors));
     }
@@ -80,8 +95,8 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
 
   const portError = portLocal ?? errs.port;
   return (
-    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>{isEdit ? "编辑 Listener" : "新建 Listener"}</DialogTitle>
+    <FormDialog onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>{isEdit ? "编辑监听器" : "新建监听器"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {errs.form.length > 0 && (
@@ -178,6 +193,6 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
           保存
         </Button>
       </DialogActions>
-    </Dialog>
+    </FormDialog>
   );
 }

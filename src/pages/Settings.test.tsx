@@ -39,6 +39,16 @@ function renderPage() {
 }
 
 describe("Settings", () => {
+  it("enables saving only with unsaved changes, and says so", async () => {
+    renderPage();
+    const url = await screen.findByLabelText("测速 URL");
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(screen.getByText("已保存")).toBeInTheDocument();
+    fireEvent.change(url, { target: { value: "https://x.test" } });
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+    expect(screen.getByText("有未保存的修改")).toBeInTheDocument();
+  });
+
   it("reports the backend restart after the controller port changes, without restarting itself", async () => {
     renderPage();
     fireEvent.change(await screen.findByLabelText("控制端口"), { target: { value: "19100" } });
