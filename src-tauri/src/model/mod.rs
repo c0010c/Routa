@@ -1,4 +1,5 @@
 pub mod health;
+pub mod normalize;
 pub mod resolve;
 pub mod types;
 pub mod validate;

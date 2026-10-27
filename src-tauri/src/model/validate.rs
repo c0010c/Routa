@@ -7,6 +7,9 @@ pub enum ValidationError {
     InvalidName { name: String, reason: String },
     IntervalOutOfRange { field: String, value: u32 },
     DanglingRef { what: String },
+    /// A Tailscale instance used by the exit is bound to a different interface than the exit.
+    InterfaceMismatch { exit: String, node: String },
+    InvalidProxy { name: String, reason: String },
     /// The generated config was rejected by `mihomo -t`.
     CoreRejected { message: String },
 }
@@ -52,6 +55,108 @@ fn check_unique<'a>(
                 kind,
                 name: n.to_string(),
             });
+        }
+    }
+}
+
+fn validate_manual(model: &Model, errors: &mut Vec<ValidationError>) {
+    check_unique("manual node", model.manual_nodes.iter().map(|n| n.name.as_str()), errors);
+    check_unique("node group", model.node_groups.iter().map(|g| g.name.as_str()), errors);
+
+    for s in &model.subscriptions {
+        if s.name == super::resolve::MANUAL_PREFIX {
+            errors.push(ValidationError::InvalidName {
+                name: s.name.clone(),
+                reason: "「手动」保留给手动节点".to_string(),
+            });
+        }
+    }
+    for g in &model.node_groups {
+        if g.name.trim().is_empty() {
+            errors.push(ValidationError::InvalidName {
+                name: g.name.clone(),
+                reason: "名称不能为空".to_string(),
+            });
+        }
+    }
+
+    let group_ids: std::collections::HashSet<&NodeGroupId> = model.node_groups.iter().map(|g| &g.id).collect();
+    let manual_ids: std::collections::HashSet<&ManualNodeId> = model.manual_nodes.iter().map(|n| &n.id).collect();
+
+    for n in &model.manual_nodes {
+        check_name(&n.name, false, errors);
+        let mut bad: Vec<&str> = Vec::new();
+        match &n.kind {
+            ManualNodeKind::Proxy { raw } => match raw.as_object() {
+                None => bad.push("代理配置必须是对象"),
+                Some(o) => {
+                    let non_empty = |k: &str| o.get(k).and_then(|v| v.as_str()).is_some_and(|v| !v.trim().is_empty());
+                    if !non_empty("type") {
+                        bad.push("缺少 type");
+                    } else if o["type"].as_str().is_some_and(|t| t.trim().eq_ignore_ascii_case("tailscale")) {
+                        bad.push("Tailscale 节点请在 Tailscale 页创建");
+                    }
+                    if !non_empty("name") {
+                        bad.push("缺少 name");
+                    }
+                }
+            },
+            ManualNodeKind::Tailscale(o) => {
+                if o.hostname.trim().is_empty() {
+                    bad.push("hostname 不能为空");
+                }
+            }
+        }
+        for reason in bad {
+            errors.push(ValidationError::InvalidProxy { name: n.name.clone(), reason: reason.to_string() });
+        }
+        for g in &n.groups {
+            if !group_ids.contains(g) {
+                errors.push(ValidationError::DanglingRef {
+                    what: format!("manual node[{}].groups -> {}", n.name, g.0),
+                });
+            }
+        }
+    }
+
+    for e in &model.exits {
+        let mut dangling: Vec<String> = Vec::new();
+        let mut check_node = |r: &NodeRef, field: &str| {
+            if let NodeRef::Manual { manual_id } = r {
+                if !manual_ids.contains(manual_id) {
+                    dangling.push(format!("exit[{}].{field} -> {}", e.name, manual_id.0));
+                }
+            }
+        };
+        match &e.kind {
+            ExitKind::Node { node } => check_node(node, "node"),
+            ExitKind::Group { members, selected, .. } => {
+                for m in members {
+                    match m {
+                        ExitMember::Node(r) => check_node(r, "members"),
+                        ExitMember::Group { group: GroupRef::Custom(gid) } => {
+                            if !group_ids.contains(gid) {
+                                errors.push(ValidationError::DanglingRef {
+                                    what: format!("exit[{}].members -> {}", e.name, gid.0),
+                                });
+                            }
+                        }
+                        ExitMember::Group { group: GroupRef::Subscription(_) } => {}
+                    }
+                }
+                if let Some(r) = selected {
+                    check_node(r, "selected");
+                }
+            }
+            ExitKind::Direct => {}
+        }
+        errors.extend(dangling.into_iter().map(|what| ValidationError::DanglingRef { what }));
+        for t in super::resolve::exit_tailscales(model, e) {
+            if let ManualNodeKind::Tailscale(o) = &t.kind {
+                if o.interface != e.interface {
+                    errors.push(ValidationError::InterfaceMismatch { exit: e.name.clone(), node: t.name.clone() });
+                }
+            }
         }
     }
 }
@@ -145,6 +250,8 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
             }
         }
     }
+
+    validate_manual(model, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -347,5 +454,144 @@ mod tests {
         s.fallback_exit = Some(ExitId::new());
         m.subscriptions.push(s);
         assert!(errs(&m).iter().any(|x| matches!(x, ValidationError::DanglingRef { .. })));
+    }
+
+    fn mnode(id: &str, name: &str, kind: ManualNodeKind) -> ManualNode {
+        ManualNode { id: ManualNodeId(id.into()), name: name.into(), groups: vec![], kind }
+    }
+    fn proxy(raw: serde_json::Value) -> ManualNodeKind {
+        ManualNodeKind::Proxy { raw }
+    }
+    fn ss() -> ManualNodeKind {
+        proxy(serde_json::json!({"type": "ss", "name": "x"}))
+    }
+    fn mref(id: &str) -> NodeRef {
+        NodeRef::Manual { manual_id: ManualNodeId(id.into()) }
+    }
+    fn gexit(name: &str, members: Vec<ExitMember>, selected: Option<NodeRef>) -> Exit {
+        Exit {
+            id: ExitId::new(),
+            name: name.into(),
+            kind: ExitKind::Group { strategy: GroupStrategy::Select, members, selected },
+            interface: None,
+        }
+    }
+
+    #[test]
+    fn manual_node_names_unique() {
+        let mut m = Model::default();
+        m.manual_nodes.push(mnode("a", "x", ss()));
+        m.manual_nodes.push(mnode("b", "x", ss()));
+        m.node_groups.push(NodeGroup { id: NodeGroupId("g1".into()), name: "g".into() });
+        m.node_groups.push(NodeGroup { id: NodeGroupId("g2".into()), name: "g".into() });
+        let e = errs(&m);
+        assert!(e.contains(&ValidationError::DuplicateName { kind: "manual node", name: "x".into() }), "{e:?}");
+        assert!(e.contains(&ValidationError::DuplicateName { kind: "node group", name: "g".into() }), "{e:?}");
+        let mut m = Model::default();
+        m.manual_nodes.push(mnode("a", "", ss()));
+        m.manual_nodes.push(mnode("b", "__x", ss()));
+        assert_eq!(errs(&m).iter().filter(|x| matches!(x, ValidationError::InvalidName { .. })).count(), 2);
+    }
+
+    #[test]
+    fn subscription_named_manual_rejected() {
+        let mut m = Model::default();
+        m.subscriptions.push(sub("手动"));
+        assert!(errs(&m).contains(&ValidationError::InvalidName {
+            name: "手动".into(),
+            reason: "「手动」保留给手动节点".into()
+        }));
+    }
+
+    #[test]
+    fn pasted_proxy_needs_type_and_name() {
+        let bad = [
+            serde_json::json!({"name": "x"}),
+            serde_json::json!({"type": "tailscale", "name": "x"}),
+            serde_json::json!({"type": "ss"}),
+            serde_json::json!({"type": " ", "name": "x"}),
+            serde_json::Value::Null,
+            serde_json::json!("str"),
+        ];
+        for raw in bad {
+            let mut m = Model::default();
+            m.manual_nodes.push(mnode("a", "n", proxy(raw.clone())));
+            assert!(
+                errs(&m).iter().any(|x| matches!(x, ValidationError::InvalidProxy { name, .. } if name == "n")),
+                "{raw}"
+            );
+        }
+        let mut m = Model::default();
+        m.manual_nodes.push(mnode("a", "n", ss()));
+        assert_eq!(validate(&m), Ok(()));
+        // persisted default kind (Proxy with Null raw) is rejected
+        let mut m = Model::default();
+        m.manual_nodes.push(ManualNode { name: "d".into(), ..ManualNode::default() });
+        assert!(errs(&m).iter().any(|x| matches!(x, ValidationError::InvalidProxy { .. })));
+    }
+
+    #[test]
+    fn tailscale_hostname_required() {
+        let mut m = Model::default();
+        let mut o = TailscaleOpts::defaults_for("t");
+        o.hostname = "  ".into();
+        m.manual_nodes.push(mnode("a", "t", ManualNodeKind::Tailscale(o)));
+        assert!(errs(&m).iter().any(|x| matches!(x, ValidationError::InvalidProxy { .. })));
+        m.manual_nodes[0].kind = ManualNodeKind::Tailscale(TailscaleOpts::defaults_for("t"));
+        assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn dangling_manual_and_custom_group_refs() {
+        let dangling = |m: &Model| errs(m).iter().filter(|x| matches!(x, ValidationError::DanglingRef { .. })).count();
+        let mut m = Model::default();
+        m.exits.push(gexit("e", vec![ExitMember::Node(mref("zz"))], None));
+        assert_eq!(dangling(&m), 1);
+        let mut m = Model::default();
+        m.exits.push(gexit(
+            "e",
+            vec![ExitMember::Group { group: GroupRef::Custom(NodeGroupId("gz".into())) }],
+            Some(mref("zz")),
+        ));
+        assert_eq!(dangling(&m), 2);
+        let mut m = Model::default();
+        m.exits.push(Exit { id: ExitId::new(), name: "n".into(), kind: ExitKind::Node { node: mref("zz") }, interface: None });
+        assert_eq!(dangling(&m), 1);
+        let mut m = Model::default();
+        let mut n = mnode("a", "n", ss());
+        n.groups.push(NodeGroupId("gz".into()));
+        m.manual_nodes.push(n);
+        assert_eq!(dangling(&m), 1);
+        // subscription-side gaps stay health-state only
+        let mut m = Model::default();
+        m.exits.push(gexit(
+            "e",
+            vec![
+                ExitMember::Group { group: GroupRef::Subscription(SubscriptionId("sz".into())) },
+                ExitMember::Node(NodeRef::Subscription { subscription_id: SubscriptionId("sz".into()), name: "n".into() }),
+            ],
+            None,
+        ));
+        assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn tailscale_interface_must_match_exit() {
+        let a = Some(InterfaceGuid("{A}".into()));
+        let mut o = TailscaleOpts::defaults_for("t");
+        o.interface = a.clone();
+        let mut m = Model::default();
+        m.manual_nodes.push(mnode("t", "ts", ManualNodeKind::Tailscale(o)));
+        m.exits.push(gexit(
+            "e",
+            vec![
+                ExitMember::Node(NodeRef::Subscription { subscription_id: SubscriptionId("s".into()), name: "n".into() }),
+                ExitMember::Node(mref("t")),
+            ],
+            None,
+        ));
+        assert!(errs(&m).contains(&ValidationError::InterfaceMismatch { exit: "e".into(), node: "ts".into() }));
+        m.exits[0].interface = a;
+        assert_eq!(validate(&m), Ok(()));
     }
 }
