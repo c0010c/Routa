@@ -89,3 +89,9 @@ export function applyOutcomeMessages(o: ApplyOutcome): string[] {
   if ("NotRunning" in o) return [`已保存，但未生效：${o.NotRunning.error}`];
   return [`已保存，但未能生效，mihomo 已停止：${o.FailedCoreStopped.error}`];
 }
+
+/** Colour band for a delay result: < 200 ms good, 200–500 ms slow, worse or timed out bad. */
+export function delayColor(ms: number | null): "success" | "warning" | "error" {
+  if (ms === null || ms > 500) return "error";
+  return ms < 200 ? "success" : "warning";
+}

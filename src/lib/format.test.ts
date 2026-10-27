@@ -1,5 +1,6 @@
 import {
   applyOutcomeMessages,
+  delayColor,
   exitStatusLabel,
   formatBytes,
   formatRate,
@@ -125,4 +126,15 @@ describe("listenerNotEffective", () => {
     // A newly added listener whose apply was rejected.
     expect(listenerNotEffective({ ...base, last_apply: { FailedKeptPrevious: { error: "x" } } }, "l2")).toBe(true);
   });
+});
+
+describe("delayColor", () => {
+  it.each([
+    [48, "success"],
+    [199, "success"],
+    [200, "warning"],
+    [500, "warning"],
+    [501, "error"],
+    [null, "error"],
+  ] as const)("%s ms -> %s", (ms, color) => expect(delayColor(ms)).toBe(color));
 });

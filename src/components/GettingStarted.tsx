@@ -53,8 +53,8 @@ function Step({
           alignItems: "center",
           justifyContent: "center",
           fontSize: 12,
-          color: "#fff",
-          bgcolor: done ? "success.main" : waiting ? "grey.400" : "primary.main",
+          color: done ? "success.contrastText" : "primary.contrastText",
+          bgcolor: done ? "success.main" : waiting ? "action.disabled" : "primary.main",
         }}
       >
         {done ? "✓" : n}
@@ -120,7 +120,7 @@ export function GettingStarted({
   };
 
   return (
-    <Paper variant="outlined" sx={{ p: 2, bgcolor: "#f7fbff", borderColor: "#cfe0f5" }}>
+    <Paper sx={{ p: 2 }}>
       <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1.5, gap: 2 }}>
         <Box>
           <Typography sx={{ fontWeight: 600 }}>开始使用：三步让一个端口能上网</Typography>
