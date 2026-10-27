@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::resolve::{expand, resolve};
 use super::types::*;
 use crate::netif::NetInterface;
 
@@ -20,7 +21,7 @@ pub enum ExitStatus {
 pub struct ExitHealth {
     pub status: ExitStatus,
     pub effective_members: Vec<NodeRef>,
-    pub missing_members: Vec<NodeRef>,
+    pub missing_members: Vec<ExitMember>,
     /// Resolved adapter; `Some` even when it is not usable.
     pub interface: Option<NetInterface>,
 }
@@ -39,33 +40,18 @@ pub struct Health {
     pub listeners: HashMap<ListenerId, ListenerStatus>,
 }
 
-fn node_resolves(model: &Model, r: &NodeRef) -> bool {
-    // 过渡写法（Task 3 替换）：手动节点暂按“找不到”处理。
-    let NodeRef::Subscription { subscription_id, name } = r else { return false };
-    model
-        .subscriptions
-        .iter()
-        .any(|s| &s.id == subscription_id && s.nodes.iter().any(|n| &n.name == name))
-}
-
 fn exit_health(model: &Model, exit: &Exit, nics: &[NetInterface]) -> ExitHealth {
-    let (effective_members, missing_members): (Vec<NodeRef>, Vec<NodeRef>) = match &exit.kind {
+    let (effective_members, missing_members): (Vec<NodeRef>, Vec<ExitMember>) = match &exit.kind {
         ExitKind::Node { node } => {
-            if node_resolves(model, node) {
+            if resolve(model, node).is_some() {
                 (vec![node.clone()], vec![])
             } else {
-                (vec![], vec![node.clone()])
+                (vec![], vec![ExitMember::Node(node.clone())])
             }
         }
         ExitKind::Group { members, .. } => {
-            // 过渡写法（Task 5 替换）：暂时只处理单节点成员，整组成员忽略。
-            members
-                .iter()
-                .filter_map(|m| match m {
-                    ExitMember::Node(r) => Some(r.clone()),
-                    ExitMember::Group { .. } => None,
-                })
-                .partition(|m| node_resolves(model, m))
+            let e = expand(model, members);
+            (e.nodes, e.missing)
         }
         ExitKind::Direct => (vec![], vec![]),
     };
@@ -219,7 +205,7 @@ mod tests {
         let eh = &h.exits[&ExitId("e".into())];
         assert_eq!(eh.status, ExitStatus::Ok);
         assert_eq!(eh.effective_members, vec![nref("s", "a"), nref("s", "c")]);
-        assert_eq!(eh.missing_members, vec![nref("s", "gone")]);
+        assert_eq!(eh.missing_members, vec![ExitMember::Node(nref("s", "gone"))]);
         assert_eq!(h.listeners[&ListenerId("l".into())], ListenerStatus::Active);
     }
 
@@ -291,6 +277,48 @@ mod tests {
         let h = evaluate(&m, &[]);
         assert_eq!(h.listeners[&ListenerId("l1".into())], ListenerStatus::NoExit);
         assert_eq!(h.listeners[&ListenerId("l2".into())], ListenerStatus::NoExit);
+    }
+
+    #[test]
+    fn exit_on_deleted_subscription_group_is_all_members_missing() {
+        let g = exit(
+            "e",
+            ExitKind::Group {
+                strategy: GroupStrategy::Select,
+                members: vec![ExitMember::Group { group: GroupRef::Subscription(SubscriptionId("s1".into())) }],
+                selected: None,
+            },
+            None,
+        );
+        let m = model(vec![], vec![g], vec![listener("l", Some("e"), true)]);
+        let h = evaluate(&m, &[]);
+        assert_eq!(h.exits[&ExitId("e".into())].status, ExitStatus::AllMembersMissing);
+        assert_eq!(
+            h.listeners[&ListenerId("l".into())],
+            ListenerStatus::ExitBroken { exit_status: ExitStatus::AllMembersMissing }
+        );
+    }
+
+    #[test]
+    fn group_exit_with_manual_member_is_ok() {
+        let mn = ManualNode {
+            id: ManualNodeId("m1".into()),
+            name: "a".into(),
+            groups: vec![],
+            kind: ManualNodeKind::Proxy { raw: serde_json::json!({"type": "ss"}) },
+        };
+        let g = exit(
+            "e",
+            ExitKind::Group {
+                strategy: GroupStrategy::Select,
+                members: vec![ExitMember::Node(NodeRef::Manual { manual_id: mn.id.clone() })],
+                selected: None,
+            },
+            None,
+        );
+        let mut m = model(vec![], vec![g], vec![]);
+        m.manual_nodes.push(mn);
+        assert_eq!(est(&m, &[]), ExitStatus::Ok);
     }
 
     #[test]
