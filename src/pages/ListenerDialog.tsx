@@ -16,6 +16,7 @@ import {
   TextField,
 } from "@mui/material";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { isValidationError, useModel, useSaveListener } from "../api/client";
 import type { Listener, ListenerType } from "../bindings";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
@@ -52,12 +53,14 @@ const TYPES: { value: ListenerType; label: string }[] = [
 export function ListenerDialog({ listener, onClose }: { listener: Listener; onClose: () => void }) {
   const model = useModel();
   const save = useSaveListener();
+  const navigate = useNavigate();
   const [l, setL] = useState<Listener>(listener);
   const [portText, setPortText] = useState(String(listener.port));
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
   const [showPw, setShowPw] = useState(false);
   const [portLocal, setPortLocal] = useState<string>();
 
+  const isEdit = model.data?.listeners.some((x) => x.id === l.id) ?? false;
   const submit = async () => {
     const port = Number(portText);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -69,13 +72,13 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
     try {
       await save.mutateAsync({ ...l, port });
       onClose();
+      if (!isEdit) navigate(`/?highlight=${l.id}`);
     } catch (e) {
       if (isValidationError(e)) setErrs(fieldErrors(e.errors));
     }
   };
 
   const portError = portLocal ?? errs.port;
-  const isEdit = model.data?.listeners.some((x) => x.id === l.id);
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>{isEdit ? "编辑 Listener" : "新建 Listener"}</DialogTitle>
@@ -163,25 +166,6 @@ export function ListenerDialog({ listener, onClose }: { listener: Listener; onCl
               />
             </Stack>
           )}
-          <FormControl size="small">
-            <InputLabel id="l-exit">出口</InputLabel>
-            <Select
-              labelId="l-exit"
-              label="出口"
-              value={l.exit ?? ""}
-              onChange={(e) => setL({ ...l, exit: e.target.value === "" ? null : e.target.value })}
-            >
-              <MenuItem value="">未选择</MenuItem>
-              {l.exit !== null && !(model.data?.exits ?? []).some((x) => x.id === l.exit) && (
-                <MenuItem value={l.exit}>（已删除的出口）</MenuItem>
-              )}
-              {(model.data?.exits ?? []).map((x) => (
-                <MenuItem key={x.id} value={x.id}>
-                  {x.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
           <FormControlLabel
             control={<Switch checked={l.user_enabled} onChange={(e) => setL({ ...l, user_enabled: e.target.checked })} />}
             label="启用"

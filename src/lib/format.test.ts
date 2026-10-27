@@ -24,7 +24,7 @@ describe("listenerStatusLabel", () => {
   it("DisabledByUser", () =>
     expect(listenerStatusLabel("DisabledByUser", false)).toEqual({ text: "已停用", color: "default" }));
   it("NoExit", () =>
-    expect(listenerStatusLabel("NoExit", false)).toEqual({ text: "未选择出口", color: "warning" }));
+    expect(listenerStatusLabel("NoExit", false)).toEqual({ text: "未接出口", color: "warning" }));
   it("NodeMissing", () =>
     expect(listenerStatusLabel({ ExitBroken: { exit_status: "NodeMissing" } }, false)).toEqual({
       text: "节点已失效，请重选",

@@ -60,7 +60,7 @@ export function Listeners() {
                   <TableCell>{l.port}</TableCell>
                   <TableCell>{TYPE_TEXT[l.listener_type]}</TableCell>
                   <TableCell>{l.auth ? l.auth.username : "无"}</TableCell>
-                  <TableCell>{m.exits.find((e) => e.id === l.exit)?.name ?? "—"}</TableCell>
+                  <TableCell>{m.exits.find((e) => e.id === l.exit)?.name ?? "未接出口"}</TableCell>
                   <TableCell>{ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={listenerNotEffective(s, l.id)} /> : "—"}</TableCell>
                   <TableCell>
                     <Switch

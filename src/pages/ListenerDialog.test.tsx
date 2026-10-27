@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import type { Listener, Model } from "../bindings";
 
 vi.mock("../bindings", () => ({
@@ -33,11 +34,19 @@ const listener: Listener = {
   user_enabled: true,
 };
 
+function Loc() {
+  const loc = useLocation();
+  return <div data-testid="loc">{loc.pathname + loc.search}</div>;
+}
+
 function renderDialog(l: Listener, onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <ListenerDialog listener={l} onClose={onClose} />
+      <MemoryRouter>
+        <ListenerDialog listener={l} onClose={onClose} />
+        <Loc />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
   return onClose;
@@ -46,6 +55,30 @@ function renderDialog(l: Listener, onClose = vi.fn()) {
 describe("ListenerDialog", () => {
   beforeEach(() => {
     vi.mocked(commands.getModel).mockResolvedValue(model);
+  });
+
+  it("has no exit field", async () => {
+    renderDialog(listener);
+    expect(screen.queryByLabelText("出口")).not.toBeInTheDocument();
+    await waitFor(() => expect(commands.getModel).toHaveBeenCalled());
+  });
+
+  it("navigates to the overview highlight after creating", async () => {
+    vi.mocked(commands.saveListener).mockResolvedValue({ status: "ok", data: { NotRunning: { error: "" } } });
+    renderDialog({ ...listener, id: "new1", name: "新" });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/?highlight=new1"));
+  });
+
+  it("does not navigate when editing", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue({ ...model, listeners: [listener] });
+    vi.mocked(commands.saveListener).mockResolvedValue({ status: "ok", data: { NotRunning: { error: "" } } });
+    const onClose = renderDialog(listener);
+    await waitFor(() => expect(commands.getModel).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.getByTestId("loc")).toHaveTextContent(/^\/$/);
   });
 
   it("shows a port conflict under the port field", async () => {

@@ -54,7 +54,7 @@ export function listenerStatusLabel(s: ListenerStatus, isPortFailed: boolean, no
   if (isPortFailed) return { text: "端口被占用", color: "error" };
   if (s === "Active") return { text: "运行中", color: "success" };
   if (s === "DisabledByUser") return { text: "已停用", color: "default" };
-  if (s === "NoExit") return { text: "未选择出口", color: "warning" };
+  if (s === "NoExit") return { text: "未接出口", color: "warning" };
   switch (s.ExitBroken.exit_status) {
     case "NodeMissing":
       return { text: "节点已失效，请重选", color: "error" };

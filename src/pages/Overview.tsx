@@ -14,19 +14,27 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   useCoreControl,
+  useGroupNow,
   useModel,
   useResetTraffic,
+  useSaveListener,
   useSelectGroupMember,
   useStatus,
   useTraffic,
 } from "../api/client";
-import type { ApplyOutcome, CoreState, Exit, Model, RuntimeStatus } from "../bindings";
-import { isNodeRef, nodeKey, nodeLabel } from "../lib/refs";
+import type { ApplyOutcome, CoreState, Exit, Listener, Model, RuntimeStatus } from "../bindings";
+import { expandMembers, nodeKey, nodeLabel } from "../lib/refs";
 import { ListenerStatusChip } from "../components/StatusChips";
+import { ExitDialog, newExit } from "./ExitDialog";
+import { ListenerDialog, newListener } from "./ListenerDialog";
 import { exitStatusLabel, formatBytes, formatRate, listenerNotEffective } from "../lib/format";
 
+
+const TYPE_TEXT = { Mixed: "混合", Http: "HTTP", Socks: "SOCKS" } as const;
 
 function coreText(c: CoreState): string {
   if (c === "Stopped") return "已停止";
@@ -90,31 +98,43 @@ function CoreControls({ core }: { core: CoreState }) {
 function GroupSelect({ exit }: { exit: Exit }) {
   const select = useSelectGroupMember();
   const model = useModel().data;
-  if (typeof exit.kind !== "object" || !("Group" in exit.kind) || exit.kind.Group.strategy !== "Select") {
+  if (!model || typeof exit.kind !== "object" || !("Group" in exit.kind) || exit.kind.Group.strategy !== "Select") {
     return null;
   }
   const { selected } = exit.kind.Group;
-  // Whole-group members are expanded by the later overview rework; for now only single nodes are listed.
-  const members = exit.kind.Group.members.filter(isNodeRef);
+  const members = expandMembers(model, exit.kind.Group.members);
+  const value = selected && members.some((x) => nodeKey(x) === nodeKey(selected)) ? nodeKey(selected) : "";
   return (
     <Select
       size="small"
-      value={selected ? nodeKey(selected) : ""}
+      value={value}
       displayEmpty
       onChange={(e) => {
         const m = members.find((x) => nodeKey(x) === e.target.value);
         if (m) select.mutate(exit.id, m);
       }}
       inputProps={{ "aria-label": `${exit.name} 成员` }}
-      sx={{ ml: 1, minWidth: 140 }}
+      sx={{ minWidth: 140 }}
     >
       {members.map((m) => (
         <MenuItem key={nodeKey(m)} value={nodeKey(m)}>
-          {model ? nodeLabel(model, m) : ""}
+          {nodeLabel(model, m)}
         </MenuItem>
       ))}
     </Select>
   );
+}
+
+const NEW_EXIT = "__new_exit__";
+
+function currentNode(model: Model, exit: Exit | undefined, now: Partial<Record<string, string>> | undefined): ReactNode {
+  if (!exit || exit.kind === "Direct") return "—";
+  if ("Node" in exit.kind) return nodeLabel(model, exit.kind.Node.node);
+  if (exit.kind.Group.strategy === "Select") return <GroupSelect exit={exit} />;
+  const v = now?.[exit.name];
+  if (!v) return "—";
+  const prefix = `${exit.name}/`;
+  return v.startsWith(prefix) ? v.slice(prefix.length) : v;
 }
 
 export function Overview() {
@@ -122,6 +142,29 @@ export function Overview() {
   const status = useStatus();
   const liveTick = useTraffic();
   const reset = useResetTraffic();
+  const saveListener = useSaveListener();
+  const [params] = useSearchParams();
+  const paramHighlight = params.get("highlight");
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [creating, setCreating] = useState<Listener | null>(null);
+  const [newExitFor, setNewExitFor] = useState<Listener | null>(null);
+  const highlightRef = useRef<HTMLTableRowElement | null>(null);
+  const groupNames = (model.data?.exits ?? [])
+    .filter((e) => typeof e.kind === "object" && "Group" in e.kind)
+    .map((e) => e.name);
+  const groupNow = useGroupNow(groupNames);
+  const loaded = !!model.data && !!status.data;
+
+  useEffect(() => {
+    if (!paramHighlight) return;
+    setHighlight(paramHighlight);
+    const t = setTimeout(() => setHighlight(null), 3000);
+    return () => clearTimeout(t);
+  }, [paramHighlight]);
+
+  useEffect(() => {
+    if (highlight && loaded) highlightRef.current?.scrollIntoView?.({ block: "center" });
+  }, [highlight, loaded]);
 
   if (!model.data || !status.data) return <Typography>加载中…</Typography>;
   const m = model.data;
@@ -155,7 +198,7 @@ export function Overview() {
         <Table size="small">
           <TableHead>
             <TableRow>
-              {["状态", "Listener", "端口", "出口", "网卡", "延迟", "实时 ↑↓", "累计"].map((h) => (
+              {["状态", "监听器", "出口", "当前节点", "网卡", "延迟", "实时 ↑↓", "累计"].map((h) => (
                 <TableCell key={h}>{h}</TableCell>
               ))}
             </TableRow>
@@ -173,18 +216,44 @@ export function Overview() {
               const rate = tick?.per_listener_rate[l.id];
               const total = tick?.totals.per_listener[l.id];
               return (
-                <TableRow key={l.id}>
+                <TableRow
+                  key={l.id}
+                  ref={l.id === highlight ? highlightRef : undefined}
+                  selected={l.id === highlight}
+                  sx={l.id === highlight ? { bgcolor: "action.selected" } : undefined}
+                >
                   <TableCell>
                     {ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={listenerNotEffective(s, l.id)} /> : "—"}
                   </TableCell>
-                  <TableCell>{l.name}</TableCell>
-                  <TableCell>{l.port}</TableCell>
                   <TableCell>
-                    <Box sx={{ display: "flex", alignItems: "center" }}>
-                      {exit?.name ?? "—"}
-                      {exit && <GroupSelect exit={exit} />}
-                    </Box>
+                    {l.name}
+                    <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
+                      {TYPE_TEXT[l.listener_type]} · {l.port}
+                    </Typography>
                   </TableCell>
+                  <TableCell>
+                    <Select
+                      size="small"
+                      displayEmpty
+                      value={exit ? exit.id : ""}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === NEW_EXIT) setNewExitFor(l);
+                        else saveListener.mutate({ ...l, exit: v === "" ? null : v });
+                      }}
+                      inputProps={{ "aria-label": `${l.name} 出口` }}
+                      sx={{ minWidth: 140 }}
+                    >
+                      <MenuItem value="">不接</MenuItem>
+                      {m.exits.map((x) => (
+                        <MenuItem key={x.id} value={x.id}>
+                          {x.name}
+                        </MenuItem>
+                      ))}
+                      <MenuItem value={NEW_EXIT}>+ 新建出口…</MenuItem>
+                    </Select>
+                  </TableCell>
+                  <TableCell>{currentNode(m, exit, groupNow.data)}</TableCell>
                   <TableCell>{exit ? iface : "—"}</TableCell>
                   <TableCell>{!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}</TableCell>
                   <TableCell>
@@ -199,6 +268,20 @@ export function Overview() {
           </TableBody>
         </Table>
       </TableContainer>
+      <Box>
+        <Button variant="outlined" size="small" onClick={() => setCreating(newListener(m.listeners))}>
+          + 新建监听器
+        </Button>
+      </Box>
+      {creating && <ListenerDialog key={creating.id} listener={creating} onClose={() => setCreating(null)} />}
+      {newExitFor && (
+        <ExitDialog
+          key={newExitFor.id}
+          exit={newExit()}
+          onClose={() => setNewExitFor(null)}
+          onSaved={(saved) => saveListener.mutate({ ...newExitFor, exit: saved.id })}
+        />
+      )}
     </Stack>
   );
 }

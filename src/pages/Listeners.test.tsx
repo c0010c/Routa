@@ -57,4 +57,18 @@ describe("Listeners", () => {
     expect(await screen.findByText("端口 7891 已被「浏览器」占用")).toBeInTheDocument();
     await waitFor(() => expect(commands.saveListener).toHaveBeenCalled());
   });
+
+  it("shows 未接出口 for a listener without exit", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue(model);
+    vi.mocked(commands.getStatus).mockResolvedValue(status);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ApplyResultProvider>
+          <Listeners />
+        </ApplyResultProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("未接出口")).toBeInTheDocument();
+  });
 });

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import type { Model, RuntimeStatus } from "../bindings";
 
 vi.mock("../bindings", () => ({
@@ -11,6 +12,9 @@ vi.mock("../bindings", () => ({
     coreRestart: vi.fn(),
     resetTraffic: vi.fn(),
     selectGroupMember: vi.fn(),
+    saveListener: vi.fn(async () => ({ status: "ok", data: { NotRunning: { error: "" } } })),
+    groupNow: vi.fn(async () => ({ status: "ok", data: { 香港自动: "香港自动/机场A/HK 03" } })),
+    saveExit: vi.fn(),
   },
 }));
 
@@ -21,11 +25,17 @@ const model: Model = {
   subscriptions: [],
   exits: [
     { id: "e1", name: "香港", kind: "Direct", interface: null },
-    { id: "e2", name: "美国", kind: "Direct", interface: null },
+    { id: "e2", name: "日本", kind: "Direct", interface: null },
+    {
+      id: "e3",
+      name: "香港自动",
+      kind: { Group: { strategy: "UrlTest", members: [], selected: null } },
+      interface: null,
+    },
   ],
   listeners: [
     { id: "l1", name: "办公", listener_type: "Mixed", listen: "0.0.0.0", port: 7890, auth: null, exit: "e1", user_enabled: true },
-    { id: "l2", name: "下载", listener_type: "Mixed", listen: "0.0.0.0", port: 7891, auth: null, exit: "e2", user_enabled: true },
+    { id: "l2", name: "下载", listener_type: "Mixed", listen: "0.0.0.0", port: 7891, auth: null, exit: "e3", user_enabled: true },
     { id: "l3", name: "备用", listener_type: "Mixed", listen: "0.0.0.0", port: 7892, auth: null, exit: null, user_enabled: true },
   ],
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
@@ -56,7 +66,9 @@ function renderOverview() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <Overview />
+      <MemoryRouter>
+        <Overview />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -77,6 +89,51 @@ describe("Overview", () => {
     expect(within(rows[1]).getByText("123 ms")).toBeInTheDocument();
     expect(within(rows[1]).getByText("系统默认")).toBeInTheDocument();
     expect(within(rows[2]).getByText("节点已失效，请重选")).toBeInTheDocument();
+  });
+
+  it("saves the chosen exit immediately", async () => {
+    renderOverview();
+    const row = (await screen.findAllByRole("row"))[1];
+    fireEvent.mouseDown(within(row).getByRole("combobox", { name: "办公 出口" }));
+    fireEvent.click(await screen.findByRole("option", { name: "日本" }));
+    await waitFor(() =>
+      expect(commands.saveListener).toHaveBeenCalledWith(expect.objectContaining({ id: "l1", exit: "e2" })),
+    );
+  });
+
+  it("clears the exit with 不接", async () => {
+    renderOverview();
+    const row = (await screen.findAllByRole("row"))[1];
+    fireEvent.mouseDown(within(row).getByRole("combobox", { name: "办公 出口" }));
+    fireEvent.click(await screen.findByRole("option", { name: "不接" }));
+    await waitFor(() =>
+      expect(commands.saveListener).toHaveBeenCalledWith(expect.objectContaining({ id: "l1", exit: null })),
+    );
+  });
+
+  it("opens the new-exit dialog from the exit select", async () => {
+    renderOverview();
+    const row = (await screen.findAllByRole("row"))[1];
+    fireEvent.mouseDown(within(row).getByRole("combobox", { name: "办公 出口" }));
+    fireEvent.click(await screen.findByRole("option", { name: "+ 新建出口…" }));
+    expect(await screen.findByText("新建出口")).toBeInTheDocument();
+  });
+
+  it("shows 未接出口 for a listener without exit", async () => {
+    renderOverview();
+    const rows = await screen.findAllByRole("row");
+    expect(within(rows[3]).getAllByText("未接出口").length).toBeGreaterThan(0);
+  });
+
+  it("shows the group's current node without the exit prefix", async () => {
+    renderOverview();
+    expect(await screen.findByText("机场A/HK 03")).toBeInTheDocument();
+  });
+
+  it("opens the new-listener dialog", async () => {
+    renderOverview();
+    fireEvent.click(await screen.findByRole("button", { name: "+ 新建监听器" }));
+    expect(await screen.findByText("新建 Listener")).toBeInTheDocument();
   });
 
   it("marks port-failed listeners ahead of Active", async () => {
