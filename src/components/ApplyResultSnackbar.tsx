@@ -53,6 +53,8 @@ export function ApplyResultProvider({ children }: { children: ReactNode }) {
       <ApplyResultSnackbar outcome={outcome} onClose={() => setOutcome(null)} />
       <Snackbar
         open={error !== null}
+        // Successes fade on their own; errors stay until dismissed.
+        autoHideDuration={error?.severity === "success" ? 4000 : null}
         onClose={(_, reason) => reason !== "clickaway" && setError(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
