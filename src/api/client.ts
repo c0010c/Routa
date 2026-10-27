@@ -8,7 +8,7 @@ import {
 } from "../bindings";
 import { fieldErrors } from "../lib/validation";
 import { useApplyResult } from "../components/ApplyResultSnackbar";
-import { getTraffic, subscribeTraffic } from "./trafficStore";
+import { getTraffic, getTrafficHistory, subscribeTraffic, type TrafficHistory } from "./trafficStore";
 
 export interface ApiValidationError {
   kind: "validation";
@@ -38,6 +38,10 @@ export function useStatus() {
 
 export function useTraffic() {
   return useSyncExternalStore(subscribeTraffic, getTraffic);
+}
+
+export function useTrafficHistory(): TrafficHistory {
+  return useSyncExternalStore(subscribeTraffic, getTrafficHistory);
 }
 
 function useApiMutation<A extends unknown[], T>(

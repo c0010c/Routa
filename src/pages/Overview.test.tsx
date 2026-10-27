@@ -22,6 +22,7 @@ vi.mock("../bindings", () => ({
 import { commands } from "../bindings";
 import { ApplyResultProvider } from "../components/ApplyResultSnackbar";
 import { collectProblems, Overview } from "./Overview";
+import { resetTrafficStore, setTraffic } from "../api/trafficStore";
 
 const model: Model = {
   subscriptions: [],
@@ -80,6 +81,7 @@ function renderOverview() {
 
 describe("Overview", () => {
   beforeEach(() => {
+    resetTrafficStore();
     vi.mocked(commands.getModel).mockResolvedValue(model);
     vi.mocked(commands.getStatus).mockResolvedValue(status);
   });
@@ -150,7 +152,8 @@ describe("Overview", () => {
 
   it("opens the new-listener dialog", async () => {
     renderOverview();
-    fireEvent.click(await screen.findByRole("button", { name: "新建监听器" }));
+    const section = await screen.findByRole("region", { name: "监听器" });
+    fireEvent.click(within(section).getByRole("button", { name: "新建监听器" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("新建监听器");
   });
 
@@ -190,14 +193,16 @@ describe("Overview", () => {
 
   it("edits a listener from its row", async () => {
     renderOverview();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑 办公" }));
+    fireEvent.click(await screen.findByRole("button", { name: "操作 办公" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "编辑 办公" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("编辑监听器");
     expect(screen.getByLabelText("名称")).toHaveValue("办公");
   });
 
   it("deletes a listener after confirming", async () => {
     renderOverview();
-    fireEvent.click(await screen.findByRole("button", { name: "删除 下载" }));
+    fireEvent.click(await screen.findByRole("button", { name: "操作 下载" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "删除 下载" }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("确定删除监听器「下载」吗？");
     fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
@@ -225,20 +230,67 @@ describe("Overview", () => {
     renderOverview();
     expect(await screen.findByText("开始使用：三步让一个端口能上网")).toBeInTheDocument();
     expect(screen.getByText("还没有监听器")).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "新建出口" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("新建出口");
   });
 
-  it("enables start only when stopped", async () => {
+  it("shows restart and stop while running", async () => {
+    renderOverview();
+    expect(await screen.findByText("内核运行中")).toBeInTheDocument();
+    expect(screen.getByText("控制端口 19097")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重启" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "停止" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "启动" })).toBeNull();
+  });
+
+  it("shows only start when stopped", async () => {
     vi.mocked(commands.getStatus).mockResolvedValue({ ...status, core: "Stopped" });
     renderOverview();
-    const start = await screen.findByRole("button", { name: "启动" });
+    expect(await screen.findByText("内核已停止")).toBeInTheDocument();
+    const start = screen.getByRole("button", { name: "启动" });
     expect(start).toBeEnabled();
-    expect(screen.getByRole("button", { name: "停止" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "停止" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重启" })).toBeNull();
     fireEvent.click(start);
     await waitFor(() => expect(commands.coreStart).toHaveBeenCalled());
     // let the post-mutation refetch settle so no state updates leak past the test
     await waitFor(() => expect(commands.getStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it("offers start and restart after a crash", async () => {
+    vi.mocked(commands.getStatus).mockResolvedValue({ ...status, core: { Crashed: { exit_code: 3 } } });
+    renderOverview();
+    expect(await screen.findByText("内核已崩溃（退出码 3）")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "启动" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重启" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "停止" })).toBeNull();
+  });
+
+  it("shows no core buttons while starting", async () => {
+    vi.mocked(commands.getStatus).mockResolvedValue({ ...status, core: "Starting" });
+    renderOverview();
+    expect(await screen.findByText("内核启动中")).toBeInTheDocument();
+    for (const name of ["启动", "停止", "重启"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+  });
+
+  it("shows traffic stat cards and how many listeners work", async () => {
+    renderOverview();
+    expect(await screen.findByText("上传速率")).toBeInTheDocument();
+    expect(screen.getByText("下载速率")).toBeInTheDocument();
+    expect(screen.getByText("累计流量")).toBeInTheDocument();
+    expect(screen.getByText("1 / 3 在工作")).toBeInTheDocument();
+  });
+
+  it("renders the sparklines once traffic ticks arrive", async () => {
+    const tick = { total_rate: { up: 2048, down: 4096 }, per_listener_rate: {}, totals: { total: { up: 0, down: 0 }, per_listener: {} } };
+    setTraffic(tick);
+    setTraffic(tick);
+    renderOverview();
+    expect(await screen.findByText("2 KB/s")).toBeInTheDocument();
+    expect(screen.getByText("4 KB/s")).toBeInTheDocument();
   });
 });
 

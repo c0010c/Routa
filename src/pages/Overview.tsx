@@ -1,6 +1,10 @@
+import InputOutlined from "@mui/icons-material/InputOutlined";
 import {
   Alert,
+  Box,
   Button,
+  Card,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -16,7 +20,9 @@ import {
   TableHead,
   TableRow,
   Typography,
+  useTheme,
 } from "@mui/material";
+import { SparkLineChart } from "@mui/x-charts/SparkLineChart";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -29,10 +35,14 @@ import {
   useSelectGroupMember,
   useStatus,
   useTraffic,
+  useTrafficHistory,
 } from "../api/client";
 import type { ApplyOutcome, CoreState, Exit, Listener, Model, RuntimeStatus } from "../bindings";
 import { expandMembers, nodeKey, nodeLabel } from "../lib/refs";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { DelayText } from "../components/DelayText";
+import { EmptyState } from "../components/EmptyState";
+import { RowActions } from "../components/RowActions";
 import { GettingStarted, needsGettingStarted } from "../components/GettingStarted";
 import { ListenerStatusChip } from "../components/StatusChips";
 import { ExitDialog, newExit } from "./ExitDialog";
@@ -79,26 +89,70 @@ export function collectProblems(model: Model, status: RuntimeStatus): string[] {
   return out;
 }
 
-function CoreControls({ core }: { core: CoreState }) {
+const CORE_DOT: Record<"Running" | "Starting" | "Stopped" | "Crashed", string> = {
+  Running: "success.main",
+  Starting: "warning.main",
+  Stopped: "text.disabled",
+  Crashed: "error.main",
+};
+
+function CoreStatusCard({ core, controllerPort }: { core: CoreState; controllerPort: number }) {
   const c = useCoreControl();
-  const crashed = typeof core === "object";
-  const canStart = core === "Stopped" || crashed;
-  const canStop = core === "Running";
-  const canRestart = core === "Running" || crashed;
+  const kind = typeof core === "object" ? "Crashed" : core;
   return (
-    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-      <Typography>mihomo：{coreText(core)}</Typography>
-      <Button variant="contained" size="small" disabled={!canStart || c.isPending} onClick={() => c.start.mutate()}>
-        启动
-      </Button>
-      <Button variant="outlined" size="small" disabled={!canStop || c.isPending} onClick={() => c.stop.mutate()}>
-        停止
-      </Button>
-      <Button variant="outlined" size="small" disabled={!canRestart || c.isPending} onClick={() => c.restart.mutate()}>
-        重启
-      </Button>
-    </Stack>
+    <Card>
+      <Stack direction="row" spacing={2} sx={{ alignItems: "center", px: 2, py: 1.5 }}>
+        <Box sx={{ width: 10, height: 10, borderRadius: "50%", bgcolor: CORE_DOT[kind], flex: "none" }} />
+        <Box sx={{ flex: 1 }}>
+          <Typography sx={{ fontWeight: 600 }}>内核{coreText(core)}</Typography>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            控制端口 {controllerPort}
+          </Typography>
+        </Box>
+        {kind === "Starting" && <CircularProgress size={16} />}
+        {(kind === "Stopped" || kind === "Crashed") && (
+          <Button variant="contained" disabled={c.isPending} onClick={() => c.start.mutate()}>
+            启动
+          </Button>
+        )}
+        {(kind === "Running" || kind === "Crashed") && (
+          <Button variant="outlined" disabled={c.isPending} onClick={() => c.restart.mutate()}>
+            重启
+          </Button>
+        )}
+        {kind === "Running" && (
+          <Button variant="outlined" disabled={c.isPending} onClick={() => c.stop.mutate()}>
+            停止
+          </Button>
+        )}
+      </Stack>
+    </Card>
   );
+}
+
+function StatCard({ label, value, extra, spark }: { label: string; value: string; extra?: ReactNode; spark?: ReactNode }) {
+  return (
+    <Card sx={{ position: "relative", minHeight: 84 }}>
+      <Box sx={{ px: 2, pt: 1.5, pb: spark ? 0 : 1.5 }}>
+        <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between" }}>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            {label}
+          </Typography>
+          {extra}
+        </Stack>
+        <Typography variant="h6" sx={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+          {value}
+        </Typography>
+      </Box>
+      {spark}
+    </Card>
+  );
+}
+
+function Spark({ data, color }: { data: number[]; color: string }) {
+  // A chart needs two points to draw a line.
+  if (data.length < 2) return null;
+  return <SparkLineChart data={data} height={34} area curve="linear" color={color} margin={{ top: 2, bottom: 0, left: 0, right: 0 }} />;
 }
 
 function GroupSelect({ exit }: { exit: Exit }) {
@@ -147,6 +201,8 @@ export function Overview() {
   const model = useModel();
   const status = useStatus();
   const liveTick = useTraffic();
+  const history = useTrafficHistory();
+  const theme = useTheme();
   const reset = useResetTraffic();
   const saveListener = useSaveListener();
   const delListener = useDeleteListener();
@@ -183,15 +239,13 @@ export function Overview() {
   const tick = liveTick ?? s.traffic;
   const problems = collectProblems(m, s);
   const failedIds = new Set(s.failed_listeners.map((f) => f.id));
+  const working = m.listeners.filter(
+    (l) => s.health.listeners[l.id] === "Active" && !failedIds.has(l.id) && !listenerNotEffective(s, l.id),
+  ).length;
 
   return (
     <Stack spacing={2}>
-      <Stack direction="row" sx={{ justifyContent: "space-between" }}>
-        <Typography variant="h5">概览</Typography>
-        <Button variant="contained" onClick={() => setCreating(newListener(m.listeners))}>
-          新建监听器
-        </Button>
-      </Stack>
+      <Typography variant="h5">概览</Typography>
       {problems.length > 0 && (
         <Alert severity="error" role="alert">
           {problems.map((p) => (
@@ -206,111 +260,136 @@ export function Overview() {
           onNewListener={() => setCreating(newListener(m.listeners))}
         />
       )}
-      <CoreControls core={s.core} />
-      <Stack direction="row" spacing={3} sx={{ alignItems: "center" }}>
-        <Typography>
-          实时 ↑ {formatRate(tick?.total_rate.up ?? 0)} ↓ {formatRate(tick?.total_rate.down ?? 0)}
-        </Typography>
-        <Typography>
-          累计 ↑ {formatBytes(tick?.totals.total.up ?? 0)} ↓ {formatBytes(tick?.totals.total.down ?? 0)}
-        </Typography>
-        <Button size="small" variant="outlined" onClick={() => setConfirmReset(true)}>
-          清零
-        </Button>
-      </Stack>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              {["状态", "监听器", "出口", "当前节点", "网卡", "延迟", "实时 ↑↓", "累计", "操作"].map((h) => (
-                <TableCell key={h}>{h}</TableCell>
-              ))}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {m.listeners.map((l) => {
-              const exit = m.exits.find((e) => e.id === l.exit);
-              const ls = s.health.listeners[l.id];
-              const iface = exit?.interface
-                ? (s.interfaces.find((i) => i.guid === exit.interface)?.friendly_name ??
-                  s.health.exits[exit.id]?.interface?.friendly_name ??
-                  exit.interface)
-                : "系统默认";
-              const d = exit ? s.delays[exit.name] : undefined;
-              const rate = tick?.per_listener_rate[l.id];
-              const total = tick?.totals.per_listener[l.id];
-              return (
-                <TableRow
-                  key={l.id}
-                  ref={l.id === highlight ? highlightRef : undefined}
-                  selected={l.id === highlight}
-                  sx={l.id === highlight ? { bgcolor: "action.selected" } : undefined}
-                >
-                  <TableCell>
-                    {ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={listenerNotEffective(s, l.id)} /> : "—"}
-                  </TableCell>
-                  <TableCell>
-                    {l.name}
-                    <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
-                      {TYPE_TEXT[l.listener_type]} · {l.port}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Select
-                      size="small"
-                      displayEmpty
-                      value={exit ? exit.id : ""}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (v === NEW_EXIT) setNewExitFor(l);
-                        else saveListener.mutate({ ...l, exit: v === "" ? null : v });
-                      }}
-                      inputProps={{ "aria-label": `${l.name} 出口` }}
-                      sx={{
-                        minWidth: 140,
-                        // A just-created listener without an exit: point at where to pick one.
-                        ...(l.id === paramHighlight && !exit ? { outline: "2px solid", outlineColor: "warning.main" } : {}),
-                      }}
-                    >
-                      <MenuItem value="">不接</MenuItem>
-                      {m.exits.map((x) => (
-                        <MenuItem key={x.id} value={x.id}>
-                          {x.name}
-                        </MenuItem>
-                      ))}
-                      <MenuItem value={NEW_EXIT}>+ 新建出口…</MenuItem>
-                    </Select>
-                  </TableCell>
-                  <TableCell>{currentNode(m, exit, groupNow.data)}</TableCell>
-                  <TableCell>{exit ? iface : "—"}</TableCell>
-                  <TableCell>{!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}</TableCell>
-                  <TableCell>
-                    ↑ {formatRate(rate?.up ?? 0)} ↓ {formatRate(rate?.down ?? 0)}
-                  </TableCell>
-                  <TableCell>
-                    ↑ {formatBytes(total?.up ?? 0)} ↓ {formatBytes(total?.down ?? 0)}
-                  </TableCell>
-                  <TableCell sx={{ whiteSpace: "nowrap" }}>
-                    <Button size="small" aria-label={`编辑 ${l.name}`} onClick={() => setEditing(l)}>
-                      编辑
-                    </Button>
-                    <Button size="small" color="error" aria-label={`删除 ${l.name}`} onClick={() => setDeleting(l)}>
-                      删除
-                    </Button>
-                  </TableCell>
+      <CoreStatusCard core={s.core} controllerPort={m.settings.controller_port} />
+      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 1.5 }}>
+        <StatCard
+          label="上传速率"
+          value={formatRate(tick?.total_rate.up ?? 0)}
+          spark={<Spark data={history.up} color={theme.vars?.palette.primary.main ?? theme.palette.primary.main} />}
+        />
+        <StatCard
+          label="下载速率"
+          value={formatRate(tick?.total_rate.down ?? 0)}
+          spark={<Spark data={history.down} color={theme.vars?.palette.success.main ?? theme.palette.success.main} />}
+        />
+        <StatCard
+          label="累计流量"
+          value={`↑ ${formatBytes(tick?.totals.total.up ?? 0)} ↓ ${formatBytes(tick?.totals.total.down ?? 0)}`}
+          extra={
+            <Button size="small" onClick={() => setConfirmReset(true)} sx={{ minWidth: 0, py: 0 }}>
+              清零
+            </Button>
+          }
+        />
+        <StatCard label="监听器" value={`${working} / ${m.listeners.length} 在工作`} />
+      </Box>
+      <Stack component="section" aria-label="监听器" spacing={1}>
+        <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between" }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            监听器
+          </Typography>
+          <Button variant="contained" onClick={() => setCreating(newListener(m.listeners))}>
+            新建监听器
+          </Button>
+        </Stack>
+        {m.listeners.length === 0 ? (
+          <EmptyState
+            icon={<InputOutlined />}
+            title="还没有监听器"
+            description="监听器是本地代理端口，设备连这个端口上网。"
+          />
+        ) : (
+          <TableContainer component={Paper}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  {["状态", "监听器", "出口", "当前节点", "网卡", "延迟", "实时", "累计", ""].map((h) => (
+                    <TableCell key={h}>{h}</TableCell>
+                  ))}
                 </TableRow>
-              );
-            })}
-            {m.listeners.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={9} sx={{ textAlign: "center", color: "text.secondary", py: 3 }}>
-                  还没有监听器
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              </TableHead>
+              <TableBody>
+                {m.listeners.map((l) => {
+                  const exit = m.exits.find((e) => e.id === l.exit);
+                  const ls = s.health.listeners[l.id];
+                  const iface = exit?.interface
+                    ? (s.interfaces.find((i) => i.guid === exit.interface)?.friendly_name ??
+                      s.health.exits[exit.id]?.interface?.friendly_name ??
+                      exit.interface)
+                    : "系统默认";
+                  const d = exit ? s.delays[exit.name] : undefined;
+                  const rate = tick?.per_listener_rate[l.id];
+                  const total = tick?.totals.per_listener[l.id];
+                  return (
+                    <TableRow
+                      key={l.id}
+                      ref={l.id === highlight ? highlightRef : undefined}
+                      selected={l.id === highlight}
+                      sx={l.id === highlight ? { bgcolor: "action.selected" } : undefined}
+                    >
+                      <TableCell>
+                        {ls ? <ListenerStatusChip status={ls} isPortFailed={failedIds.has(l.id)} notEffective={listenerNotEffective(s, l.id)} /> : "—"}
+                      </TableCell>
+                      <TableCell>
+                        {l.name}
+                        <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
+                          {TYPE_TEXT[l.listener_type]} · {l.port}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          size="small"
+                          displayEmpty
+                          value={exit ? exit.id : ""}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === NEW_EXIT) setNewExitFor(l);
+                            else saveListener.mutate({ ...l, exit: v === "" ? null : v });
+                          }}
+                          inputProps={{ "aria-label": `${l.name} 出口` }}
+                          sx={{
+                            minWidth: 140,
+                            // A just-created listener without an exit: point at where to pick one.
+                            ...(l.id === paramHighlight && !exit ? { outline: "2px solid", outlineColor: "warning.main" } : {}),
+                          }}
+                        >
+                          <MenuItem value="">不接</MenuItem>
+                          {m.exits.map((x) => (
+                            <MenuItem key={x.id} value={x.id}>
+                              {x.name}
+                            </MenuItem>
+                          ))}
+                          <MenuItem value={NEW_EXIT}>+ 新建出口…</MenuItem>
+                        </Select>
+                      </TableCell>
+                      <TableCell>{currentNode(m, exit, groupNow.data)}</TableCell>
+                      <TableCell>{exit ? iface : "—"}</TableCell>
+                      <TableCell>
+                        <DelayText ms={d?.ms} />
+                      </TableCell>
+                      <TableCell>
+                        ↑ {formatRate(rate?.up ?? 0)} ↓ {formatRate(rate?.down ?? 0)}
+                      </TableCell>
+                      <TableCell>
+                        ↑ {formatBytes(total?.up ?? 0)} ↓ {formatBytes(total?.down ?? 0)}
+                      </TableCell>
+                      <TableCell>
+                        <RowActions
+                          label={l.name}
+                          items={[
+                            { label: "编辑", onClick: () => setEditing(l) },
+                            { label: "删除", onClick: () => setDeleting(l), danger: true },
+                          ]}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Stack>
       {creating && <ListenerDialog key={creating.id} listener={creating} onClose={() => setCreating(null)} />}
       {confirmReset && (
         <Dialog open onClose={() => setConfirmReset(false)} maxWidth="xs">

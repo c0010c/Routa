@@ -104,3 +104,11 @@ describe("GettingStarted", () => {
     expect(vi.mocked(commands.saveListener).mock.calls[0][0]).toMatchObject({ name: "默认 2", port: 7892, exit: "e9" });
   });
 });
+
+describe("GettingStarted button hierarchy", () => {
+  it("keeps quick start as the only contained button", () => {
+    renderCard({ ...base, exits: [{ id: "e1", name: "直连", kind: "Direct", interface: null }] });
+    const contained = screen.getAllByRole("button").filter((b) => b.classList.contains("MuiButton-contained"));
+    expect(contained.map((b) => b.textContent)).toEqual(["快速开始：建一个直连端口"]);
+  });
+});

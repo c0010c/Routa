@@ -159,7 +159,7 @@ export function GettingStarted({
           title="新建出口"
           desc={hasExit ? `已有 ${m.exits.length} 个出口` : "决定流量从哪出去：直连、某个节点，或一组节点自动选"}
           action={
-            <Button variant={hasExit ? "outlined" : "contained"} size="small" onClick={onNewExit}>
+            <Button variant="outlined" size="small" onClick={onNewExit}>
               新建出口
             </Button>
           }
@@ -171,7 +171,7 @@ export function GettingStarted({
           title="新建监听器并接上出口"
           desc="设备连这个端口上网，流量按接的出口走"
           action={
-            <Button variant={hasExit ? "contained" : "outlined"} size="small" onClick={onNewListener}>
+            <Button variant="outlined" size="small" onClick={onNewListener}>
               新建监听器
             </Button>
           }
