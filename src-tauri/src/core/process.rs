@@ -157,21 +157,19 @@ pub struct CoreProcess {
     pid: u32,
 }
 
-/// `path` lies under `dir` (symlinks/`..`/case resolved when the paths exist).
+/// `path` lies under `dir` (symlinks/`..`/case resolved for the folders).
+/// The file itself is not resolved: under MSIX AppData virtualization a new
+/// file resolves into the package's LocalCache while its folder does not.
 fn is_inside(path: &Path, dir: &Path) -> bool {
-    let norm = |p: &Path| {
-        if let Ok(c) = p.canonicalize() {
-            return c;
-        }
-        match (
-            p.parent().and_then(|d| d.canonicalize().ok()),
-            p.file_name(),
-        ) {
-            (Some(d), Some(n)) => d.join(n),
-            _ => p.to_path_buf(),
-        }
+    let in_parent = |p: &Path| match (
+        p.parent().and_then(|d| d.canonicalize().ok()),
+        p.file_name(),
+    ) {
+        (Some(d), Some(n)) => d.join(n),
+        _ => p.to_path_buf(),
     };
-    norm(path).starts_with(norm(dir))
+    let dir = dir.canonicalize().unwrap_or_else(|_| in_parent(dir));
+    in_parent(path).starts_with(dir)
 }
 
 /// Copies lines from a child pipe into the shared log file. If the log cannot
@@ -412,6 +410,32 @@ mod tests {
     use crate::core::api::{ConnectionsSnapshot, HttpMihomoApi};
     use futures_util::stream::BoxStream;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn is_inside_ignores_where_the_file_itself_resolves() {
+        // MSIX AppData virtualization (e.g. launched from a packaged app)
+        // makes a new file resolve elsewhere while its folder does not; a
+        // file symlink reproduces that.
+        let work = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let target = elsewhere.path().join("real.yaml");
+        std::fs::write(&target, "").unwrap();
+        let cfg = work.path().join("config.yaml");
+        if std::os::windows::fs::symlink_file(&target, &cfg).is_err() {
+            eprintln!("skipped: symlinks not permitted");
+            return;
+        }
+        assert!(is_inside(&cfg, work.path()));
+    }
+
+    #[test]
+    fn is_inside_rejects_dotdot_escape() {
+        let work = tempfile::tempdir().unwrap();
+        let sub = work.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        assert!(!is_inside(&sub.join("..").join("config.yaml"), &sub));
+        assert!(is_inside(&sub.join("config.yaml"), &sub));
+    }
 
     #[test]
     fn backoff_sequence() {
