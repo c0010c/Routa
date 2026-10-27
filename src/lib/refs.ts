@@ -24,7 +24,7 @@ export function memberKey(m: ExitMember): string {
 export function nodeLabel(model: Model, r: NodeRef): string {
   if (isSubRef(r)) {
     const s = model.subscriptions.find((x) => x.id === r.subscription_id);
-    return s?.nodes.some((n) => n.name === r.name) ? r.name : "（已删除）";
+    return s?.nodes.some((n) => n.name === r.name) ? r.name : `${r.name}（已删除）`;
   }
   return model.manual_nodes.find((x) => x.id === r.manual_id)?.name ?? "（已删除）";
 }
@@ -40,7 +40,10 @@ export function proxyNameOf(model: Model, r: NodeRef): string | null {
 }
 
 function resolves(model: Model, r: NodeRef): boolean {
-  return nodeLabel(model, r) !== "（已删除）";
+  if (isSubRef(r)) {
+    return !!model.subscriptions.find((x) => x.id === r.subscription_id)?.nodes.some((n) => n.name === r.name);
+  }
+  return model.manual_nodes.some((x) => x.id === r.manual_id);
 }
 
 /** Same semantics as the Rust expand: keep order, dedupe by first occurrence, drop unresolvable. */
@@ -62,6 +65,7 @@ export function expandMembers(model: Model, members: ExitMember[]): NodeRef[] {
       for (const n of s?.nodes ?? []) push({ subscription_id: id, name: n.name });
     } else {
       const id = m.group.Custom;
+      if (!model.node_groups.some((g) => g.id === id)) continue;
       for (const n of model.manual_nodes) if (n.groups.includes(id)) push({ manual_id: n.id });
     }
   }

@@ -25,6 +25,14 @@ describe("refs", () => {
     ).toEqual([]);
   });
 
+  it("expandMembers ignores a custom group id that does not exist, even if nodes list it", () => {
+    const m = {
+      ...model,
+      manual_nodes: [{ id: "m9", name: "z", groups: ["ghost"], kind: { Proxy: { raw: {} } } }],
+    } as unknown as Model;
+    expect(expandMembers(m, [{ group: { Custom: "ghost" } }])).toEqual([]);
+  });
+
   it("proxyNameOf", () => {
     expect(proxyNameOf(model, { manual_id: "m1" })).toBe("手动/a");
     expect(proxyNameOf(model, { subscription_id: "s1", name: "n1" })).toBe("机场A/n1");
@@ -36,6 +44,8 @@ describe("refs", () => {
     expect(memberKey({ group: { Subscription: "s1" } })).not.toBe(memberKey({ group: { Custom: "s1" } }));
     expect(nodeLabel(model, { manual_id: "m1" })).toBe("a");
     expect(nodeLabel(model, { manual_id: "x" })).toBe("（已删除）");
+    expect(nodeLabel(model, { subscription_id: "s1", name: "gone" })).toBe("gone（已删除）");
+    expect(nodeLabel(model, { subscription_id: "s1", name: "n1" })).toBe("n1");
   });
 
   it("isTailscaleRef", () => {

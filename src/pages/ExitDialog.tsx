@@ -158,7 +158,14 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
                 label="成员"
                 value={members.filter(isNodeRef)}
                 // Whole-group members are edited by the later member picker; keep them untouched here.
-                onChange={(v) => setMembers([...members.filter(isGroupMember), ...v])}
+                onChange={(v) => {
+                  const keep = new Set(v.map(memberKey));
+                  const have = new Set(members.map(memberKey));
+                  setMembers([
+                    ...members.filter((x) => isGroupMember(x) || keep.has(memberKey(x))),
+                    ...v.filter((x) => !have.has(memberKey(x))),
+                  ]);
+                }}
               />
               {staleInForm.length > 0 && (
                 <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>

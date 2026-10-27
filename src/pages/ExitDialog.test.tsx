@@ -138,6 +138,35 @@ describe("ExitDialog", () => {
     await waitFor(() => expect(commands.getStatus).toHaveBeenCalled());
   });
 
+  it("keeps member order when adding a node next to a whole-group member", async () => {
+    vi.mocked(commands.saveExit).mockResolvedValue({ status: "ok", data: { NotRunning: null } } as never);
+    renderDialog({
+      id: "e2",
+      name: "组",
+      kind: {
+        Group: {
+          strategy: "Fallback",
+          members: [{ subscription_id: "s1", name: "香港1" }, { group: { Subscription: "s1" } }],
+          selected: null,
+        },
+      },
+      interface: null,
+    });
+    await waitFor(() => expect(commands.getModel).toHaveBeenCalled());
+    const input = screen.getByRole("combobox", { name: "成员" });
+    act(() => input.focus());
+    fireEvent.mouseDown(input);
+    fireEvent.click(await screen.findByRole("option", { name: /日本1/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(commands.saveExit).toHaveBeenCalled());
+    const saved = vi.mocked(commands.saveExit).mock.calls[0][0];
+    expect((saved.kind as { Group: { members: unknown[] } }).Group.members).toEqual([
+      { subscription_id: "s1", name: "香港1" },
+      { group: { Subscription: "s1" } },
+      { subscription_id: "s1", name: "日本1" },
+    ]);
+  });
+
   it("removes missing members on demand", async () => {
     renderDialog({
       id: "e1",
