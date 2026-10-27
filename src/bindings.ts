@@ -91,6 +91,57 @@ async saveSettings(s: Settings) : Promise<Result<ApplyOutcome, ValidationError[]
     else return { status: "error", error: e  as any };
 }
 },
+async saveManualNode(n: ManualNode) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_manual_node", { n }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteManualNode(id: ManualNodeId) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_manual_node", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveNodeGroup(g: NodeGroup) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_node_group", { g }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteNodeGroup(id: NodeGroupId) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_node_group", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async parseProxyYaml(text: string) : Promise<Result<ParsedProxy, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("parse_proxy_yaml", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Exit name -> member mihomo currently uses; unknown names are omitted.
+ */
+async groupNow(names: string[]) : Promise<Result<Partial<{ [key in string]: string }>, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("group_now", { names }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async resetTraffic() : Promise<Result<null, null>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("reset_traffic") };
@@ -147,8 +198,9 @@ export type ApplyOutcome = { Reloaded: { cut: number;
 /**
  * Affected connections that could not be closed even after a retry.
  * If the connection list itself was unavailable this is the number of
- * affected listeners (a lower bound, at least 1). The caller must
- * escalate (restart the core) when it is > 0.
+ * affected listeners (a lower bound, at least 1). Summed over both
+ * cut passes, so only "> 0" is meaningful: the caller must escalate
+ * (restart the core) then.
  */
 uncut: number; failed_listeners: FailedListener[] } } | { FailedKeptPrevious: { error: string } } | { FailedClosed: { error: string; 
 /**
@@ -177,16 +229,28 @@ ms: number | null;
  */
 tested_at: number }
 export type Exit = { id: ExitId; name: string; kind: ExitKind; interface: InterfaceGuid | null }
-export type ExitHealth = { status: ExitStatus; effective_members: NodeRef[]; missing_members: NodeRef[]; 
+export type ExitHealth = { status: ExitStatus; effective_members: NodeRef[]; missing_members: ExitMember[]; 
 /**
  * Resolved adapter; `Some` even when it is not usable.
  */
 interface: NetInterface | null }
 export type ExitId = string
-export type ExitKind = { Node: { node: NodeRef } } | { Group: { strategy: GroupStrategy; members: NodeRef[]; selected: NodeRef | null } } | "Direct"
+export type ExitKind = { Node: { node: NodeRef } } | { Group: { strategy: GroupStrategy; members: ExitMember[]; selected: NodeRef | null } } | "Direct"
+/**
+ * 出口组的成员：单个节点，或整组节点。
+ */
+export type ExitMember = NodeRef | { group: GroupRef }
 export type ExitStatus = "Ok" | "NodeMissing" | "AllMembersMissing" | "InterfaceUnavailable"
 export type FailedListener = { id: ListenerId; name: string; port: number }
-export type FetchResult = { Ok: { node_count: number } } | { Failed: { reason: string } }
+export type FetchResult = { Ok: { node_count: number; 
+/**
+ * 解析时丢弃的 `type: tailscale` 条目数
+ */
+skipped_tailscale?: number } } | { Failed: { reason: string } }
+/**
+ * 指向一组节点：一个订阅的全部节点，或一个自定义节点组。
+ */
+export type GroupRef = { Subscription: SubscriptionId } | { Custom: NodeGroupId }
 export type GroupStrategy = "UrlTest" | "Fallback" | "LoadBalance" | "Select"
 export type Health = { exits: Partial<{ [key in ExitId]: ExitHealth }>; listeners: Partial<{ [key in ListenerId]: ListenerStatus }> }
 /**
@@ -198,7 +262,17 @@ export type Listener = { id: ListenerId; name: string; listener_type: ListenerTy
 export type ListenerId = string
 export type ListenerStatus = "Active" | "DisabledByUser" | "NoExit" | { ExitBroken: { exit_status: ExitStatus } }
 export type ListenerType = "Mixed" | "Http" | "Socks"
-export type Model = { subscriptions: Subscription[]; exits: Exit[]; listeners: Listener[]; settings: Settings }
+/**
+ * 手动添加的节点。组成员关系存在节点上（`groups`）。
+ */
+export type ManualNode = { id: ManualNodeId; name: string; groups: NodeGroupId[]; kind: ManualNodeKind }
+export type ManualNodeId = string
+export type ManualNodeKind = 
+/**
+ * 原样的 mihomo proxy 映射
+ */
+{ Proxy: { raw: JsonValue } } | { Tailscale: TailscaleOpts }
+export type Model = { subscriptions: Subscription[]; exits: Exit[]; listeners: Listener[]; settings: Settings; manual_nodes: ManualNode[]; node_groups: NodeGroup[] }
 export type NetInterface = { 
 /**
  * Adapter GUID exactly as Windows reports it, e.g. `{XXXXXXXX-...}`.
@@ -214,7 +288,22 @@ export type Node = { name: string; proxy_type: string; server: string;
  * 原样的 mihomo proxy 映射
  */
 raw: JsonValue }
-export type NodeRef = { subscription_id: SubscriptionId; name: string }
+export type NodeGroup = { id: NodeGroupId; name: string }
+export type NodeGroupId = string
+/**
+ * 指向一个节点。untagged：旧 JSON `{subscription_id, name}` 直接落到
+ * `Subscription` 变体，存回去的形状也不变。
+ */
+export type NodeRef = { subscription_id: SubscriptionId; name: string } | { manual_id: ManualNodeId }
+/**
+ * A pasted proxy, ready to become `ManualNodeKind::Proxy { raw }`.
+ */
+export type ParsedProxy = { raw: JsonValue; 
+/**
+ * Keys removed from the paste, a subset of
+ * `["interface-name", "routing-mark", "dialer-proxy"]` in that order.
+ */
+stripped: string[] }
 /**
  * Bytes per second.
  */
@@ -243,6 +332,11 @@ export type Subscription = { id: SubscriptionId; name: string; url: string; upda
  */
 last_updated: number | null; last_result: FetchResult | null; nodes: Node[] }
 export type SubscriptionId = string
+export type TailscaleOpts = { hostname: string; exit_node: string; ephemeral: boolean; udp: boolean; auth_key: string | null; 
+/**
+ * None = 走系统默认网卡
+ */
+interface: InterfaceGuid | null }
 export type TrafficTick = { total_rate: Rate; 
 /**
  * Every listener that had a delta in this tick.
@@ -250,6 +344,10 @@ export type TrafficTick = { total_rate: Rate;
 per_listener_rate: Partial<{ [key in ListenerId]: Rate }>; totals: TrafficTotals }
 export type TrafficTotals = { total: Bytes; per_listener: Partial<{ [key in ListenerId]: Bytes }> }
 export type ValidationError = { DuplicateName: { kind: string; name: string } } | { PortConflict: { port: number; with: string } } | { InvalidName: { name: string; reason: string } } | { IntervalOutOfRange: { field: string; value: number } } | { DanglingRef: { what: string } } | 
+/**
+ * A Tailscale instance used by the exit is bound to a different interface than the exit.
+ */
+{ InterfaceMismatch: { exit: string; node: string } } | { InvalidProxy: { name: string; reason: string } } | 
 /**
  * The generated config was rejected by `mihomo -t`.
  */

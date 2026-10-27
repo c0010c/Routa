@@ -20,12 +20,15 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::config_gen::{empty_config, generate, node_proxy_name, nodes_check_config, GenInput};
+use crate::config_gen::{
+    emitted_tailscale_names, empty_config, generate, node_proxy_name, nodes_check_config, GenInput,
+};
 use crate::core::api::MihomoApi;
 use crate::core::apply::{ApplyOutcome, Applier, FailedListener};
 use crate::core::ports::PortOwners;
 use crate::core::process::{wait_ready, CheckError, CoreHandleLike, CoreLauncher, CoreState};
 use crate::model::health::{evaluate, ExitStatus, Health};
+use crate::model::normalize::normalize;
 use crate::model::{
     validate, FetchResult, ListenerId, Model, Node, Settings, Subscription, SubscriptionId, ValidationError,
 };
@@ -404,11 +407,13 @@ impl Inner {
 
     /// evaluate → generate → apply (when a core runs) → update status → emit.
     /// `None` when no core is running (health and interfaces still update).
-    async fn apply_once(&self, eng: &mut Engine) -> Option<ApplyOutcome> {
+    /// After a successful reload the Tailscale instances are prewarmed.
+    async fn apply_once(self: &Arc<Self>, eng: &mut Engine) -> Option<ApplyOutcome> {
         let nics = self.nics.list();
         let Engine { model, core, alloc, .. } = eng;
         let health = evaluate(model, &nics);
         let fetch = fetch_listener_ports(model, alloc);
+        let tailscales = emitted_tailscale_names(model, &nics);
         let outcome = match core.as_mut() {
             Some(run) => {
                 let generated = generate(&GenInput {
@@ -469,7 +474,23 @@ impl Inner {
             }
         }
         self.emit_status();
+        if matches!(outcome, Some(ApplyOutcome::Reloaded { .. })) {
+            self.prewarm_tailscales(tailscales);
+        }
         outcome
+    }
+
+    /// mihomo recreates each Tailscale instance lazily on its first dial
+    /// after a reload, so new connections would fail for a few seconds: dial
+    /// them now with a delay test. Fire-and-forget; failures are only results.
+    fn prewarm_tailscales(self: &Arc<Self>, names: Vec<String>) {
+        if names.is_empty() {
+            return;
+        }
+        let inner = Arc::clone(self);
+        tokio::spawn(async move {
+            inner.test_delays(names).await;
+        });
     }
 
     /// `apply_once`, escalating to a core restart when connections that must
@@ -539,6 +560,8 @@ impl Inner {
         record_result(target, result, now_unix());
         let fetch_result = target.last_result.clone();
         let changed = target.nodes != old_nodes;
+        // New nodes may invalidate a Select exit's selection.
+        normalize(&mut m);
         self.commit_model(&mut eng, m);
         if changed {
             self.apply(&mut eng).await;
@@ -729,6 +752,7 @@ impl Runtime {
         }
         let mut m = eng.model.clone();
         let r = f(&mut m)?;
+        normalize(&mut m);
         validate(&m)?;
         self.inner.check_model(&mut eng, &m).await?;
         // A new controller port or binary only takes effect on a fresh core.
@@ -799,6 +823,26 @@ impl Runtime {
     /// Without a running core every result is `ms: None` and nothing is recorded.
     pub async fn test_delays(&self, names: Vec<String>) -> Vec<(String, DelayResult)> {
         self.inner.test_delays(names).await
+    }
+
+    /// Exit name -> the member mihomo currently uses for it. Names mihomo
+    /// does not know (or that are not groups) are omitted; empty without a core.
+    pub async fn group_now(&self, names: Vec<String>) -> HashMap<String, String> {
+        let api = self.inner.live.lock().unwrap().api.clone();
+        let Some(api) = api.filter(|_| !self.inner.is_shut_down()) else {
+            return HashMap::new();
+        };
+        let mut out = HashMap::new();
+        for name in names {
+            match api.proxy_now(&name).await {
+                Ok(Some(now)) => {
+                    out.insert(name, now);
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("runtime: reading {name} current member failed: {e}"),
+            }
+        }
+        out
     }
 
     /// Zeroes the cumulative traffic totals and persists that.

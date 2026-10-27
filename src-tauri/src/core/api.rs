@@ -77,6 +77,9 @@ pub trait MihomoApi: Send + Sync {
     async fn close_connection(&self, id: &str) -> Result<(), ApiError>;
     async fn delay(&self, proxy: &str, url: &str, timeout_ms: u32) -> Result<u32, ApiError>;
     async fn select(&self, group: &str, member: &str) -> Result<(), ApiError>;
+    /// `GET /proxies/{name}`: the member a group currently uses (`now`);
+    /// `None` when the proxy has no `now` (not a group).
+    async fn proxy_now(&self, name: &str) -> Result<Option<String>, ApiError>;
     /// Yields `(up, down)` bytes per second.
     fn traffic_stream(&self) -> BoxStream<'static, Result<(u64, u64), ApiError>>;
 }
@@ -217,6 +220,18 @@ impl MihomoApi for HttpMihomoApi {
         )
         .await
         .map(|_| ())
+    }
+
+    async fn proxy_now(&self, name: &str) -> Result<Option<String>, ApiError> {
+        #[derive(Deserialize)]
+        struct P {
+            #[serde(default)]
+            now: Option<String>,
+        }
+        let p: P = self
+            .json(self.client.get(format!("{}/proxies/{}", self.base, enc(name))))
+            .await?;
+        Ok(p.now.filter(|n| !n.is_empty()))
     }
 
     fn traffic_stream(&self) -> BoxStream<'static, Result<(u64, u64), ApiError>> {
@@ -418,6 +433,32 @@ mod tests {
         let reqs = server.received_requests().await.unwrap();
         assert!(reqs[0].url.as_str().contains("/proxies/%E7%BB%84%20A%2FB"));
         assert!(reqs[1].url.path().ends_with("/connections/id%2D1"));
+    }
+
+    #[tokio::test]
+    async fn api_proxy_now_parses_now() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(header("authorization", "Bearer s3cret"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"name": "组/A", "type": "Selector", "now": "g/x", "all": ["g/x"]}),
+            ))
+            .mount(&server)
+            .await;
+        let api = api_for(&server);
+        assert_eq!(api.proxy_now("组/A").await.unwrap(), Some("g/x".into()));
+        let reqs = server.received_requests().await.unwrap();
+        assert!(reqs[0].url.path().ends_with("/proxies/%E7%BB%84%2FA"), "{}", reqs[0].url);
+    }
+
+    #[tokio::test]
+    async fn api_proxy_now_absent_is_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"name": "n", "type": "Ss"})))
+            .mount(&server)
+            .await;
+        assert_eq!(api_for(&server).proxy_now("n").await.unwrap(), None);
     }
 
     #[tokio::test]

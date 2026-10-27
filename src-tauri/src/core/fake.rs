@@ -28,6 +28,8 @@ pub struct FakeApi {
     pub delay_calls: Mutex<Vec<(String, String, u32)>>,
     /// Per-proxy delay result; unknown proxies are `Unreachable`.
     pub delay_results: Mutex<HashMap<String, Result<u32, ApiError>>>,
+    /// Group name -> current member for `proxy_now`; unknown names are `Ok(None)`.
+    pub proxy_nows: Mutex<HashMap<String, String>>,
     /// `None` behaves as `Ok("v1.19.33")`.
     pub version_result: Mutex<Option<Result<String, ApiError>>>,
 }
@@ -130,6 +132,10 @@ impl MihomoApi for FakeApi {
             .unwrap()
             .push((group.to_string(), member.to_string()));
         Ok(())
+    }
+
+    async fn proxy_now(&self, name: &str) -> Result<Option<String>, ApiError> {
+        Ok(self.proxy_nows.lock().unwrap().get(name).cloned())
     }
 
     fn traffic_stream(&self) -> BoxStream<'static, Result<(u64, u64), ApiError>> {

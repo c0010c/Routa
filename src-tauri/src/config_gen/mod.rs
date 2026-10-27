@@ -155,6 +155,17 @@ fn tailscale_def(node: &ManualNode, opts: &TailscaleOpts, nics: &[NetInterface])
     tailscale_iface(opts, nics).map(|i| tailscale_proxy(node, opts, i))
 }
 
+/// Proxy names (`手动/<名>`) of the Tailscale instances `generate` writes for
+/// this model and adapter list (an instance whose NIC is unusable is skipped).
+pub fn emitted_tailscale_names(model: &Model, nics: &[NetInterface]) -> Vec<String> {
+    model
+        .manual_nodes
+        .iter()
+        .filter(|n| matches!(&n.kind, ManualNodeKind::Tailscale(o) if tailscale_iface(o, nics).is_some()))
+        .map(manual_proxy_name)
+        .collect()
+}
+
 fn strategy_type(st: &GroupStrategy) -> &'static str {
     match st {
         GroupStrategy::UrlTest => "url-test",

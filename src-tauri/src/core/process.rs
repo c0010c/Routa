@@ -446,6 +446,9 @@ mod tests {
         async fn select(&self, _: &str, _: &str) -> Result<(), ApiError> {
             unimplemented!()
         }
+        async fn proxy_now(&self, _: &str) -> Result<Option<String>, ApiError> {
+            unimplemented!()
+        }
         fn traffic_stream(&self) -> BoxStream<'static, Result<(u64, u64), ApiError>> {
             unimplemented!()
         }

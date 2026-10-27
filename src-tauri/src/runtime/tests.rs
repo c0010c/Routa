@@ -936,3 +936,69 @@ async fn fallback_fetch_only_through_a_port_our_core_owns() {
     let r = reason(h.rt.refresh_subscription(sub_id).await);
     assert!(r.contains("通过出口失败"), "{r}");
 }
+
+fn ts_manual(name: &str, iface: Option<&str>) -> ManualNode {
+    let mut o = TailscaleOpts::defaults_for(name);
+    o.interface = iface.map(|g| InterfaceGuid(g.into()));
+    ManualNode {
+        id: ManualNodeId(format!("ts-{name}")),
+        name: name.into(),
+        groups: vec![],
+        kind: ManualNodeKind::Tailscale(o),
+    }
+}
+
+fn delay_proxies(api: &FakeApi) -> Vec<String> {
+    api.delay_calls.lock().unwrap().iter().map(|c| c.0.clone()).collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn applied_mutation_prewarms_tailscale_instances() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(delay_proxies(&h.api).is_empty(), "no Tailscale instance -> no prewarm");
+
+    let out = h
+        .rt
+        .mutate(|m| {
+            m.manual_nodes.push(ts_manual("家里", None));
+            // Bound to an adapter that does not exist: not emitted, not prewarmed.
+            m.manual_nodes.push(ts_manual("缺网卡", Some("{99999999-0000-0000-0000-000000000000}")));
+        })
+        .await
+        .unwrap();
+    assert!(matches!(out, ApplyOutcome::Reloaded { .. }), "{out:?}");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let calls = h.api.delay_calls.lock().unwrap().clone();
+    assert_eq!(delay_proxies(&h.api), vec!["手动/家里".to_string()]);
+    assert_eq!(calls[0].1, h.rt.model().settings.delay_test_url);
+    assert_eq!(calls[0].2, crate::stats::delay::DEFAULT_TIMEOUT_MS);
+
+    // A core (re)start prewarms too.
+    h.rt.restart_core().await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(delay_proxies(&h.api).len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn applied_mutation_without_tailscale_does_not_prewarm() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    h.rt.mutate(|m| m.listeners[0].name = "L2".into()).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(delay_proxies(&h.api).is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn group_now_reports_known_selections() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    assert!(h.rt.group_now(vec!["组".into()]).await.is_empty(), "no core -> empty");
+    h.rt.restart_core().await;
+    h.api.proxy_nows.lock().unwrap().insert("组".into(), "组/订阅/HK".into());
+    let got = h.rt.group_now(vec!["组".into(), "别的".into()]).await;
+    assert_eq!(got, [("组".to_string(), "组/订阅/HK".to_string())].into_iter().collect());
+}
