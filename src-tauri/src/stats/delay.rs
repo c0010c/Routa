@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::api::MihomoApi;
 
 pub const DEFAULT_CONCURRENCY: usize = 16;
-pub const DEFAULT_TIMEOUT_MS: u32 = 5000;
+pub const DEFAULT_TIMEOUT_MS: u32 = 10000;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, specta::Type)]
 pub struct DelayResult {

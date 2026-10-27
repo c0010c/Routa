@@ -205,6 +205,7 @@ fn base_config(
     let root = map(vec![
         ("mode", s("rule")),
         ("log-level", s("warning")),
+        ("unified-delay", Value::Bool(true)),
         ("allow-lan", Value::Bool(true)),
         ("external-controller", s(&format!("127.0.0.1:{controller_port}"))),
         ("secret", s(secret)),
@@ -567,6 +568,14 @@ mod tests {
         m.settings.delay_test_interval_mins = None;
         let v = parse(&gen(&m).yaml);
         assert_eq!(v["proxy-groups"][0]["interval"].as_u64(), Some(0));
+    }
+
+    #[test]
+    fn unified_delay_enabled() {
+        let v = parse(&gen(&base()).yaml);
+        assert_eq!(v["unified-delay"].as_bool(), Some(true));
+        let e = parse(&empty_config(19098, "s"));
+        assert_eq!(e["unified-delay"].as_bool(), Some(true));
     }
 
     #[test]

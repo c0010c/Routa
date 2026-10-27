@@ -1,5 +1,6 @@
 mode: rule
 log-level: warning
+unified-delay: true
 allow-lan: true
 external-controller: 127.0.0.1:19097
 secret: sekret
