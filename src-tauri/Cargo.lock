@@ -2180,37 +2180,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "routa"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.23.1",
- "futures-util",
- "getrandom 0.3.4",
- "ipconfig",
- "percent-encoding",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "specta",
- "specta-typescript",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-single-instance",
- "tauri-specta",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "url",
- "uuid",
- "windows-sys 0.61.2",
- "wiremock",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3140,6 +3109,37 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+]
+
+[[package]]
+name = "routa"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.23.1",
+ "futures-util",
+ "getrandom 0.3.4",
+ "ipconfig",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "specta",
+ "specta-typescript",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-single-instance",
+ "tauri-specta",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
+ "uuid",
+ "windows-sys 0.61.2",
+ "wiremock",
 ]
 
 [[package]]

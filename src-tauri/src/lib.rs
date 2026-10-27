@@ -3,6 +3,7 @@ pub mod config_gen;
 pub mod core;
 pub mod model;
 pub mod netif;
+pub mod portable;
 pub mod runtime;
 pub mod scheduler;
 pub mod stats;
@@ -41,8 +42,57 @@ fn sidecar_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/mihomo-x86_64-pc-windows-msvc.exe")
 }
 
-fn build_runtime(app: &tauri::AppHandle) -> Result<Arc<Runtime>, Box<dyn std::error::Error>> {
-    let store = Store::open(app.path().app_data_dir()?)?;
+/// Startup errors in a release build have no console, so show them in a box.
+#[cfg(windows)]
+fn fatal_dialog(msg: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (text, caption) = (wide(msg), wide("Routa"));
+    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONERROR) };
+}
+
+/// `Some(data dir)` in portable mode, after making sure it is writable.
+fn portable_data_dir() -> Result<Option<PathBuf>, String> {
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().and_then(portable::data_dir_for))
+    else {
+        return Ok(None);
+    };
+    portable::prepare(&dir).map_err(|e| {
+        format!(
+            "便携模式无法写入数据目录：\n{}\n\n{e}\n\n请把程序放到可写的位置，或删除 exe 旁边的 `{}` 文件改用普通模式。",
+            dir.display(),
+            portable::MARKER
+        )
+    })?;
+    Ok(Some(dir))
+}
+
+/// The main window is created here rather than from tauri.conf.json so that
+/// portable mode can point the WebView2 profile next to the exe.
+fn create_main_window(app: &tauri::App, portable: Option<&std::path::Path>) -> tauri::Result<()> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .expect("main window missing from tauri.conf.json")
+        .clone();
+    let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+    if let Some(dir) = portable {
+        builder = builder.data_directory(portable::webview_dir(dir));
+    }
+    builder.build()?;
+    Ok(())
+}
+
+fn build_runtime(
+    app: &tauri::AppHandle,
+    data_dir: PathBuf,
+) -> Result<Arc<Runtime>, Box<dyn std::error::Error>> {
+    let store = Store::open(data_dir)?;
     let workdir = store.core_workdir();
     let launcher_for: LauncherFor = Arc::new(move |s: &Settings| {
         let bin = s
@@ -80,6 +130,16 @@ fn build_runtime(app: &tauri::AppHandle) -> Result<Arc<Runtime>, Box<dyn std::er
 }
 
 pub fn run() {
+    let portable_dir = match portable_data_dir() {
+        Ok(dir) => dir,
+        Err(msg) => {
+            eprintln!("{msg}");
+            #[cfg(windows)]
+            fatal_dialog(&msg);
+            std::process::exit(1);
+        }
+    };
+
     let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::get_model,
         commands::get_status,
@@ -130,8 +190,13 @@ pub fn run() {
             None,
         ))
         .invoke_handler(builder.invoke_handler())
-        .setup(|app| {
-            let rt = build_runtime(app.handle())?;
+        .setup(move |app| {
+            create_main_window(app, portable_dir.as_deref())?;
+            let data_dir = match portable_dir {
+                Some(dir) => dir,
+                None => app.path().app_data_dir()?,
+            };
+            let rt = build_runtime(app.handle(), data_dir)?;
             app.manage(rt.clone());
             tray::setup(app.handle())?;
             tauri::async_runtime::spawn(async move {

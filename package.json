@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "fetch-mihomo": "node scripts/fetch-mihomo.mjs"
+    "fetch-mihomo": "node scripts/fetch-mihomo.mjs",
+    "pack:portable": "node scripts/pack-portable.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

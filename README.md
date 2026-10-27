@@ -30,10 +30,18 @@
 
 - `routa_<版本>_x64-setup.exe`（NSIS 安装程序）
 - `routa_<版本>_x64_en-US.msi`（MSI 安装包）
+- `routa_<版本>_x64_portable.zip`（便携版，解压即用）
 
 安装包已内置 mihomo 内核（版本见 [`src-tauri/binaries/MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)），也可以在设置页改用自己的内核。
 
 数据保存在 `%APPDATA%\dev.routa\`（`state.json` 为配置，`mihomo\` 为内核工作目录和日志）。
+
+**便携版**：exe 旁边有 `portable` 文件时，所有数据（包括 WebView 缓存）都保存在 exe 旁边的 `data\` 文件夹中；删除该文件即恢复为上述普通模式。注意：
+
+- 程序目录必须可写（不要放在 `Program Files` 下），否则启动时会报错；
+- 开机自启会记录当前 exe 路径，移动文件夹后需在设置页重新开启；
+- 需要系统自带的 WebView2 运行时（Windows 10/11 一般已内置）；
+- 便携版与安装版不能同时运行。
 
 > 仅支持 Windows x64。本工具不提供 TUN 模式、系统代理和按规则分流。
 
@@ -46,6 +54,7 @@ pnpm install
 pnpm fetch-mihomo     # 下载并校验固定版本的 mihomo 内核到 src-tauri/binaries
 pnpm tauri dev        # 开发模式运行
 pnpm tauri build      # 生成 NSIS / MSI 安装包，位于 src-tauri/target/release/bundle
+pnpm pack:portable    # 生成便携版 zip，位于 src-tauri/target/release/bundle/portable
 ```
 
 测试：
@@ -90,10 +99,18 @@ Download either installer from [Releases](https://github.com/c0010c/mihomoGUI/re
 
 - `routa_<version>_x64-setup.exe` (NSIS installer)
 - `routa_<version>_x64_en-US.msi` (MSI package)
+- `routa_<version>_x64_portable.zip` (portable, just unzip and run)
 
 The mihomo core is bundled (version in [`src-tauri/binaries/MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)); you can point the app to your own core in Settings.
 
 Data lives in `%APPDATA%\dev.routa\` (`state.json` holds the configuration, `mihomo\` is the core's working directory and log).
+
+**Portable mode**: when a `portable` file sits next to the exe, all data (including the WebView cache) is stored in a `data\` folder next to the exe; delete that file to go back to the normal mode above. Note:
+
+- The app folder must be writable (not under `Program Files`), otherwise the app reports an error on startup;
+- Start with Windows records the current exe path; after moving the folder, turn it on again in Settings;
+- The WebView2 runtime is required (usually built into Windows 10/11);
+- The portable and installed versions cannot run at the same time.
 
 > Windows x64 only. TUN mode, system proxy and rule-based routing are out of scope.
 
@@ -106,6 +123,7 @@ pnpm install
 pnpm fetch-mihomo     # download and verify the pinned mihomo core into src-tauri/binaries
 pnpm tauri dev        # run in development mode
 pnpm tauri build      # build NSIS / MSI installers into src-tauri/target/release/bundle
+pnpm pack:portable    # build the portable zip into src-tauri/target/release/bundle/portable
 ```
 
 Tests:
