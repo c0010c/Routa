@@ -19,3 +19,21 @@ describe("App", () => {
     expect(labels).toEqual(["概览", "监听器", "出口", "节点", "Tailscale", "设置"]);
   });
 });
+
+describe("Layout sidebar", () => {
+  it("shows the brand and version", () => {
+    render(<App />);
+    const nav = screen.getByRole("navigation", { name: "主导航" });
+    expect(screen.getByText("Routa")).toBeInTheDocument();
+    expect(screen.getByText("v0.1.0")).toBeInTheDocument();
+    expect(nav).toBeInTheDocument();
+  });
+
+  it("marks only the current page as selected", () => {
+    window.location.hash = "#/";
+    render(<App />);
+    const links = within(screen.getByRole("navigation", { name: "主导航" })).getAllByRole("link");
+    const selected = links.filter((l) => l.classList.contains("Mui-selected")).map((l) => l.textContent);
+    expect(selected).toEqual(["概览"]);
+  });
+});

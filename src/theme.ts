@@ -81,7 +81,7 @@ export const theme = createTheme({
           position: "relative",
           "&.Mui-selected": {
             backgroundColor: theme.vars.palette.action.selected,
-            fontWeight: 600,
+            "& .MuiListItemText-primary": { fontWeight: 600 },
             "&::before": {
               content: '""',
               position: "absolute",
