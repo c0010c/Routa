@@ -85,3 +85,6 @@ T5 (reload, PUT /configs?force=true changing only an unrelated listener port):
 - An existing long-lived stream through the tailscale node (slow HTTP stream to 100.113.29.21:19210) kept flowing across the reload (bytes kept growing for >20 s after).
 - The reload creates a NEW tsnet instance lazily: the first new connection after the reload failed (502 after 5 s) while the new instance started from the saved state (no re-login, ~4 s); subsequent new connections OK.
 - So: reload does not cut existing connections, but new connections see a ~5 s cold-start window (first request fails) after every reload/restart.
+
+### Exit node follow-up
+The tailnet has one exit node (`tailscale exit-node list`: 100.91.166.56, vm-0-5-opencloudos). With `exit-node: 100.91.166.56` (config spike/work/b/config3.yaml, same state-dir, no re-login): `https://www.gstatic.com/generate_204` → 204, egress IP via the node 129.226.158.134 vs direct 111.55.210.111. So the data path through an exit node works; `exit-node: auto:any` does not select it on v1.19.33 (DNS fails, IPs time out). Conclusion: the UI must let the user enter a concrete exit node (IP or name); `auto:any` cannot be relied on.
