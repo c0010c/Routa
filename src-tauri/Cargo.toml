@@ -1,10 +1,10 @@
 [package]
-name = "mihomo-mapper"
+name = "routa"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "mihomo_mapper_lib"
+name = "routa_lib"
 crate-type = ["rlib"]
 
 [build-dependencies]

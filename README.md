@@ -1,4 +1,4 @@
-# mihomo-mapper
+# Routa
 
 [中文](#中文) | [English](#english)
 
@@ -28,12 +28,12 @@
 
 从 [Releases](https://github.com/c0010c/mihomoGUI/releases) 下载以下任意一个安装包：
 
-- `mihomo-mapper_<版本>_x64-setup.exe`（NSIS 安装程序）
-- `mihomo-mapper_<版本>_x64_en-US.msi`（MSI 安装包）
+- `routa_<版本>_x64-setup.exe`（NSIS 安装程序）
+- `routa_<版本>_x64_en-US.msi`（MSI 安装包）
 
 安装包已内置 mihomo 内核（版本见 [`src-tauri/binaries/MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)），也可以在设置页改用自己的内核。
 
-数据保存在 `%APPDATA%\dev.mihomo-mapper\`（`state.json` 为配置，`mihomo\` 为内核工作目录和日志）。
+数据保存在 `%APPDATA%\dev.routa\`（`state.json` 为配置，`mihomo\` 为内核工作目录和日志）。
 
 > 仅支持 Windows x64。本工具不提供 TUN 模式、系统代理和按规则分流。
 
@@ -88,12 +88,12 @@ It is made for setups like:
 
 Download either installer from [Releases](https://github.com/c0010c/mihomoGUI/releases):
 
-- `mihomo-mapper_<version>_x64-setup.exe` (NSIS installer)
-- `mihomo-mapper_<version>_x64_en-US.msi` (MSI package)
+- `routa_<version>_x64-setup.exe` (NSIS installer)
+- `routa_<version>_x64_en-US.msi` (MSI package)
 
 The mihomo core is bundled (version in [`src-tauri/binaries/MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)); you can point the app to your own core in Settings.
 
-Data lives in `%APPDATA%\dev.mihomo-mapper\` (`state.json` holds the configuration, `mihomo\` is the core's working directory and log).
+Data lives in `%APPDATA%\dev.routa\` (`state.json` holds the configuration, `mihomo\` is the core's working directory and log).
 
 > Windows x64 only. TUN mode, system proxy and rule-based routing are out of scope.
 

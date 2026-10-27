@@ -23,7 +23,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&open, &restart, &quit])?;
 
     let mut builder = TrayIconBuilder::new()
-        .tooltip("mihomo-mapper")
+        .tooltip("Routa")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {

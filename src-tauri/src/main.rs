@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    mihomo_mapper_lib::run()
+    routa_lib::run()
 }
