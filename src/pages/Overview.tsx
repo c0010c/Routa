@@ -22,11 +22,11 @@ import {
   useStatus,
   useTraffic,
 } from "../api/client";
-import type { ApplyOutcome, CoreState, Exit, Model, NodeRef, RuntimeStatus } from "../bindings";
+import type { ApplyOutcome, CoreState, Exit, Model, RuntimeStatus } from "../bindings";
+import { isNodeRef, nodeKey, nodeLabel } from "../lib/refs";
 import { ListenerStatusChip } from "../components/StatusChips";
 import { exitStatusLabel, formatBytes, formatRate, listenerNotEffective } from "../lib/format";
 
-const refKey = (r: NodeRef) => `${r.subscription_id}/${r.name}`;
 
 function coreText(c: CoreState): string {
   if (c === "Stopped") return "已停止";
@@ -89,25 +89,28 @@ function CoreControls({ core }: { core: CoreState }) {
 
 function GroupSelect({ exit }: { exit: Exit }) {
   const select = useSelectGroupMember();
+  const model = useModel().data;
   if (typeof exit.kind !== "object" || !("Group" in exit.kind) || exit.kind.Group.strategy !== "Select") {
     return null;
   }
-  const { members, selected } = exit.kind.Group;
+  const { selected } = exit.kind.Group;
+  // Whole-group members are expanded by the later overview rework; for now only single nodes are listed.
+  const members = exit.kind.Group.members.filter(isNodeRef);
   return (
     <Select
       size="small"
-      value={selected ? refKey(selected) : ""}
+      value={selected ? nodeKey(selected) : ""}
       displayEmpty
       onChange={(e) => {
-        const m = members.find((x) => refKey(x) === e.target.value);
+        const m = members.find((x) => nodeKey(x) === e.target.value);
         if (m) select.mutate(exit.id, m);
       }}
       inputProps={{ "aria-label": `${exit.name} 成员` }}
       sx={{ ml: 1, minWidth: 140 }}
     >
       {members.map((m) => (
-        <MenuItem key={refKey(m)} value={refKey(m)}>
-          {m.name}
+        <MenuItem key={nodeKey(m)} value={nodeKey(m)}>
+          {model ? nodeLabel(model, m) : ""}
         </MenuItem>
       ))}
     </Select>

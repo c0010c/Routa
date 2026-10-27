@@ -29,6 +29,8 @@ const model: Model = {
     { id: "l3", name: "备用", listener_type: "Mixed", listen: "0.0.0.0", port: 7892, auth: null, exit: null, user_enabled: true },
   ],
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
+  manual_nodes: [],
+  node_groups: [],
 };
 
 const status: RuntimeStatus = {

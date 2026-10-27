@@ -96,6 +96,21 @@ function make<A extends unknown[], T>(get: () => Fn<A, T>) {
   };
 }
 
+export const useSaveManualNode = make(() => commands.saveManualNode);
+export const useDeleteManualNode = make(() => commands.deleteManualNode);
+export const useSaveNodeGroup = make(() => commands.saveNodeGroup);
+export const useDeleteNodeGroup = make(() => commands.deleteNodeGroup);
+export const useParseProxyYaml = make(() => commands.parseProxyYaml);
+
+/** Currently selected member of each given select-type proxy group (mihomo names). */
+export function useGroupNow(names: string[]) {
+  return useQuery({
+    queryKey: ["groupNow", ...names],
+    queryFn: async () => unwrap(await commands.groupNow(names)),
+    refetchInterval: 5000,
+  });
+}
+
 export const useSaveListener = make(() => commands.saveListener);
 export const useDeleteListener = make(() => commands.deleteListener);
 export const useSaveExit = make(() => commands.saveExit);

@@ -20,6 +20,10 @@ export function fieldErrors(errors: ValidationError[]): FieldErrors {
       out.form.push(`仍被引用：${e.DanglingRef.what}`);
     } else if ("CoreRejected" in e) {
       out.form.push(`mihomo 拒绝了该配置：${e.CoreRejected.message}`);
+    } else if ("InterfaceMismatch" in e) {
+      out.form.push(`出口「${e.InterfaceMismatch.exit}」与 Tailscale「${e.InterfaceMismatch.node}」的网卡不一致`);
+    } else if ("InvalidProxy" in e) {
+      out.form.push(`节点「${e.InvalidProxy.name}」：${e.InvalidProxy.reason}`);
     } else {
       out.form.push(`${e.IntervalOutOfRange.field} 的值 ${e.IntervalOutOfRange.value} 超出允许范围`);
     }

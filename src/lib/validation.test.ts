@@ -33,6 +33,13 @@ describe("fieldErrors", () => {
     expect(r.form).toEqual(["mihomo 拒绝了该配置：proxy 0: '' has unset fields: cipher"]);
   });
 
+  it("puts interface mismatch and invalid proxy at form level", () => {
+    expect(fieldErrors([{ InterfaceMismatch: { exit: "E", node: "ts" } }]).form).toEqual([
+      "出口「E」与 Tailscale「ts」的网卡不一致",
+    ]);
+    expect(fieldErrors([{ InvalidProxy: { name: "a", reason: "缺少 type" } }]).form).toEqual(["节点「a」：缺少 type"]);
+  });
+
   it("returns an empty form list when there are no errors", () => {
     expect(fieldErrors([])).toEqual({ form: [] });
   });

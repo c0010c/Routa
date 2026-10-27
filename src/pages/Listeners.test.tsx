@@ -21,6 +21,8 @@ const model: Model = {
     { id: "l1", name: "下载", listener_type: "Mixed", listen: "0.0.0.0", port: 7891, auth: null, exit: null, user_enabled: false },
   ],
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
+  manual_nodes: [],
+  node_groups: [],
 };
 const status: RuntimeStatus = {
   core: "Running",

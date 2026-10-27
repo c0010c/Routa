@@ -16,9 +16,10 @@ import {
 } from "@mui/material";
 import { useState } from "react";
 import { isValidationError, useModel, useSaveExit, useStatus } from "../api/client";
-import type { Exit, ExitKind, GroupStrategy, NodeRef } from "../bindings";
+import type { Exit, ExitKind, ExitMember, GroupStrategy, NodeRef } from "../bindings";
 import { InterfacePicker } from "../components/InterfacePicker";
 import { NodePicker } from "../components/NodePicker";
+import { isGroupMember, isNodeRef, memberKey } from "../lib/refs";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
 
 type KindType = "Node" | "Group" | "Direct";
@@ -30,7 +31,6 @@ const STRATEGIES: { value: GroupStrategy; label: string }[] = [
   { value: "Select", label: "手动选择" },
 ];
 
-const refKey = (r: NodeRef) => `${r.subscription_id}/${r.name}`;
 
 export function newExit(): Exit {
   return { id: crypto.randomUUID(), name: "", kind: "Direct", interface: null };
@@ -52,7 +52,7 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
   const [strategy, setStrategy] = useState<GroupStrategy>(
     typeof exit.kind === "object" && "Group" in exit.kind ? exit.kind.Group.strategy : "UrlTest",
   );
-  const [members, setMembers] = useState<NodeRef[]>(
+  const [members, setMembers] = useState<ExitMember[]>(
     typeof exit.kind === "object" && "Group" in exit.kind ? exit.kind.Group.members : [],
   );
   const [selected] = useState<NodeRef | null>(
@@ -63,8 +63,8 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
   const [nodeError, setNodeError] = useState<string>();
 
   const missing = status.data?.health.exits[exit.id]?.missing_members ?? [];
-  const missingKeys = new Set(missing.map(refKey));
-  const staleInForm = members.filter((m) => missingKeys.has(refKey(m)));
+  const missingKeys = new Set(missing.map(memberKey));
+  const staleInForm = members.filter((m) => missingKeys.has(memberKey(m)));
 
   const submit = async () => {
     let kind: ExitKind;
@@ -80,7 +80,7 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
         Group: {
           strategy,
           members,
-          selected: selected && members.some((m) => refKey(m) === refKey(selected)) ? selected : null,
+          selected: selected && members.some((m) => memberKey(m) === memberKey(selected)) ? selected : null,
         },
       };
     }
@@ -153,16 +153,22 @@ export function ExitDialog({ exit, onClose }: { exit: Exit; onClose: () => void 
                   ))}
                 </Select>
               </FormControl>
-              <NodePicker multiple label="成员" value={members} onChange={setMembers} />
+              <NodePicker
+                multiple
+                label="成员"
+                value={members.filter(isNodeRef)}
+                // Whole-group members are edited by the later member picker; keep them untouched here.
+                onChange={(v) => setMembers([...members.filter(isGroupMember), ...v])}
+              />
               {staleInForm.length > 0 && (
                 <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
                   <Typography color="error" variant="body2">
-                    失效成员：{staleInForm.map((m) => m.name).join("、")}
+                    失效成员：{staleInForm.map((m) => (isGroupMember(m) ? "（已删除的组）" : "name" in m ? m.name : "（已删除）")).join("、")}
                   </Typography>
                   <Button
                     size="small"
                     color="error"
-                    onClick={() => setMembers(members.filter((m) => !missingKeys.has(refKey(m))))}
+                    onClick={() => setMembers(members.filter((m) => !missingKeys.has(memberKey(m))))}
                   >
                     移除失效成员
                   </Button>

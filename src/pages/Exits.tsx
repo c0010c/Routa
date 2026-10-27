@@ -12,7 +12,8 @@ import {
 } from "@mui/material";
 import { useState } from "react";
 import { useDeleteExit, useModel, useStatus, useTestDelays } from "../api/client";
-import type { Exit } from "../bindings";
+import type { Exit, Model } from "../bindings";
+import { nodeLabel } from "../lib/refs";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { ExitStatusChip } from "../components/StatusChips";
 import { ExitDialog, newExit } from "./ExitDialog";
@@ -22,9 +23,9 @@ function kindText(e: Exit): string {
   return "Node" in e.kind ? "节点" : "策略组";
 }
 
-function nodeOrMembers(e: Exit): string {
+function nodeOrMembers(e: Exit, model: Model): string {
   if (e.kind === "Direct") return "—";
-  return "Node" in e.kind ? e.kind.Node.node.name : `${e.kind.Group.members.length} 个成员`;
+  return "Node" in e.kind ? nodeLabel(model, e.kind.Node.node) :`${e.kind.Group.members.length} 个成员`;
 }
 
 export function Exits() {
@@ -70,7 +71,7 @@ export function Exits() {
                 <TableRow key={e.id}>
                   <TableCell>{e.name}</TableCell>
                   <TableCell>{kindText(e)}</TableCell>
-                  <TableCell>{nodeOrMembers(e)}</TableCell>
+                  <TableCell>{nodeOrMembers(e, m)}</TableCell>
                   <TableCell>{iface}</TableCell>
                   <TableCell>{!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}</TableCell>
                   <TableCell>{users.length > 0 ? users.join("、") : "—"}</TableCell>
