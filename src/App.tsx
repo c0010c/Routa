@@ -9,6 +9,7 @@ import { Listeners } from "./pages/Listeners";
 import { Nodes } from "./pages/Nodes";
 import { Overview } from "./pages/Overview";
 import { Settings } from "./pages/Settings";
+import { Tailscale } from "./pages/Tailscale";
 
 const queryClient = new QueryClient();
 
@@ -30,6 +31,7 @@ export default function App() {
               <Route path="/listeners" element={<Listeners />} />
               <Route path="/exits" element={<Exits />} />
               <Route path="/nodes" element={<Nodes />} />
+              <Route path="/tailscale" element={<Tailscale />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
           </Layout>

@@ -9,6 +9,7 @@ export const pages = [
   { path: "/listeners", label: "Listener" },
   { path: "/exits", label: "出口" },
   { path: "/nodes", label: "节点" },
+  { path: "/tailscale", label: "Tailscale" },
   { path: "/settings", label: "设置" },
 ];
 

@@ -13,9 +13,9 @@ describe("App", () => {
   it("renders the five navigation items", () => {
     render(<App />);
     const nav = screen.getByRole("navigation", { name: "主导航" });
-    for (const label of ["概览", "Listener", "出口", "节点", "设置"]) {
-      expect(within(nav).getByText(label)).toBeInTheDocument();
-    }
-    expect(within(nav).getAllByRole("link")).toHaveLength(5);
+    const labels = within(nav)
+      .getAllByRole("link")
+      .map((l) => l.textContent);
+    expect(labels).toEqual(["概览", "Listener", "出口", "节点", "Tailscale", "设置"]);
   });
 });
