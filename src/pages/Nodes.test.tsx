@@ -12,7 +12,7 @@ vi.mock("../bindings", () => ({
 
 import { commands } from "../bindings";
 import { ApplyResultProvider } from "../components/ApplyResultSnackbar";
-import { Nodes } from "./Nodes";
+import { Nodes, visibleRows, type Row } from "./Nodes";
 
 const model: Model = {
   subscriptions: [
@@ -112,5 +112,45 @@ describe("Nodes", () => {
     expect(await within(tsRow).findByText("待登录")).toBeInTheDocument();
     const socksRow = screen.getByRole("cell", { name: "家用 socks" }).closest("tr")!;
     expect(within(socksRow).queryByText("待登录")).not.toBeInTheDocument();
+  });
+});
+
+describe("visibleRows", () => {
+  const row = (name: string, server = "s"): Row => ({ key: name, name, type: "ss", server, proxyName: name });
+  const rows = [row("香港 01", "hk.a.com"), row("日本 01", "jp.a.com"), row("美国 01", "us.a.com"), row("新加坡")];
+  const delays = { "香港 01": { ms: 300, tested_at: 0 }, "日本 01": { ms: 80, tested_at: 0 }, "美国 01": { ms: null, tested_at: 0 } };
+
+  it("filters by name or server, case-insensitively", () => {
+    expect(visibleRows(rows, delays, "香港", false).map((r) => r.name)).toEqual(["香港 01"]);
+    expect(visibleRows(rows, delays, " JP.A ", false).map((r) => r.name)).toEqual(["日本 01"]);
+  });
+
+  it("sorts by delay with timeouts and untested last, keeping the original otherwise", () => {
+    expect(visibleRows(rows, delays, "", false).map((r) => r.name)).toEqual(["香港 01", "日本 01", "美国 01", "新加坡"]);
+    expect(visibleRows(rows, delays, "", true).map((r) => r.name)).toEqual(["日本 01", "香港 01", "美国 01", "新加坡"]);
+  });
+});
+
+describe("Nodes table", () => {
+  beforeEach(() => {
+    vi.mocked(commands.getModel).mockResolvedValue(model);
+    vi.mocked(commands.getStatus).mockResolvedValue(status);
+  });
+
+  it("searches and reports no match", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ApplyResultProvider>
+          <MemoryRouter>
+            <Nodes />
+          </MemoryRouter>
+        </ApplyResultProvider>
+      </QueryClientProvider>,
+    );
+    const search = await screen.findByLabelText("搜索节点");
+    fireEvent.change(search, { target: { value: "不存在" } });
+    expect(screen.getByText("没有匹配「不存在」的节点")).toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "香港" } });
+    expect(screen.getByText("香港 01")).toBeInTheDocument();
   });
 });

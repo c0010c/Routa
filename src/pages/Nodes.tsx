@@ -15,6 +15,8 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
+  TextField,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
@@ -56,7 +58,7 @@ type Selection = { kind: "sub"; id: string } | { kind: "ungrouped" } | { kind: "
 const sameSel = (a: Selection, b: Selection) =>
   a.kind === b.kind && (a.kind === "ungrouped" || (b.kind !== "ungrouped" && a.id === b.id));
 
-interface Row {
+export interface Row {
   key: string;
   name: string;
   type: string;
@@ -155,13 +157,13 @@ export function Nodes() {
     <Stack spacing={2}>
       <Stack direction="row" sx={{ justifyContent: "space-between" }}>
         <Typography variant="h5">节点</Typography>
-        <Button disabled={test.isPending || allNames.length === 0} onClick={() => test.mutate(allNames)}>
+        <Button variant="outlined" disabled={test.isPending || allNames.length === 0} onClick={() => test.mutate(allNames)}>
           全部测速
         </Button>
       </Stack>
 
       <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start" }}>
-        <Paper component="nav" aria-label="节点分组" variant="outlined" sx={{ width: 300, flexShrink: 0 }}>
+        <Paper component="nav" aria-label="节点分组" variant="outlined" sx={{ width: 260, flexShrink: 0 }}>
           <List dense disablePadding>
             <ListSubheader sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               订阅
@@ -304,6 +306,24 @@ export function Nodes() {
   );
 }
 
+/** Filters by name/server (case-insensitive); optionally sorts by delay, untested and timed-out last. */
+export function visibleRows(rows: Row[], delays: DelayBook, query: string, byDelay: boolean): Row[] {
+  const q = query.trim().toLowerCase();
+  const out = q ? rows.filter((r) => r.name.toLowerCase().includes(q) || r.server.toLowerCase().includes(q)) : rows;
+  if (!byDelay) return out;
+  const ms = (r: Row) => delays[r.proxyName]?.ms ?? Infinity;
+  return [...out].sort((a, b) => ms(a) - ms(b));
+}
+
+function delayColor(ms: number | null): string {
+  if (ms === null) return "error.main";
+  if (ms < 300) return "success.main";
+  if (ms < 800) return "warning.main";
+  return "error.main";
+}
+
+const ellipsis = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
+
 function NodeTable({
   label,
   rows,
@@ -321,58 +341,92 @@ function NodeTable({
   onEdit: (n: ManualNode) => void;
   onDelete: (n: ManualNode) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [byDelay, setByDelay] = useState(false);
+  const shown = visibleRows(rows, delays, query, byDelay);
+  // Manual rows carry edit/delete (or the Tailscale link); subscription rows only 测速.
+  const actionsWidth = rows.some((r) => r.manual) ? 220 : 80;
   return (
-    <TableContainer component={Paper}>
-      <Table size="small" aria-label={label}>
-        <TableHead>
-          <TableRow>
-            {["名称", "类型", "服务器", "延迟", "操作"].map((h) => (
-              <TableCell key={h}>{h}</TableCell>
-            ))}
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {rows.map((r) => {
-            const d = delays[r.proxyName];
-            const n = r.manual;
-            return (
-              <TableRow key={r.key}>
-                <TableCell>{r.name}</TableCell>
-                <TableCell>
-                  {r.type}
-                  {n && "Tailscale" in n.kind && (
-                    <Box component="span" sx={{ ml: 1 }}>
-                      <TailscaleStateChip node={n} />
-                    </Box>
-                  )}
-                </TableCell>
-                <TableCell>{r.server}</TableCell>
-                <TableCell>{!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}</TableCell>
-                <TableCell>
-                  <Button size="small" aria-label={`测速 ${r.name}`} disabled={testing} onClick={() => onTest(r.proxyName)}>
-                    测速
-                  </Button>
-                  {n && "Tailscale" in n.kind && (
-                    <Button size="small" component={RouterLink} to="/tailscale">
-                      去 Tailscale 页编辑
-                    </Button>
-                  )}
-                  {n && "Proxy" in n.kind && (
-                    <>
-                      <Button size="small" aria-label={`编辑 ${r.name}`} onClick={() => onEdit(n)}>
-                        编辑
-                      </Button>
-                      <Button size="small" color="error" aria-label={`删除 ${r.name}`} onClick={() => onDelete(n)}>
-                        删除
-                      </Button>
-                    </>
-                  )}
+    <Stack spacing={1}>
+      <TextField
+        size="small"
+        placeholder="搜索名称或服务器"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        slotProps={{ htmlInput: { "aria-label": "搜索节点" } }}
+        sx={{ maxWidth: 280 }}
+      />
+      <TableContainer component={Paper}>
+        <Table size="small" aria-label={label} sx={{ tableLayout: "fixed", "& th": { whiteSpace: "nowrap" } }}>
+          <TableHead>
+            <TableRow>
+              <TableCell>名称</TableCell>
+              <TableCell sx={{ width: 110 }}>类型</TableCell>
+              <TableCell sx={{ width: "28%" }}>服务器</TableCell>
+              <TableCell sx={{ width: 90 }} sortDirection={byDelay ? "asc" : false}>
+                <TableSortLabel active={byDelay} direction="asc" onClick={() => setByDelay((v) => !v)}>
+                  延迟
+                </TableSortLabel>
+              </TableCell>
+              <TableCell sx={{ width: actionsWidth }}>操作</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {shown.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} sx={{ textAlign: "center", color: "text.secondary" }}>
+                  没有匹配「{query.trim()}」的节点
                 </TableCell>
               </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </TableContainer>
+            )}
+            {shown.map((r) => {
+              const d = delays[r.proxyName];
+              const n = r.manual;
+              return (
+                <TableRow key={r.key}>
+                  <TableCell sx={ellipsis} title={r.name}>
+                    {r.name}
+                  </TableCell>
+                  <TableCell>
+                    {r.type}
+                    {n && "Tailscale" in n.kind && (
+                      <Box component="span" sx={{ ml: 1 }}>
+                        <TailscaleStateChip node={n} />
+                      </Box>
+                    )}
+                  </TableCell>
+                  <TableCell sx={ellipsis} title={r.server}>
+                    {r.server}
+                  </TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap", color: d ? delayColor(d.ms) : undefined }}>
+                    {!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}
+                  </TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>
+                    <Button size="small" aria-label={`测速 ${r.name}`} disabled={testing} onClick={() => onTest(r.proxyName)}>
+                      测速
+                    </Button>
+                    {n && "Tailscale" in n.kind && (
+                      <Button size="small" component={RouterLink} to="/tailscale">
+                        去 Tailscale 页编辑
+                      </Button>
+                    )}
+                    {n && "Proxy" in n.kind && (
+                      <>
+                        <Button size="small" aria-label={`编辑 ${r.name}`} onClick={() => onEdit(n)}>
+                          编辑
+                        </Button>
+                        <Button size="small" color="error" aria-label={`删除 ${r.name}`} onClick={() => onDelete(n)}>
+                          删除
+                        </Button>
+                      </>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </Stack>
   );
 }
