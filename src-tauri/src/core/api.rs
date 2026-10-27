@@ -82,6 +82,9 @@ pub trait MihomoApi: Send + Sync {
     async fn proxy_now(&self, name: &str) -> Result<Option<String>, ApiError>;
     /// Yields `(up, down)` bytes per second.
     fn traffic_stream(&self) -> BoxStream<'static, Result<(u64, u64), ApiError>>;
+    /// `/logs?level=info` websocket: each item is one log message text. It
+    /// carries info events even when the config's `log-level` is higher.
+    fn log_stream(&self) -> BoxStream<'static, Result<String, ApiError>>;
 }
 
 pub struct HttpMihomoApi {
@@ -97,6 +100,47 @@ fn enc(s: &str) -> String {
 
 fn unreachable(e: impl fmt::Display) -> ApiError {
     ApiError::Unreachable(e.to_string())
+}
+
+/// Connects to a controller websocket (5 s dial timeout) and yields each text
+/// message parsed as `T`, mapped by `f`. Ends when the socket closes.
+fn ws_json_stream<T, R>(url: String, f: fn(T) -> R) -> BoxStream<'static, Result<R, ApiError>>
+where
+    T: serde::de::DeserializeOwned + Send + 'static,
+    R: Send + 'static,
+{
+    use tokio_tungstenite::tungstenite::Message;
+    let connect = async move {
+        // tokio-tungstenite dials the address directly (no proxy support), so
+        // the secret never goes through a system proxy.
+        let dial = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio_tungstenite::connect_async(url),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(tokio_tungstenite::tungstenite::Error::Io(
+                std::io::ErrorKind::TimedOut.into(),
+            ))
+        });
+        match dial {
+            Ok((ws, _)) => ws
+                .filter_map(move |msg| async move {
+                    match msg {
+                        Ok(Message::Text(t)) => Some(
+                            serde_json::from_str::<T>(t.as_str())
+                                .map(f)
+                                .map_err(unreachable),
+                        ),
+                        Ok(_) => None,
+                        Err(e) => Some(Err(unreachable(e))),
+                    }
+                })
+                .boxed(),
+            Err(e) => stream::once(async move { Err(unreachable(e)) }).boxed(),
+        }
+    };
+    stream::once(connect).flatten().boxed()
 }
 
 impl HttpMihomoApi {
@@ -235,7 +279,6 @@ impl MihomoApi for HttpMihomoApi {
     }
 
     fn traffic_stream(&self) -> BoxStream<'static, Result<(u64, u64), ApiError>> {
-        use tokio_tungstenite::tungstenite::Message;
         #[derive(Deserialize)]
         struct T {
             up: u64,
@@ -246,37 +289,20 @@ impl MihomoApi for HttpMihomoApi {
             self.port,
             enc(&self.secret)
         );
-        let connect = async move {
-            // tokio-tungstenite dials the address directly (no proxy support), so
-            // the secret never goes through a system proxy.
-            let dial = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                tokio_tungstenite::connect_async(url),
-            )
-            .await
-            .unwrap_or_else(|_| {
-                Err(tokio_tungstenite::tungstenite::Error::Io(
-                    std::io::ErrorKind::TimedOut.into(),
-                ))
-            });
-            match dial {
-                Ok((ws, _)) => ws
-                    .filter_map(|msg| async move {
-                        match msg {
-                            Ok(Message::Text(t)) => Some(
-                                serde_json::from_str::<T>(t.as_str())
-                                    .map(|t| (t.up, t.down))
-                                    .map_err(unreachable),
-                            ),
-                            Ok(_) => None,
-                            Err(e) => Some(Err(unreachable(e))),
-                        }
-                    })
-                    .boxed(),
-                Err(e) => stream::once(async move { Err(unreachable(e)) }).boxed(),
-            }
-        };
-        stream::once(connect).flatten().boxed()
+        ws_json_stream(url, |t: T| (t.up, t.down))
+    }
+
+    fn log_stream(&self) -> BoxStream<'static, Result<String, ApiError>> {
+        #[derive(Deserialize)]
+        struct L {
+            payload: String,
+        }
+        let url = format!(
+            "ws://127.0.0.1:{}/logs?token={}&level=info",
+            self.port,
+            enc(&self.secret)
+        );
+        ws_json_stream(url, |t: L| t.payload)
     }
 }
 
@@ -506,5 +532,49 @@ mod tests {
         let got: Vec<_> = api.traffic_stream().take(2).collect().await;
         assert_eq!(got, vec![Ok((5, 6)), Ok((7, 8))]);
         assert_eq!(rx.await.unwrap(), "/traffic?token=tok");
+    }
+
+    #[tokio::test]
+    async fn log_stream_yields_info_payloads() {
+        use futures_util::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let uri = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            let seen = uri.clone();
+            let mut ws = tokio_tungstenite::accept_hdr_async(
+                sock,
+                move |req: &tokio_tungstenite::tungstenite::handshake::server::Request, resp| {
+                    *seen.lock().unwrap() = req.uri().to_string();
+                    Ok(resp)
+                },
+            )
+            .await
+            .unwrap();
+            tx.send(uri.lock().unwrap().clone()).unwrap();
+            // Shape captured from mihomo v1.19.33 (spike/work/t13/logs-api.log).
+            ws.send(Message::text(
+                r#"{"type":"info","payload":"[Tailscale](手动/ts-x) LocalBackend state is NeedsLogin; running StartLoginInteractive..."}"#,
+            ))
+            .await
+            .unwrap();
+            ws.send(Message::text(r#"{"type":"warning","payload":"say \"hi\""}"#))
+                .await
+                .unwrap();
+            ws.close(None).await.unwrap();
+        });
+        let api = HttpMihomoApi::new(port, "t/k".into());
+        let got: Vec<_> = api.log_stream().take(2).collect().await;
+        assert_eq!(
+            got,
+            vec![
+                Ok("[Tailscale](手动/ts-x) LocalBackend state is NeedsLogin; running StartLoginInteractive...".to_string()),
+                Ok(r#"say "hi""#.to_string()),
+            ]
+        );
+        assert_eq!(rx.await.unwrap(), "/logs?token=t%2Fk&level=info");
     }
 }

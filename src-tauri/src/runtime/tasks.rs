@@ -175,6 +175,21 @@ async fn sample_traffic(inner: Arc<Inner>) {
     }
 }
 
+/// Follows mihomo's `/logs?level=info` stream for one core instance (aborted
+/// with it) and feeds the Tailscale login tracker.
+pub(super) async fn log_stream(inner: Arc<Inner>, api: Arc<dyn MihomoApi>, generation: u64) {
+    loop {
+        let mut stream = api.log_stream();
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(line) => inner.on_core_log(generation, &line),
+                Err(_) => break,
+            }
+        }
+        tokio::time::sleep(STREAM_RETRY_EVERY).await;
+    }
+}
+
 /// Follows mihomo's `/traffic` stream for one core instance (aborted with it).
 pub(super) async fn traffic_stream(inner: Arc<Inner>, api: Arc<dyn MihomoApi>) {
     loop {

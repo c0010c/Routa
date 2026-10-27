@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { Model, RuntimeStatus } from "../bindings";
+import type { Model, RuntimeStatus, TailscaleState } from "../bindings";
 
 vi.mock("../bindings", () => ({
   commands: { getModel: vi.fn(), getStatus: vi.fn(), saveManualNode: vi.fn(), deleteManualNode: vi.fn() },
@@ -30,9 +30,9 @@ const status = {
   interfaces: [{ guid: "g-eth", friendly_name: "以太网", is_up: true, ipv4: ["192.168.1.2"], ipv6: [] }],
 } as unknown as RuntimeStatus;
 
-function renderPage(m: Model = model) {
+function renderPage(m: Model = model, st: RuntimeStatus = status) {
   vi.mocked(commands.getModel).mockResolvedValue(m);
-  vi.mocked(commands.getStatus).mockResolvedValue(status);
+  vi.mocked(commands.getStatus).mockResolvedValue(st);
   vi.mocked(commands.saveManualNode).mockResolvedValue({ status: "ok", data: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -56,7 +56,7 @@ describe("newTailscaleNode", () => {
 });
 
 describe("Tailscale page", () => {
-  it("shows instance details, references and a placeholder login state", async () => {
+  it("shows instance details, references and an unknown login state", async () => {
     renderPage();
     const card = await screen.findByRole("article", { name: "家里" });
     expect(within(card).getByText(/mihomo-家里/)).toBeInTheDocument();
@@ -64,6 +64,48 @@ describe("Tailscale page", () => {
     expect(within(card).getByText(/以太网/)).toBeInTheDocument();
     expect(within(card).getByText("被出口引用：出口甲")).toBeInTheDocument();
     expect(within(card).getByText("状态未知")).toBeInTheDocument();
+  });
+
+  const withState = (s: TailscaleState) => ({ ...status, tailscale: { "手动/家里": s } }) as RuntimeStatus;
+
+  it("NeedsLogin with a URL shows the link and copies it", async () => {
+    const url = "https://login.tailscale.com/a/1654b85a0197ca";
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderPage(model, withState({ NeedsLogin: { url } }));
+    const card = await screen.findByRole("article", { name: "家里" });
+    expect(await within(card).findByText("待登录")).toBeInTheDocument();
+    expect(within(card).getByText(url)).toBeInTheDocument();
+    expect(within(card).getByText("在浏览器中打开此链接完成授权")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: "复制链接" }));
+    expect(writeText).toHaveBeenCalledWith(url);
+    expect(await within(card).findByRole("button", { name: "已复制" })).toBeInTheDocument();
+  });
+
+  it("NeedsLogin without a URL says the link is coming", async () => {
+    renderPage(model, withState({ NeedsLogin: { url: null } }));
+    const card = await screen.findByRole("article", { name: "家里" });
+    expect(await within(card).findByText("待登录")).toBeInTheDocument();
+    expect(within(card).getByText("正在获取授权链接…")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "复制链接" })).not.toBeInTheDocument();
+  });
+
+  it("shows logged in, with the IP when known", async () => {
+    renderPage(model, withState({ LoggedIn: { ip: "100.64.0.9" } }));
+    const card = await screen.findByRole("article", { name: "家里" });
+    expect(await within(card).findByText("已登录 · 100.64.0.9")).toBeInTheDocument();
+  });
+
+  it("shows logged in without an IP", async () => {
+    renderPage(model, withState({ LoggedIn: { ip: null } }));
+    const card = await screen.findByRole("article", { name: "家里" });
+    expect(await within(card).findByText("已登录")).toBeInTheDocument();
+  });
+
+  it("shows the failure reason", async () => {
+    renderPage(model, withState({ Failed: { reason: "无法连接控制服务器" } }));
+    const card = await screen.findByRole("article", { name: "家里" });
+    expect(await within(card).findByText("登录失败：无法连接控制服务器")).toBeInTheDocument();
   });
 
   it("creates an instance whose hostname follows the name", async () => {

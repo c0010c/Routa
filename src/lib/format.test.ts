@@ -103,6 +103,7 @@ describe("listenerNotEffective", () => {
     effective_listeners: ["l1"],
     startup_error: null,
     save_error: null,
+    tailscale: {},
   };
   it("is false for a listener in the config a running core holds", () => {
     expect(listenerNotEffective(base, "l1")).toBe(false);

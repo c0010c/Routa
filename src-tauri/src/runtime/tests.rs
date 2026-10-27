@@ -1002,3 +1002,54 @@ async fn group_now_reports_known_selections() {
     let got = h.rt.group_now(vec!["组".into(), "别的".into()]).await;
     assert_eq!(got, [("组".to_string(), "组/订阅/HK".to_string())].into_iter().collect());
 }
+
+const TS_NEEDS: &str = "[Tailscale](手动/家里) LocalBackend state is NeedsLogin; running StartLoginInteractive...";
+const TS_URL: &str =
+    "[Tailscale](手动/家里) To start this tsnet server, restart with TS_AUTHKEY set, or go to: https://login.tailscale.com/a/1654b85a0197ca";
+const TS_RUNNING: &str = "[Tailscale](手动/家里) AuthLoop: state is Running; done";
+
+fn ts_state(h: &Harness, name: &str) -> Option<crate::tailscale::TailscaleState> {
+    h.rt.status().tailscale.get(name).cloned()
+}
+
+#[tokio::test(start_paused = true)]
+async fn tailscale_state_follows_core_log() {
+    use crate::tailscale::TailscaleState;
+    let mut m = model_with_listener(false);
+    m.manual_nodes.push(ts_manual("家里", None));
+    let mut h = harness(&m);
+    assert!(h.rt.status().tailscale.is_empty());
+    h.rt.restart_core().await;
+    h.api.push_log(TS_NEEDS);
+    h.api.push_log(TS_URL);
+    drain(&mut h.events);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let want = TailscaleState::NeedsLogin {
+        url: Some("https://login.tailscale.com/a/1654b85a0197ca".into()),
+    };
+    assert_eq!(ts_state(&h, "手动/家里"), Some(want.clone()));
+    // The change reached the frontend as a status event.
+    let emitted = drain(&mut h.events).into_iter().any(|e| {
+        matches!(e, RuntimeEvent::Status(s) if s.tailscale.get("手动/家里") == Some(&want))
+    });
+    assert!(emitted);
+
+    // A new core process starts from scratch: the old URL is gone.
+    h.rt.restart_core().await;
+    assert_eq!(ts_state(&h, "手动/家里"), None);
+    h.api.push_log(TS_RUNNING);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(ts_state(&h, "手动/家里"), Some(TailscaleState::LoggedIn { ip: None }));
+
+    // A deleted node is forgotten after the next apply.
+    h.rt.mutate(|m| m.manual_nodes.clear()).await.unwrap();
+    assert_eq!(ts_state(&h, "手动/家里"), None);
+
+    // Stopping the core clears every state.
+    h.rt.mutate(|m| m.manual_nodes.push(ts_manual("家里", None))).await.unwrap();
+    h.api.push_log(TS_RUNNING);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(ts_state(&h, "手动/家里").is_some());
+    h.rt.stop_core().await;
+    assert!(h.rt.status().tailscale.is_empty());
+}

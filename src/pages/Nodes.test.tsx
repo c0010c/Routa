@@ -59,11 +59,12 @@ const status: RuntimeStatus = {
   effective_listeners: [],
   startup_error: null,
   save_error: null,
+  tailscale: {},
 };
 
-function renderNodes() {
+function renderNodes(st: RuntimeStatus = status) {
   vi.mocked(commands.getModel).mockResolvedValue(model);
-  vi.mocked(commands.getStatus).mockResolvedValue(status);
+  vi.mocked(commands.getStatus).mockResolvedValue(st);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
@@ -99,8 +100,17 @@ describe("Nodes", () => {
     expect(screen.getByRole("button", { name: "粘贴 YAML" })).toBeInTheDocument();
 
     const tsRow = screen.getByRole("cell", { name: "家里" }).closest("tr")!;
-    expect(within(tsRow).getByRole("cell", { name: "tailscale" })).toBeInTheDocument();
+    expect(within(tsRow).getByRole("cell", { name: /^tailscale/ })).toBeInTheDocument();
     const link = within(tsRow).getByRole("link", { name: "去 Tailscale 页编辑" });
     expect(link).toHaveAttribute("href", "/tailscale");
+  });
+
+  it("shows the login state on Tailscale rows", async () => {
+    renderNodes({ ...status, tailscale: { "手动/家里": { NeedsLogin: { url: "https://login.tailscale.com/a/abc" } } } });
+    fireEvent.click(within(await screen.findByRole("navigation", { name: "节点分组" })).getByText("未分组"));
+    const tsRow = (await screen.findByRole("cell", { name: "家里" })).closest("tr")!;
+    expect(await within(tsRow).findByText("待登录")).toBeInTheDocument();
+    const socksRow = screen.getByRole("cell", { name: "家用 socks" }).closest("tr")!;
+    expect(within(socksRow).queryByText("待登录")).not.toBeInTheDocument();
   });
 });

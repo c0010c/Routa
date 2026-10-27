@@ -452,6 +452,9 @@ mod tests {
         fn traffic_stream(&self) -> BoxStream<'static, Result<(u64, u64), ApiError>> {
             unimplemented!()
         }
+        fn log_stream(&self) -> BoxStream<'static, Result<String, ApiError>> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]

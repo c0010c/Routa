@@ -37,6 +37,7 @@ use crate::stats::delay::{test_many, DelayBook, DelayResult, DEFAULT_CONCURRENCY
 use crate::stats::traffic::{Rate, TrafficAggregator, TrafficTick};
 use crate::store::{Store, TrafficTotals};
 use crate::subscription::Parsed;
+use crate::tailscale::{TailscaleState, TailscaleTracker};
 use crate::subscription::fetch::{
     fetch_listener_ports, record_result, update_subscription, FetchError, PortAllocator,
 };
@@ -71,6 +72,9 @@ pub struct RuntimeStatus {
     /// Last state.json / traffic.json save failure; cleared once that file
     /// saves successfully again.
     pub save_error: Option<String>,
+    /// Login state per Tailscale proxy name (`手动/<名>`), from the log of
+    /// the current mihomo process; empty while no core runs.
+    pub tailscale: HashMap<String, TailscaleState>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
@@ -87,6 +91,16 @@ struct CoreRun {
     applier: Applier,
     started: Instant,
     traffic_stream: JoinHandle<()>,
+    log_stream: JoinHandle<()>,
+}
+
+/// Tailscale login tracking for the current core process. `generation` is
+/// bumped whenever a core is dropped so a log task that outlives its abort
+/// cannot write states of an old process.
+#[derive(Default)]
+struct TailscaleTrack {
+    generation: u64,
+    tracker: TailscaleTracker,
 }
 
 /// State guarded by the engine mutex.
@@ -119,6 +133,8 @@ struct Inner {
     status: Mutex<RuntimeStatus>,
     live: Mutex<Live>,
     traffic: Mutex<TrafficAggregator>,
+    /// Lock order: `tailscale` before `status`.
+    tailscale: Mutex<TailscaleTrack>,
     /// false when a corrupt file could not be moved aside: never overwrite it.
     persist_model: bool,
     persist_totals: bool,
@@ -313,6 +329,7 @@ impl Inner {
     async fn drop_core(&self, eng: &mut Engine) {
         if let Some(mut run) = eng.core.take() {
             run.traffic_stream.abort();
+            run.log_stream.abort();
             if let Err(e) = run.handle.stop().await {
                 eprintln!("runtime: stopping mihomo failed: {e}");
             }
@@ -323,7 +340,36 @@ impl Inner {
             live.name_to_id.clear();
             live.stream_rate = None;
         }
-        self.status.lock().unwrap().effective_listeners.clear();
+        {
+            // A new process logs every login state afresh.
+            let mut ts = self.tailscale.lock().unwrap();
+            ts.generation += 1;
+            ts.tracker.reset();
+            let mut st = self.status.lock().unwrap();
+            st.effective_listeners.clear();
+            st.tailscale.clear();
+        }
+    }
+
+    /// Feeds one core log line from the log task of `generation`; updates the
+    /// status and emits when a login state changed.
+    fn on_core_log(&self, generation: u64, line: &str) {
+        {
+            let mut ts = self.tailscale.lock().unwrap();
+            if ts.generation != generation || !ts.tracker.on_log_line(line) {
+                return;
+            }
+            self.status.lock().unwrap().tailscale = ts.tracker.states();
+        }
+        self.emit_status();
+    }
+
+    /// Forgets login states of Tailscale nodes no longer in the config.
+    fn retain_tailscale(&self, names: &[String]) {
+        let mut ts = self.tailscale.lock().unwrap();
+        if ts.tracker.retain(names) {
+            self.status.lock().unwrap().tailscale = ts.tracker.states();
+        }
     }
 
     /// (Re)starts mihomo: fresh secret, empty config, launch, wait for the
@@ -393,6 +439,10 @@ impl Inner {
             return Err(format!("mihomo 未在 5 秒内就绪: {e}"));
         }
         let traffic_stream = tokio::spawn(tasks::traffic_stream(self.clone(), api.clone()));
+        // Subscribed before the first apply, so the Tailscale prewarm's log
+        // lines are seen.
+        let generation = self.tailscale.lock().unwrap().generation;
+        let log_stream = tokio::spawn(tasks::log_stream(self.clone(), api.clone(), generation));
         self.live.lock().unwrap().api = Some(api.clone());
         eng.core = Some(CoreRun {
             handle,
@@ -401,6 +451,7 @@ impl Inner {
             applier: Applier::new(api, self.ports.clone(), config),
             started: Instant::now(),
             traffic_stream,
+            log_stream,
         });
         Ok(())
     }
@@ -433,6 +484,12 @@ impl Inner {
                     })
                     .await;
                 self.status.lock().unwrap().effective_listeners = applier.effective_listeners();
+                // Keep login states only for nodes in the config mihomo now holds.
+                match &out {
+                    ApplyOutcome::Reloaded { .. } => self.retain_tailscale(&tailscales),
+                    ApplyOutcome::FailedClosed { .. } => self.retain_tailscale(&[]),
+                    _ => {}
+                }
                 let mut live = self.live.lock().unwrap();
                 match &out {
                     ApplyOutcome::Reloaded { .. } => {
@@ -659,6 +716,7 @@ impl Runtime {
             effective_listeners: Vec::new(),
             startup_error: (!errors.is_empty()).then(|| errors.join("\n")),
             save_error: None,
+            tailscale: HashMap::new(),
         };
         let inner = Inner {
             store,
@@ -677,6 +735,7 @@ impl Runtime {
             status: Mutex::new(status),
             live: Mutex::new(Live::default()),
             traffic: Mutex::new(TrafficAggregator::new(totals)),
+            tailscale: Mutex::new(TailscaleTrack::default()),
             persist_model,
             persist_totals,
             save_errors: Mutex::new((None, None)),

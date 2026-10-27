@@ -58,6 +58,7 @@ const status: RuntimeStatus = {
   effective_listeners: [],
   startup_error: null,
   save_error: null,
+  tailscale: {},
 };
 
 function renderDialog(exit: Exit) {

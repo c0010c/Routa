@@ -324,7 +324,12 @@ startup_error: string | null;
  * Last state.json / traffic.json save failure; cleared once that file
  * saves successfully again.
  */
-save_error: string | null }
+save_error: string | null; 
+/**
+ * Login state per Tailscale proxy name (`手动/<名>`), from the log of
+ * the current mihomo process; empty while no core runs.
+ */
+tailscale: Partial<{ [key in string]: TailscaleState }> }
 export type Settings = { autostart: boolean; core_path: string | null; controller_port: number; delay_test_interval_mins: number | null; delay_test_url: string }
 export type Subscription = { id: SubscriptionId; name: string; url: string; update_interval_mins: number | null; fallback_exit: ExitId | null; 
 /**
@@ -337,6 +342,7 @@ export type TailscaleOpts = { hostname: string; exit_node: string; ephemeral: bo
  * None = 走系统默认网卡
  */
 interface: InterfaceGuid | null }
+export type TailscaleState = "Unknown" | { NeedsLogin: { url: string | null } } | { LoggedIn: { ip: string | null } } | { Failed: { reason: string } }
 export type TrafficTick = { total_rate: Rate; 
 /**
  * Every listener that had a delta in this tick.

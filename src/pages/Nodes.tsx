@@ -35,6 +35,7 @@ import { MANUAL_PREFIX } from "../lib/refs";
 import { ManualNodeDialog, newManualNode, type ManualNodeMode } from "./ManualNodeDialog";
 import { NodeGroupDialog, newNodeGroup } from "./NodeGroupDialog";
 import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
+import { TailscaleStateChip } from "./Tailscale";
 
 function formatInterval(mins: number | null): string {
   if (mins === null) return "已关闭";
@@ -337,7 +338,14 @@ function NodeTable({
             return (
               <TableRow key={r.key}>
                 <TableCell>{r.name}</TableCell>
-                <TableCell>{r.type}</TableCell>
+                <TableCell>
+                  {r.type}
+                  {n && "Tailscale" in n.kind && (
+                    <Box component="span" sx={{ ml: 1 }}>
+                      <TailscaleStateChip node={n} />
+                    </Box>
+                  )}
+                </TableCell>
                 <TableCell>{r.server}</TableCell>
                 <TableCell>{!d ? "—" : d.ms === null ? "超时" : `${d.ms} ms`}</TableCell>
                 <TableCell>

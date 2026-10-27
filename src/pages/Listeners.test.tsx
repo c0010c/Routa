@@ -35,6 +35,7 @@ const status: RuntimeStatus = {
   effective_listeners: [],
   startup_error: null,
   save_error: null,
+  tailscale: {},
 };
 
 describe("Listeners", () => {

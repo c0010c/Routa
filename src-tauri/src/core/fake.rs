@@ -32,6 +32,8 @@ pub struct FakeApi {
     pub proxy_nows: Mutex<HashMap<String, String>>,
     /// `None` behaves as `Ok("v1.19.33")`.
     pub version_result: Mutex<Option<Result<String, ApiError>>>,
+    /// Log lines handed out (and drained) by the next `log_stream` call.
+    pub log_lines: Mutex<VecDeque<String>>,
 }
 
 impl FakeApi {
@@ -54,6 +56,10 @@ impl FakeApi {
             .lock()
             .unwrap()
             .insert(proxy.to_string(), result);
+    }
+
+    pub fn push_log(&self, line: &str) {
+        self.log_lines.lock().unwrap().push_back(line.to_string());
     }
 
     pub fn set_version(&self, result: Result<String, ApiError>) {
@@ -140,5 +146,10 @@ impl MihomoApi for FakeApi {
 
     fn traffic_stream(&self) -> BoxStream<'static, Result<(u64, u64), ApiError>> {
         stream::empty().boxed()
+    }
+
+    fn log_stream(&self) -> BoxStream<'static, Result<String, ApiError>> {
+        let lines: Vec<_> = self.log_lines.lock().unwrap().drain(..).map(Ok).collect();
+        stream::iter(lines).boxed()
     }
 }

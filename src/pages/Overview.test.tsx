@@ -60,6 +60,7 @@ const status: RuntimeStatus = {
   effective_listeners: ["l1"],
   startup_error: null,
   save_error: null,
+  tailscale: {},
 };
 
 function renderOverview() {

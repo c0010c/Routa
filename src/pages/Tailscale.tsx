@@ -1,15 +1,70 @@
-import { Button, Card, CardActions, CardContent, Stack, Typography } from "@mui/material";
+import { Button, Card, CardActions, CardContent, Chip, type ChipProps, Stack, Typography } from "@mui/material";
 import { useState } from "react";
 import { useDeleteManualNode, useModel, useStatus } from "../api/client";
-import type { ManualNode, Model, TailscaleOpts } from "../bindings";
+import type { ManualNode, Model, TailscaleOpts, TailscaleState } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
-import { expandMembers } from "../lib/refs";
+import { MANUAL_PREFIX, expandMembers } from "../lib/refs";
 import { TailscaleDialog, newTailscaleNode } from "./TailscaleDialog";
 
-/** Placeholder; Task 13 replaces it with the real login state. */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function TailscaleLoginState(_props: { node: ManualNode }) {
-  return <Typography variant="body2">状态未知</Typography>;
+/** Login state of a Tailscale node from the runtime status (keyed by proxy name). */
+function useTailscaleState(node: ManualNode): TailscaleState {
+  const status = useStatus();
+  return status.data?.tailscale?.[`${MANUAL_PREFIX}/${node.name}`] ?? "Unknown";
+}
+
+function stateChip(s: TailscaleState): { label: string; color: ChipProps["color"] } {
+  if (s === "Unknown") return { label: "状态未知", color: "default" };
+  if ("NeedsLogin" in s) return { label: "待登录", color: "warning" };
+  if ("LoggedIn" in s) return { label: s.LoggedIn.ip ? `已登录 · ${s.LoggedIn.ip}` : "已登录", color: "success" };
+  return { label: `登录失败：${s.Failed.reason}`, color: "error" };
+}
+
+/** Compact login state label (also used on the Nodes page's Tailscale rows). */
+export function TailscaleStateChip({ node }: { node: ManualNode }) {
+  const { label, color } = stateChip(useTailscaleState(node));
+  return <Chip size="small" label={label} color={color} />;
+}
+
+/** Login state with the authorization link when one is pending. */
+export function TailscaleLoginState({ node }: { node: ManualNode }) {
+  const s = useTailscaleState(node);
+  // Remembers which URL was copied, so a fresh URL offers 复制链接 again.
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const url = s !== "Unknown" && "NeedsLogin" in s ? s.NeedsLogin.url : null;
+  return (
+    <Stack spacing={1} sx={{ mt: 1, alignItems: "flex-start" }}>
+      <TailscaleStateChip node={node} />
+      {s !== "Unknown" && "NeedsLogin" in s && url === null && (
+        <Typography variant="body2" color="text.secondary">
+          正在获取授权链接…
+        </Typography>
+      )}
+      {url !== null && (
+        <>
+          <Typography variant="body2" sx={{ userSelect: "text", wordBreak: "break-all", fontFamily: "monospace" }}>
+            {url}
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                navigator.clipboard.writeText(url).then(
+                  () => setCopiedUrl(url),
+                  (e) => console.error("copy failed", e),
+                );
+              }}
+            >
+              {copiedUrl === url ? "已复制" : "复制链接"}
+            </Button>
+            <Typography variant="body2" color="text.secondary">
+              在浏览器中打开此链接完成授权
+            </Typography>
+          </Stack>
+        </>
+      )}
+    </Stack>
+  );
 }
 
 type TsNode = ManualNode & { kind: { Tailscale: TailscaleOpts } };

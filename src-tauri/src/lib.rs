@@ -8,6 +8,7 @@ pub mod scheduler;
 pub mod stats;
 pub mod store;
 pub mod subscription;
+pub mod tailscale;
 pub mod tray;
 
 use std::path::PathBuf;
