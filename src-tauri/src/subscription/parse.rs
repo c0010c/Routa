@@ -13,18 +13,34 @@ pub enum ParseError {
     Unrecognized,
 }
 
+/// Result of parsing a subscription body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Parsed {
+    pub nodes: Vec<Node>,
+    /// `type: tailscale` entries that were dropped.
+    pub skipped_tailscale: u32,
+}
+
+fn is_tailscale(entry: &Value) -> bool {
+    entry.get("type").and_then(Value::as_str).is_some_and(|t| t.trim().eq_ignore_ascii_case("tailscale"))
+}
+
 /// Parse a subscription body: Clash YAML first, then (base64-wrapped or plain) share links.
 /// Never returns `Ok` with an empty list.
-pub fn parse_subscription(body: &str) -> Result<Vec<Node>, ParseError> {
+pub fn parse_subscription(body: &str) -> Result<Parsed, ParseError> {
     let entries = match parse_yaml_proxies(body) {
         Some(p) => p,
         None => parse_link_lines(body)?,
     };
+    // Tailscale nodes are managed locally; a subscription may not define them.
+    let before = entries.len();
+    let entries: Vec<Value> = entries.into_iter().filter(|e| !is_tailscale(e)).collect();
+    let skipped_tailscale = (before - entries.len()) as u32;
     let nodes = build_nodes(entries);
     if nodes.is_empty() {
         Err(ParseError::NoNodes)
     } else {
-        Ok(nodes)
+        Ok(Parsed { nodes, skipped_tailscale })
     }
 }
 
@@ -101,7 +117,7 @@ mod tests {
 
     #[test]
     fn parses_clash_yaml() {
-        let nodes = parse_subscription(CLASH).unwrap();
+        let nodes = parse_subscription(CLASH).unwrap().nodes;
         let got: Vec<(&str, &str, &str)> = nodes
             .iter()
             .map(|n| (n.name.as_str(), n.proxy_type.as_str(), n.server.as_str()))
@@ -124,7 +140,7 @@ mod tests {
 
     #[test]
     fn parses_base64_links() {
-        let nodes = parse_subscription(B64).unwrap();
+        let nodes = parse_subscription(B64).unwrap().nodes;
         assert_eq!(nodes.len(), 8);
         let expect = [
             ("ss", "1.1.1.1", 8388),
@@ -205,7 +221,7 @@ proxies:
     server: 2.2.2.2
     port: 8443
 ";
-        let nodes = parse_subscription(body).unwrap();
+        let nodes = parse_subscription(body).unwrap().nodes;
         assert_eq!(nodes.len(), 2);
         assert_eq!(nodes[0].proxy_type, "ss");
         assert_eq!(nodes[0].raw["cipher"], json!("aes-128-gcm"));
@@ -219,7 +235,7 @@ proxies:
     #[test]
     fn dedupes_names_within_subscription() {
         let body = "proxies:\n  - {name: 香港01, type: ss, server: a.com, port: 1}\n  - {name: 香港01, type: ss, server: b.com, port: 2}\n  - {name: 香港01, type: ss, server: c.com, port: 3}\n";
-        let nodes = parse_subscription(body).unwrap();
+        let nodes = parse_subscription(body).unwrap().nodes;
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, vec!["香港01", "香港01 #2", "香港01 #3"]);
         assert_eq!(nodes[1].raw["name"], json!("香港01 #2"));
@@ -229,6 +245,22 @@ proxies:
     fn html_page_is_no_nodes() {
         let r = parse_subscription(HTML);
         assert!(matches!(r, Err(ParseError::NoNodes) | Err(ParseError::Unrecognized)), "{r:?}");
+    }
+
+    #[test]
+    fn tailscale_entries_dropped_and_counted() {
+        let body = "proxies:
+  - {name: a, type: ss, server: a.com, port: 1}
+  - {name: ts, type: tailscale, server: x.com}
+  - {name: ts2, type: \" TailScale \", server: y.com}
+";
+        let p = parse_subscription(body).unwrap();
+        assert_eq!(p.nodes.len(), 1);
+        assert_eq!(p.skipped_tailscale, 1 + 1);
+        let only = "proxies:
+  - {name: ts, type: tailscale, server: x.com}
+";
+        assert_eq!(parse_subscription(only), Err(ParseError::NoNodes));
     }
 
     #[test]
@@ -245,22 +277,22 @@ proxies:
     #[test]
     fn unknown_link_lines_are_skipped() {
         let plain = "foo://x\ntrojan://pw@5.5.5.5:443#T1\n\nnot a link\n";
-        let nodes = parse_subscription(plain).unwrap();
+        let nodes = parse_subscription(plain).unwrap().nodes;
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].name, "T1");
         // base64-wrapped, same result
         use base64::Engine;
         let enc = base64::engine::general_purpose::STANDARD.encode(plain);
-        assert_eq!(parse_subscription(&enc).unwrap().len(), 1);
+        assert_eq!(parse_subscription(&enc).unwrap().nodes.len(), 1);
     }
 
     #[test]
     fn trojan_password_with_colon_is_kept_whole() {
         let nodes = parse_subscription("trojan://pa:ss:word@5.5.5.5:443#T
-").unwrap();
+").unwrap().nodes;
         assert_eq!(nodes[0].raw["password"], json!("pa:ss:word"));
         let nodes = parse_subscription("trojan://p%3Aw@5.5.5.5:443#T
-").unwrap();
+").unwrap().nodes;
         assert_eq!(nodes[0].raw["password"], json!("p:w"));
     }
 

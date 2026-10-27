@@ -6,8 +6,8 @@ use std::fmt;
 use std::net::TcpListener;
 use std::time::Duration;
 
-use crate::model::{ExitId, FetchResult, Model, Node, Subscription};
-use crate::subscription::parse::{parse_subscription, ParseError};
+use crate::model::{ExitId, FetchResult, Model, Subscription};
+use crate::subscription::parse::{parse_subscription, ParseError, Parsed};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FetchError {
@@ -76,7 +76,7 @@ pub async fn fetch_body(url: &str, via_proxy: Option<u16>) -> Result<String, Fet
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-async fn fetch_nodes(url: &str, via_proxy: Option<u16>) -> Result<Vec<Node>, FetchError> {
+async fn fetch_nodes(url: &str, via_proxy: Option<u16>) -> Result<Parsed, FetchError> {
     let body = fetch_body(url, via_proxy).await?;
     parse_subscription(&body).map_err(FetchError::Parse)
 }
@@ -85,7 +85,7 @@ async fn fetch_nodes(url: &str, via_proxy: Option<u16>) -> Result<Vec<Node>, Fet
 pub async fn update_subscription(
     sub: &Subscription,
     fallback_port: Option<u16>,
-) -> Result<Vec<Node>, FetchError> {
+) -> Result<Parsed, FetchError> {
     let direct_err = match fetch_nodes(&sub.url, None).await {
         Ok(nodes) => return Ok(nodes),
         Err(e) => e,
@@ -104,10 +104,10 @@ pub async fn update_subscription(
 
 /// Store a fetch outcome on the subscription. Failures keep the old nodes; both outcomes
 /// stamp `last_updated` so a failing subscription is not retried immediately.
-pub fn record_result(sub: &mut Subscription, result: Result<Vec<Node>, FetchError>, now: i64) {
+pub fn record_result(sub: &mut Subscription, result: Result<Parsed, FetchError>, now: i64) {
     match result {
-        Ok(nodes) => {
-            sub.last_result = Some(FetchResult::Ok { node_count: nodes.len() as u32, skipped_tailscale: 0 });
+        Ok(Parsed { nodes, skipped_tailscale }) => {
+            sub.last_result = Some(FetchResult::Ok { node_count: nodes.len() as u32, skipped_tailscale });
             sub.nodes = nodes;
         }
         Err(e) => {
@@ -205,7 +205,7 @@ mod tests {
     async fn success_replaces_nodes() {
         let s = serve(YAML2, 200).await;
         let mut sb = sub(&format!("{}/sub", s.uri()));
-        sb.nodes = parse_subscription(YAML1).unwrap();
+        sb.nodes = parse_subscription(YAML1).unwrap().nodes;
         let r = update_subscription(&sb, None).await;
         record_result(&mut sb, r, 1000);
         assert_eq!(sb.nodes.len(), 2);
@@ -213,11 +213,22 @@ mod tests {
         assert_eq!(sb.last_updated, Some(1000));
     }
 
+    #[test]
+    fn record_result_carries_skipped_tailscale() {
+        let mut sb = sub("http://x/sub");
+        let p = parse_subscription("proxies:
+  - {name: a, type: ss, server: a.com, port: 1}
+  - {name: t, type: tailscale, server: x}
+").unwrap();
+        record_result(&mut sb, Ok(p), 5);
+        assert_eq!(sb.last_result, Some(FetchResult::Ok { node_count: 1, skipped_tailscale: 1 }));
+    }
+
     #[tokio::test]
     async fn failure_keeps_old_nodes() {
         let s = serve("<html><body>expired</body></html>", 200).await;
         let mut sb = sub(&format!("{}/sub", s.uri()));
-        sb.nodes = parse_subscription(YAML2).unwrap();
+        sb.nodes = parse_subscription(YAML2).unwrap().nodes;
         let before = sb.nodes.clone();
         let r = update_subscription(&sb, None).await;
         assert!(matches!(r, Err(FetchError::Parse(_))));
@@ -277,7 +288,7 @@ mod tests {
         let direct = serve("blocked", 403).await;
         let proxy = serve(YAML2, 200).await;
         let sb = sub(&format!("{}/sub", direct.uri()));
-        let nodes = update_subscription(&sb, Some(port_of(&proxy))).await.unwrap();
+        let nodes = update_subscription(&sb, Some(port_of(&proxy))).await.unwrap().nodes;
         assert_eq!(nodes.len(), 2);
         assert_eq!(proxy.received_requests().await.unwrap().len(), 1);
     }

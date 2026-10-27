@@ -33,6 +33,7 @@ use crate::netif::{InterfaceSource, NetInterface};
 use crate::stats::delay::{test_many, DelayBook, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
 use crate::stats::traffic::{Rate, TrafficAggregator, TrafficTick};
 use crate::store::{Store, TrafficTotals};
+use crate::subscription::Parsed;
 use crate::subscription::fetch::{
     fetch_listener_ports, record_result, update_subscription, FetchError, PortAllocator,
 };
@@ -516,7 +517,10 @@ impl Inner {
         };
 
         let result = match update_subscription(&sub, port).await {
-            Ok(nodes) => self.check_nodes(&sub, nodes).await,
+            Ok(p) => self
+                .check_nodes(&sub, p.nodes)
+                .await
+                .map(|nodes| Parsed { nodes, skipped_tailscale: p.skipped_tailscale }),
             Err(e) => Err(e),
         };
 
