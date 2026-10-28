@@ -3144,6 +3144,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "routa-procsvc"
+version = "0.2.0"
+dependencies = [
+ "routa-procsvc-proto",
+]
+
+[[package]]
 name = "routa-procsvc-proto"
 version = "0.2.0"
 dependencies = [

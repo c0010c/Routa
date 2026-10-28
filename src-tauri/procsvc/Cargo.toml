@@ -1,0 +1,11 @@
+[package]
+name = "routa-procsvc"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "routa-procsvc"
+path = "src/main.rs"
+
+[dependencies]
+routa-procsvc-proto = { path = "../procsvc-proto" }
