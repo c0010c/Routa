@@ -4,6 +4,7 @@ pub mod core;
 pub mod model;
 pub mod netif;
 pub mod portable;
+pub mod procroute;
 pub mod runtime;
 pub mod scheduler;
 pub mod stats;
