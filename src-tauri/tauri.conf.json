@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm build-procsvc && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -24,7 +24,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/mihomo"],
-    "icon": ["icons/icon.ico"]
+    "externalBin": ["binaries/mihomo", "binaries/routa-procsvc"],
+    "resources": { "binaries/procsvc/*": "procsvc/" },
+    "icon": ["icons/icon.ico"],
+    "windows": {
+      "nsis": { "installerHooks": "nsis/hooks.nsh" }
+    }
   }
 }
