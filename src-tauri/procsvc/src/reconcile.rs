@@ -239,6 +239,11 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
         &mut self.interceptor
     }
 
+    /// 直接访问 WFP 防护，供服务启动时核对残留的永久阻断。
+    pub fn guard(&mut self) -> &mut G {
+        &mut self.guard
+    }
+
     /// 走到期望规则集，返回非致命错误（中文，可直接展示）。
     pub fn apply(&mut self, desired: Vec<RuleSpec>) -> Vec<String> {
         let old = std::mem::take(&mut self.current);

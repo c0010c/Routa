@@ -10,13 +10,20 @@ path = "src/main.rs"
 [dependencies]
 routa-procsvc-proto = { path = "../procsvc-proto" }
 libloading = "0.8"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_WindowsFilteringPlatform",
     "Win32_Networking_WinSock",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Rpc",
+    "Win32_System_Services",
     "Win32_System_Threading",
 ] }
+
+[dev-dependencies]
+tempfile = "3"

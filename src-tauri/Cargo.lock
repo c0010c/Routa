@@ -3159,6 +3159,9 @@ version = "0.2.0"
 dependencies = [
  "libloading 0.8.9",
  "routa-procsvc-proto",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "windows-sys 0.61.2",
 ]
 

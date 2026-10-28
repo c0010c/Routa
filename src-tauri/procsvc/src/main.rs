@@ -6,7 +6,9 @@ mod engine;
 mod fallback;
 mod paths;
 mod pb_ffi;
+mod persist;
 mod reconcile;
+mod server;
 mod tcpkill;
 mod wfp;
 
