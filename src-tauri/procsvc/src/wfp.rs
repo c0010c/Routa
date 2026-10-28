@@ -105,6 +105,10 @@ fn is(rc: u32, err: windows_sys::core::HRESULT) -> bool {
     rc == err as u32
 }
 
+fn same_guid(a: &GUID, b: &GUID) -> bool {
+    (a.data1, a.data2, a.data3, a.data4) == (b.data1, b.data2, b.data3, b.data4)
+}
+
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
@@ -264,54 +268,89 @@ impl Wfp {
         }
     }
 
-    /// 本 provider 在四个层上的全部过滤器（含动态会话里的）。
-    fn list(&self) -> Result<Vec<Installed>, String> {
+    /// 枚举过滤器，对每条调用 `each`。`tpl` 为空时枚举系统里的全部过滤器。
+    /// provider 不存在时视为没有过滤器。
+    fn enum_filters(
+        &self,
+        tpl: Option<&FWPM_FILTER_ENUM_TEMPLATE0>,
+        mut each: impl FnMut(&FWPM_FILTER0),
+    ) -> Result<(), String> {
         const PAGE: u32 = 128;
         let h = self.persistent.0;
+        let tpl = tpl.map_or(null(), |t| t as *const _);
+        // SAFETY: 模板只在调用期间使用；枚举句柄在本函数内销毁；
+        // 返回的数组在交给 `each` 之后用 FwpmFreeMemory0 释放。
+        unsafe {
+            let mut eh: HANDLE = null_mut();
+            let rc = FwpmFilterCreateEnumHandle0(h, tpl, &mut eh);
+            if is(rc, FWP_E_PROVIDER_NOT_FOUND) {
+                return Ok(());
+            }
+            check("FwpmFilterCreateEnumHandle0", rc)?;
+            let r = loop {
+                let mut entries: *mut *mut FWPM_FILTER0 = null_mut();
+                let mut n = 0u32;
+                let rc = FwpmFilterEnum0(h, eh, PAGE, &mut entries, &mut n);
+                if let Err(e) = check("FwpmFilterEnum0", rc) {
+                    break Err(e);
+                }
+                for i in 0..n as usize {
+                    each(&**entries.add(i));
+                }
+                if !entries.is_null() {
+                    FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut c_void);
+                }
+                if n < PAGE {
+                    break Ok(());
+                }
+            };
+            FwpmFilterDestroyEnumHandle0(h, eh);
+            r
+        }
+    }
+
+    /// 本 provider 在四个层上的全部过滤器（含动态会话里的）。
+    fn list(&self) -> Result<Vec<Installed>, String> {
         let mut out = Vec::new();
         for (layer, key) in LAYERS.iter().enumerate() {
             let mut pkey = PROVIDER_KEY;
-            // SAFETY: 模板只在调用期间使用；枚举句柄在本块内销毁；
-            // 返回的数组在拷出数据后用 FwpmFreeMemory0 释放。
-            unsafe {
-                let mut tpl: FWPM_FILTER_ENUM_TEMPLATE0 = zeroed();
-                tpl.providerKey = &mut pkey;
-                tpl.layerKey = *key;
-                tpl.enumType = FWP_FILTER_ENUM_OVERLAPPING;
-                tpl.actionMask = 0xFFFF_FFFF;
-                let mut eh: HANDLE = null_mut();
-                let rc = FwpmFilterCreateEnumHandle0(h, &tpl, &mut eh);
-                if is(rc, FWP_E_PROVIDER_NOT_FOUND) {
-                    continue;
-                }
-                check("FwpmFilterCreateEnumHandle0", rc)?;
-                let r = loop {
-                    let mut entries: *mut *mut FWPM_FILTER0 = null_mut();
-                    let mut n = 0u32;
-                    let rc = FwpmFilterEnum0(h, eh, PAGE, &mut entries, &mut n);
-                    if let Err(e) = check("FwpmFilterEnum0", rc) {
-                        break Err(e);
-                    }
-                    for i in 0..n as usize {
-                        let f = &**entries.add(i);
-                        out.push(Installed {
-                            id: f.filterId,
-                            layer,
-                            kind: kind_of(&from_wide(f.displayData.name)),
-                            exe: from_wide(f.displayData.description),
-                        });
-                    }
-                    if !entries.is_null() {
-                        FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut c_void);
-                    }
-                    if n < PAGE {
-                        break Ok(());
-                    }
+            // SAFETY: 全零是 FWPM_FILTER_ENUM_TEMPLATE0 的合法初值。
+            let mut tpl: FWPM_FILTER_ENUM_TEMPLATE0 = unsafe { zeroed() };
+            tpl.providerKey = &mut pkey;
+            tpl.layerKey = *key;
+            tpl.enumType = FWP_FILTER_ENUM_OVERLAPPING;
+            tpl.actionMask = 0xFFFF_FFFF;
+            self.enum_filters(Some(&tpl), |f| {
+                // SAFETY: WFP 返回的名字/描述为空或以 0 结尾。
+                let (name, desc) = unsafe {
+                    (
+                        from_wide(f.displayData.name),
+                        from_wide(f.displayData.description),
+                    )
                 };
-                FwpmFilterDestroyEnumHandle0(h, eh);
-                r?;
-            }
+                out.push(Installed {
+                    id: f.filterId,
+                    layer,
+                    kind: kind_of(&name),
+                    exe: desc,
+                });
+            })?;
         }
+        Ok(out)
+    }
+
+    /// 本 provider 在任意层上的全部过滤器（id 与种类），供 `cleanup_all` 清掉旧版本可能留在
+    /// 其它层的过滤器，否则删 sublayer / provider 会因仍被引用而失败。
+    fn list_any_layer(&self) -> Result<Vec<(u64, Option<Kind>)>, String> {
+        let mut out = Vec::new();
+        self.enum_filters(None, |f| {
+            // SAFETY: providerKey 为空或指向有效 GUID；名字为空或以 0 结尾。
+            unsafe {
+                if !f.providerKey.is_null() && same_guid(&*f.providerKey, &PROVIDER_KEY) {
+                    out.push((f.filterId, kind_of(&from_wide(f.displayData.name))));
+                }
+            }
+        })?;
         Ok(out)
     }
 
@@ -424,8 +463,8 @@ impl Guard for Wfp {
     }
 
     fn cleanup_all(&mut self) -> Result<(), String> {
-        for f in self.list()? {
-            self.engine(f.kind).delete(f.id)?;
+        for (id, kind) in self.list_any_layer()? {
+            self.engine(kind).delete(id)?;
         }
         let h = self.persistent.0;
         // SAFETY: h 是有效引擎句柄；key 在调用期间有效。
@@ -461,6 +500,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, UdpSocket};
     use std::process::Command;
+    use std::sync::{Mutex, MutexGuard};
     use std::time::Duration;
 
     const CURL: &str = r"C:\Windows\System32\curl.exe";
@@ -498,7 +538,15 @@ mod tests {
         assert!(!Kind::Permit.persistent());
     }
 
-    // ---- 以下需要管理员；`-- --ignored wfp:: --test-threads=1` 一次跑完 ----
+    // ---- 以下需要管理员；`-- --ignored wfp::` 一次跑完（测试之间由 LOCK 串行）----
+
+    /// 管理员测试共用全局 WFP 状态（同一 provider、同一个 curl），必须串行。
+    /// 先于 `Cleanup` 取得、后于它释放；某个测试 panic 造成的中毒不影响其它测试。
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    fn serial() -> MutexGuard<'static, ()> {
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     /// 无论断言是否失败，测试结束时都清掉本 provider 下的一切。
     struct Cleanup;
@@ -551,6 +599,7 @@ mod tests {
     #[test]
     #[ignore = "needs admin"]
     fn permit_disappears_with_session() {
+        let _serial = serial();
         need_network();
         let _c = Cleanup;
         let mut w = open().expect("open");
@@ -574,6 +623,7 @@ mod tests {
     #[test]
     #[ignore = "needs admin"]
     fn loopback_allowed_while_blocked() {
+        let _serial = serial();
         need_network();
         let srv = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = srv.local_addr().unwrap().port();
@@ -599,6 +649,7 @@ mod tests {
     #[test]
     #[ignore = "needs admin"]
     fn ops_idempotent_and_case_insensitive() {
+        let _serial = serial();
         let _c = Cleanup;
         let mut w = open().expect("open");
         let upper = CURL.to_uppercase();
@@ -642,6 +693,20 @@ mod tests {
         w.cleanup_all().unwrap();
         w.ensure_block(CURL).unwrap();
         assert_eq!(count(&w, Kind::Block), 4);
+
+        // 旧版本可能在别的层留下过滤器：cleanup_all 也要清掉，否则删 sublayer/provider 会失败
+        let app = AppId::of(CURL).unwrap();
+        add_filter(
+            &w.persistent,
+            Kind::Block,
+            FWPM_LAYER_ALE_AUTH_LISTEN_V4,
+            CURL,
+            &app,
+        )
+        .unwrap();
+        assert_eq!(w.list_any_layer().unwrap().len(), 9);
+        w.cleanup_all().expect("cleanup_all 应清掉任意层上的过滤器");
+        assert!(w.list_any_layer().unwrap().is_empty());
     }
 
     // ---- spec 第 10 节：服务崩溃时已授权的 UDP 会话是否漏包 ----
@@ -684,6 +749,7 @@ mod tests {
     #[test]
     #[ignore = "needs admin"]
     fn udp_leak_after_session_close() {
+        let _serial = serial();
         let servers = [
             "223.5.5.5:53",
             "119.29.29.29:53",
@@ -719,5 +785,9 @@ mod tests {
             if fresh { "仍通" } else { "被阻断" }
         );
         assert!(!fresh, "会话关闭后新 UDP 套接字应被阻断");
+        assert_eq!(
+            leaked, 0,
+            "spec 第 10 节结论：会话关闭后已授权的 UDP 会话不应漏包"
+        );
     }
 }
