@@ -52,11 +52,38 @@ pub async fn run_elevated(cmd: ElevatedCmd) -> Result<(), String> {
         ElevatedCmd::Uninstall => vec!["--uninstall".into()],
         ElevatedCmd::Cleanup => vec!["--cleanup".into()],
     };
-    let params = command_line(&args);
+    // 提权后的进程没有可读的 stderr：让它把失败原因写进这个（尚不存在的）临时文件。
+    let error_file = fresh_error_file();
+    let params = command_line(&with_error_file(args, &error_file));
     let code = tokio::task::spawn_blocking(move || run_as_admin(&helper, &params))
         .await
-        .map_err(|e| format!("组件命令没有完成：{e}"))??;
-    exit_status(code)
+        .map_err(|e| format!("组件命令没有完成：{e}"))?;
+    let detail = take_error_detail(&error_file);
+    exit_status(code?, detail.as_deref())
+}
+
+/// 临时目录里一个随机命名、尚不存在的文件路径（组件只会新建、不会覆盖）。
+fn fresh_error_file() -> PathBuf {
+    let mut buf = [0u8; 12];
+    if getrandom::fill(&mut buf).is_err() {
+        // 取不到随机数只影响文件名的唯一性；最坏是组件写不了错误文件、丢掉详情
+        buf[..4].copy_from_slice(&std::process::id().to_le_bytes());
+    }
+    let name: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+    std::env::temp_dir().join(format!("routa-procsvc-error-{name}.txt"))
+}
+
+fn with_error_file(mut args: Vec<String>, error_file: &Path) -> Vec<String> {
+    args.push("--error-file".into());
+    args.push(error_file.to_string_lossy().into_owned());
+    args
+}
+
+/// 读出组件写下的失败原因并删除文件；没有文件或内容为空时为 None。
+fn take_error_detail(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok();
+    let _ = std::fs::remove_file(path);
+    text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
 }
 
 /// 进程规则不能指向的组件 exe（spec 4）：Routa 旁边的 `routa-procsvc.exe`（debug 构建另含源码树里
@@ -98,14 +125,20 @@ fn program_files() -> Option<PathBuf> {
 }
 
 /// 组件命令的退出码（见 routa-procsvc 的用法说明）。
-fn exit_status(code: u32) -> Result<(), String> {
-    match code {
-        0 => Ok(()),
-        1 => Err("组件命令参数错误".into()),
-        2 => Err("组件命令需要管理员权限".into()),
-        3 => Err("组件命令执行失败".into()),
-        c => Err(format!("组件命令异常退出（退出码 {c}）")),
-    }
+/// `detail` 是组件写进错误文件的原因，有则附在后面（参数错误只取第一行，后面是用法说明）。
+fn exit_status(code: u32, detail: Option<&str>) -> Result<(), String> {
+    let base = match code {
+        0 => return Ok(()),
+        1 => "组件命令参数错误".to_string(),
+        2 => "组件命令需要管理员权限".to_string(),
+        3 => "组件命令执行失败".to_string(),
+        c => format!("组件命令异常退出（退出码 {c}）"),
+    };
+    let detail = detail.map(|d| if code == 1 { d.lines().next().unwrap_or(d) } else { d });
+    Err(match detail {
+        Some(d) => format!("{base}：{d}"),
+        None => base,
+    })
 }
 
 /// 源码树（只在 debug 构建里）：release 构建只认 exe 旁边的文件。否则组件文件缺失时，
@@ -279,10 +312,43 @@ mod tests {
 
     #[test]
     fn exit_codes() {
-        assert_eq!(exit_status(0), Ok(()));
+        assert_eq!(exit_status(0, None), Ok(()));
+        assert_eq!(exit_status(0, Some("x")), Ok(()));
         for c in [1, 2, 3, 7] {
-            assert!(exit_status(c).is_err());
+            assert!(exit_status(c, None).is_err());
         }
+        assert_eq!(exit_status(3, None), Err("组件命令执行失败".into()));
+        assert_eq!(
+            exit_status(3, Some("服务在 10 秒内没有停止")),
+            Err("组件命令执行失败：服务在 10 秒内没有停止".into())
+        );
+        assert_eq!(
+            exit_status(1, Some("未知参数：--x\n用法：\n  routa-procsvc.exe --install")),
+            Err("组件命令参数错误：未知参数：--x".into())
+        );
+    }
+
+    #[test]
+    fn error_file_argument_and_detail() {
+        let a = fresh_error_file();
+        let b = fresh_error_file();
+        assert_ne!(a, b);
+        assert!(a.starts_with(std::env::temp_dir()) && !a.exists());
+        let p = PathBuf::from(r"C:\Users\me\AppData\Local\Temp\routa-procsvc-error-1.txt");
+        assert_eq!(
+            command_line(&with_error_file(args(&["--uninstall"]), &p)),
+            r"--uninstall --error-file C:\Users\me\AppData\Local\Temp\routa-procsvc-error-1.txt"
+        );
+
+        let td = tempfile::tempdir().unwrap();
+        let f = td.path().join("e.txt");
+        assert_eq!(take_error_detail(&f), None);
+        fs::write(&f, "  删除服务失败：拒绝访问。\r\n").unwrap();
+        assert_eq!(take_error_detail(&f).as_deref(), Some("删除服务失败：拒绝访问。"));
+        assert!(!f.exists(), "detail file is removed after reading");
+        fs::write(&f, "  ").unwrap();
+        assert_eq!(take_error_detail(&f), None);
+        assert!(!f.exists());
     }
 
     #[test]
