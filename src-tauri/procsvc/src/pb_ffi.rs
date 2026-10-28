@@ -12,7 +12,9 @@ use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use libloading::os::windows::{Library, LOAD_WITH_ALTERED_SEARCH_PATH};
+use libloading::os::windows::{
+    Library, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+};
 use routa_procsvc_proto::{Flow, ProxyKind, ProxyTarget};
 
 use crate::engine::{Interceptor, PbAction};
@@ -189,9 +191,11 @@ pub fn load(dir: &Path, relay_ports: (u16, u16)) -> Result<ProxyBridge, String> 
 }
 
 fn start(path: &Path, (tcp, udp): (u16, u16)) -> Result<ProxyBridge, String> {
-    // SAFETY: 绝对路径 + LOAD_WITH_ALTERED_SEARCH_PATH，依赖（WinDivert.dll）从 DLL 自身目录解析，
-    // 不搜索默认 DLL 路径。DllMain 无额外前置条件。
-    let lib = unsafe { Library::load_with_flags(path, LOAD_WITH_ALTERED_SEARCH_PATH) }
+    // SAFETY: 绝对路径 + LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32：
+    // 依赖（WinDivert.dll）只从 DLL 自身目录和 System32 解析，从不搜索当前目录或 PATH
+    // （以 LocalSystem 运行的服务不能被这些位置的同名 DLL 劫持）。DllMain 无额外前置条件。
+    let flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
+    let lib = unsafe { Library::load_with_flags(path, flags) }
         .map_err(|e| format!("加载 {} 失败：{e}", path.display()))?;
     let lib = ManuallyDrop::new(lib);
     // SAFETY: lib 永不卸载。
@@ -212,6 +216,16 @@ fn start(path: &Path, (tcp, udp): (u16, u16)) -> Result<ProxyBridge, String> {
 
 fn cstring(what: &str, s: &str) -> Result<CString, String> {
     CString::new(s).map_err(|_| format!("{what} 含 NUL 字符：{s:?}"))
+}
+
+/// 交给 DLL 的进程路径：去首尾空白、`/` 统一为 `\`（DLL 按 OS 路径的 `\` 写法匹配）。
+/// DLL 把 `,` `;` 当作列表分隔符，含这两个字符的路径永远匹配不上，直接拒绝，免得规则"装上却不生效"。
+fn pb_exe(exe: &str) -> Result<CString, String> {
+    let exe = exe.trim().replace('/', "\\");
+    if exe.contains([',', ';']) {
+        return Err(format!("exe 路径含 ProxyBridge 不支持的 `,` 或 `;`：{exe}"));
+    }
+    cstring("exe 路径", &exe)
 }
 
 fn opt_ptr(s: &Option<CString>) -> *const c_char {
@@ -316,7 +330,7 @@ impl Interceptor for ProxyBridge {
             PbAction::Direct => (RULE_ACTION_DIRECT, 0),
             PbAction::Block => (RULE_ACTION_BLOCK, 0),
         };
-        let exe_c = cstring("exe 路径", exe)?;
+        let exe_c = pb_exe(exe)?;
         let (any, empty) = (c"*", c"");
         let pb_rule = existing.and_then(|e| e.pb_rule);
         // SAFETY: 所有指针指向本函数内存活的 C 字符串。
@@ -358,8 +372,19 @@ impl Interceptor for ProxyBridge {
                 self.rules.entry(rule.to_string()).or_default().pb_rule = Some(id);
             }
         }
-        if let Some(e) = self.rules.get_mut(rule) {
-            e.exe = exe.to_string();
+        let Some(e) = self.rules.get_mut(rule) else {
+            return Ok(());
+        };
+        e.exe = exe.to_string();
+        // 非代理动作不再需要代理配置：删掉（DLL 最多 32 份）；之后改回代理时 plan 会先 SetProxy 重建。
+        // 删除失败时保留记录，由 remove_rule 或下一次非代理 set_rule 重试；规则本身已生效，不报错。
+        if action != PbAction::Proxy {
+            if let Some(cfg) = e.cfg {
+                // SAFETY: 无指针参数。
+                if unsafe { (self.api.delete_proxy_config)(cfg) } != FALSE {
+                    e.cfg = None;
+                }
+            }
         }
         Ok(())
     }
@@ -510,6 +535,169 @@ mod tests {
             &rules,
         );
         assert_eq!(f.rule_id, None);
+    }
+
+    #[test]
+    fn pb_exe_normalizes_and_rejects_separators() {
+        let ok = |s: &str| pb_exe(s).unwrap().into_string().unwrap();
+        assert_eq!(ok(" C:/Apps/测试/x.exe "), r"C:\Apps\测试\x.exe");
+        assert_eq!(ok(r"C:\a\b.exe"), r"C:\a\b.exe");
+        assert!(pb_exe(r"D:\a;b\x.exe").is_err());
+        assert!(pb_exe(r"D:\a,b\x.exe").is_err());
+        assert!(pb_exe("C:\\a\0.exe").is_err());
+    }
+
+    /// 假 DLL：记录调用，用来验证簿记。只给 `bookkeeping_with_fake_dll` 一个测试用（共享静态状态）。
+    mod fake {
+        use super::*;
+        use std::ffi::CStr;
+        use std::sync::Mutex;
+
+        pub static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        static NEXT: Mutex<u32> = Mutex::new(0);
+
+        fn log(s: String) {
+            LOG.lock().unwrap().push(s);
+        }
+        fn next() -> u32 {
+            let mut n = NEXT.lock().unwrap();
+            *n += 1;
+            *n
+        }
+        unsafe extern "C" fn add_cfg(
+            _: c_int,
+            _: *const c_char,
+            _: u16,
+            _: *const c_char,
+            _: *const c_char,
+            _: Bool,
+        ) -> u32 {
+            let id = next();
+            log(format!("add_cfg {id}"));
+            id
+        }
+        unsafe extern "C" fn edit_cfg(
+            id: u32,
+            _: c_int,
+            _: *const c_char,
+            _: u16,
+            _: *const c_char,
+            _: *const c_char,
+            _: Bool,
+        ) -> Bool {
+            log(format!("edit_cfg {id}"));
+            TRUE
+        }
+        unsafe extern "C" fn del_cfg(id: u32) -> Bool {
+            log(format!("del_cfg {id}"));
+            TRUE
+        }
+        #[allow(clippy::too_many_arguments)]
+        unsafe extern "C" fn add_rule(
+            exe: *const c_char,
+            _: *const c_char,
+            _: *const c_char,
+            _: *const c_char,
+            _: c_int,
+            action: c_int,
+            cfg: u32,
+            _: Bool,
+        ) -> u32 {
+            let id = next();
+            let exe = CStr::from_ptr(exe).to_string_lossy();
+            log(format!("add_rule {id} {exe} {action} {cfg}"));
+            id
+        }
+        #[allow(clippy::too_many_arguments)]
+        unsafe extern "C" fn edit_rule(
+            id: u32,
+            exe: *const c_char,
+            _: *const c_char,
+            _: *const c_char,
+            _: *const c_char,
+            _: c_int,
+            action: c_int,
+            cfg: u32,
+            _: Bool,
+        ) -> Bool {
+            let exe = CStr::from_ptr(exe).to_string_lossy();
+            log(format!("edit_rule {id} {exe} {action} {cfg}"));
+            TRUE
+        }
+        unsafe extern "C" fn del_rule(id: u32) -> Bool {
+            log(format!("del_rule {id}"));
+            TRUE
+        }
+        unsafe extern "C" fn get_flows(_: *mut PbFlow, _: u32) -> u32 {
+            0
+        }
+        unsafe extern "C" fn set_ports(_: u16, _: u16) -> Bool {
+            TRUE
+        }
+        unsafe extern "C" fn noop() -> Bool {
+            TRUE
+        }
+
+        pub fn bridge() -> ProxyBridge {
+            ProxyBridge {
+                api: Api {
+                    add_proxy_config: add_cfg,
+                    edit_proxy_config: edit_cfg,
+                    delete_proxy_config: del_cfg,
+                    add_rule,
+                    edit_rule,
+                    delete_rule: del_rule,
+                    get_flows,
+                    set_relay_ports: set_ports,
+                    start: noop,
+                    stop: noop,
+                },
+                _lib: ManuallyDrop::new(Library::this().unwrap()),
+                rules: HashMap::new(),
+            }
+        }
+    }
+
+    #[test]
+    fn bookkeeping_with_fake_dll() {
+        let target = ProxyTarget {
+            kind: ProxyKind::Socks5,
+            host: "127.0.0.1".into(),
+            port: 7890,
+            username: None,
+            password: None,
+        };
+        let take = || std::mem::take(&mut *fake::LOG.lock().unwrap());
+        let mut pb = fake::bridge();
+
+        assert!(pb.set_rule("r", r"C:\x.exe", PbAction::Proxy).is_err());
+        assert!(pb.set_rule("r", "C:/a;b/x.exe", PbAction::Block).is_err());
+        assert!(take().is_empty());
+
+        pb.set_proxy("r", &target).unwrap();
+        pb.set_rule("r", " C:/Apps/x.exe", PbAction::Proxy).unwrap();
+        pb.set_proxy("r", &target).unwrap();
+        assert_eq!(
+            take(),
+            ["add_cfg 1", r"add_rule 2 C:\Apps\x.exe 0 1", "edit_cfg 1"]
+        );
+
+        // 改成非代理动作：规则改写后删掉代理配置。
+        pb.set_rule("r", r"C:\Apps\x.exe", PbAction::Direct)
+            .unwrap();
+        assert_eq!(take(), [r"edit_rule 2 C:\Apps\x.exe 1 0", "del_cfg 1"]);
+        assert_eq!(pb.rules["r"].cfg, None);
+
+        // 改回代理：plan 先 SetProxy 重建配置。
+        pb.set_proxy("r", &target).unwrap();
+        pb.set_rule("r", r"C:\Apps\x.exe", PbAction::Proxy).unwrap();
+        assert_eq!(take(), ["add_cfg 3", r"edit_rule 2 C:\Apps\x.exe 0 3"]);
+
+        pb.remove_rule("r").unwrap();
+        assert_eq!(take(), ["del_rule 2", "del_cfg 3"]);
+        pb.remove_rule("r").unwrap();
+        pb.remove_rule("unknown").unwrap();
+        assert!(take().is_empty());
     }
 
     #[test]
