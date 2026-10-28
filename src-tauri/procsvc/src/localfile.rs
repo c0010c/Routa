@@ -131,17 +131,17 @@ mod tests {
     fn non_local_paths_rejected() {
         for p in [
             r"\\srv\share\a.exe",
-            r"\\?\C:\Windows\notepad.exe",
-            r"\\.\C:\Windows\notepad.exe",
+            r"\\?\C:\Windows\System32\cmd.exe",
+            r"\\.\C:\Windows\System32\cmd.exe",
             r"C:a.exe",
-            r"\Windows\notepad.exe",
+            r"\Windows\System32\cmd.exe",
             r"C:\",
-            r"C:\Windows\..\Windows\notepad.exe",
+            r"C:\Windows\..\Windows\System32\cmd.exe",
         ] {
             let e = hold(Path::new(p), Expect::File).err();
             assert!(e.is_some(), "{p} should be rejected");
         }
-        hold(Path::new(r"C:\Windows\notepad.exe"), Expect::File).unwrap();
+        hold(Path::new(r"C:\Windows\System32\cmd.exe"), Expect::File).unwrap();
     }
 
     #[test]
