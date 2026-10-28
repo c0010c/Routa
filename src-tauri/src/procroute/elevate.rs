@@ -30,7 +30,7 @@ pub enum ElevatedCmd {
 /// 经 UAC 以管理员身份运行组件命令并等它结束。用户取消 UAC 时为 `Err("已取消")`。
 pub async fn run_elevated(cmd: ElevatedCmd) -> Result<(), String> {
     let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = dev_manifest_dir();
     let helper = locate_helper(exe_dir.as_deref(), manifest)?;
     let args: Vec<String> = match cmd {
         ElevatedCmd::Install => {
@@ -64,11 +64,27 @@ fn exit_status(code: u32) -> Result<(), String> {
     }
 }
 
-/// 与 Routa 同目录的 `routa-procsvc.exe`；开发时退回到 `target/{debug,release}` 里较新的那个。
-fn locate_helper(exe_dir: Option<&Path>, manifest: &Path) -> Result<PathBuf, String> {
+/// 源码树（只在 debug 构建里）：release 构建只认 exe 旁边的文件。否则组件文件缺失时，
+/// 会从普通用户可写的路径（例如在盘符根目录下建出的同名目录）复制 DLL 进受保护目录、
+/// 甚至以管理员身份运行那里的 exe（spec 6.5）。
+#[cfg(debug_assertions)]
+fn dev_manifest_dir() -> Option<&'static Path> {
+    Some(Path::new(env!("CARGO_MANIFEST_DIR")))
+}
+
+#[cfg(not(debug_assertions))]
+fn dev_manifest_dir() -> Option<&'static Path> {
+    None
+}
+
+/// 与 Routa 同目录的 `routa-procsvc.exe`；有源码树（debug）时退回到 `target/{debug,release}` 里较新的那个。
+fn locate_helper(exe_dir: Option<&Path>, manifest: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(p) = exe_dir.map(|d| d.join(HELPER)).filter(|p| p.is_file()) {
         return Ok(p);
     }
+    let Some(manifest) = manifest else {
+        return Err(format!("找不到进程分流组件 {HELPER}"));
+    };
     ["debug", "release"]
         .iter()
         .map(|profile| manifest.join("target").join(profile).join(HELPER))
@@ -78,12 +94,12 @@ fn locate_helper(exe_dir: Option<&Path>, manifest: &Path) -> Result<PathBuf, Str
         .ok_or_else(|| format!("找不到进程分流组件 {HELPER}"))
 }
 
-/// 与 Routa 同目录的 `procsvc\`；开发时退回到源码树的 `binaries\procsvc`。
-fn locate_source(exe_dir: Option<&Path>, manifest: &Path) -> Result<PathBuf, String> {
+/// 与 Routa 同目录的 `procsvc\`；有源码树（debug）时退回到 `binaries\procsvc`。
+fn locate_source(exe_dir: Option<&Path>, manifest: Option<&Path>) -> Result<PathBuf, String> {
     exe_dir
         .map(|d| d.join(SOURCE_DIR))
         .filter(|p| p.is_dir())
-        .or_else(|| Some(manifest.join("binaries").join(SOURCE_DIR)).filter(|p| p.is_dir()))
+        .or_else(|| manifest.map(|m| m.join("binaries").join(SOURCE_DIR)).filter(|p| p.is_dir()))
         .ok_or_else(|| format!("找不到进程分流组件的文件目录 {SOURCE_DIR}"))
 }
 
@@ -234,8 +250,27 @@ mod tests {
         fs::create_dir_all(manifest.join("target/debug")).unwrap();
         fs::write(manifest.join("target/debug").join(HELPER), b"").unwrap();
         fs::create_dir_all(manifest.join("binaries").join(SOURCE_DIR)).unwrap();
-        assert_eq!(locate_helper(Some(&app), &manifest), Ok(app.join(HELPER)));
-        assert_eq!(locate_source(Some(&app), &manifest), Ok(app.join(SOURCE_DIR)));
+        assert_eq!(locate_helper(Some(&app), Some(&manifest)), Ok(app.join(HELPER)));
+        assert_eq!(locate_source(Some(&app), Some(&manifest)), Ok(app.join(SOURCE_DIR)));
+    }
+
+    #[test]
+    fn no_source_tree_fallback_without_manifest() {
+        let td = tempfile::tempdir().unwrap();
+        let (app, manifest) = (td.path().join("app"), td.path().join("src-tauri"));
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(manifest.join("target/release")).unwrap();
+        fs::write(manifest.join("target/release").join(HELPER), b"").unwrap();
+        fs::create_dir_all(manifest.join("binaries").join(SOURCE_DIR)).unwrap();
+        assert!(locate_helper(Some(&app), Some(&manifest)).is_ok());
+        assert!(locate_helper(Some(&app), None).is_err());
+        assert!(locate_source(Some(&app), None).is_err());
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn release_build_has_no_source_tree() {
+        assert_eq!(dev_manifest_dir(), None);
     }
 
     #[test]
@@ -243,8 +278,8 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let (app, manifest) = (td.path().join("app"), td.path().join("src-tauri"));
         fs::create_dir_all(&app).unwrap();
-        assert!(locate_helper(Some(&app), &manifest).is_err());
-        assert!(locate_source(Some(&app), &manifest).is_err());
+        assert!(locate_helper(Some(&app), Some(&manifest)).is_err());
+        assert!(locate_source(Some(&app), Some(&manifest)).is_err());
 
         let (debug, release) = (manifest.join("target/debug"), manifest.join("target/release"));
         for d in [&debug, &release] {
@@ -253,12 +288,12 @@ mod tests {
         }
         let old = SystemTime::now() - Duration::from_secs(3600);
         fs::File::options().write(true).open(debug.join(HELPER)).unwrap().set_modified(old).unwrap();
-        assert_eq!(locate_helper(Some(&app), &manifest), Ok(release.join(HELPER)));
+        assert_eq!(locate_helper(Some(&app), Some(&manifest)), Ok(release.join(HELPER)));
         fs::File::options().write(true).open(release.join(HELPER)).unwrap()
             .set_modified(old - Duration::from_secs(60)).unwrap();
-        assert_eq!(locate_helper(None, &manifest), Ok(debug.join(HELPER)));
+        assert_eq!(locate_helper(None, Some(&manifest)), Ok(debug.join(HELPER)));
 
         fs::create_dir_all(manifest.join("binaries").join(SOURCE_DIR)).unwrap();
-        assert_eq!(locate_source(Some(&app), &manifest), Ok(manifest.join("binaries").join(SOURCE_DIR)));
+        assert_eq!(locate_source(Some(&app), Some(&manifest)), Ok(manifest.join("binaries").join(SOURCE_DIR)));
     }
 }

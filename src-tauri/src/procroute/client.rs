@@ -45,6 +45,8 @@ const TICK: Duration = Duration::from_secs(1);
 const RECONNECT: Duration = Duration::from_secs(2);
 /// 单次请求（写请求 + 读回复）的上限；超时视为连接出错。
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+/// 被服务拒绝的同一状态，至少隔这么久、且只在定时同步时才重发。
+const REJECTED_RETRY: Duration = Duration::from_secs(2);
 /// 退出时等 Goodbye 送达的上限。
 const GOODBYE_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -262,27 +264,46 @@ fn start_service() -> Result<(), String> {
 pub struct Syncer {
     /// 服务回 `Ok` / `Applied` 的最后一个状态（`Error` 和连接出错时不更新）。
     last_sent: Option<DesiredState>,
+    /// 最近被服务拒绝（`Error`）的状态及拒绝时刻。
+    rejected: Option<(DesiredState, Instant)>,
     errors: Vec<String>,
 }
 
 impl Syncer {
     /// 与上次成功下发的状态相同则不发，返回 `Ok(false)`；否则下发并返回 `Ok(true)`。
-    /// 服务拒绝（`Error`）时状态没有生效，下次照常重发；`Applied` 的部分规则错误不会触发重发。
-    /// 两种错误都记在 [`errors`](Self::errors)。`Err` 只表示连接出了问题，调用方应断开重连。
+    /// 服务拒绝（`Error`）时状态没有生效，之后会重发，但同一状态距上次被拒至少 2 秒才重发；
+    /// `Applied` 的部分规则错误不会触发重发。两种错误都记在 [`errors`](Self::errors)。
+    /// `Err` 只表示连接出了问题，调用方应断开重连。
     pub async fn push(&mut self, conn: &mut dyn SvcConn, s: DesiredState) -> Result<bool, String> {
+        self.push_with(conn, s, true).await
+    }
+
+    /// 同 [`push`](Self::push)；`retry_rejected` 为 false 时（运行状态变化触发的同步）
+    /// 不重发被拒绝过的同一状态，留给定时同步。
+    async fn push_with(&mut self, conn: &mut dyn SvcConn, s: DesiredState, retry_rejected: bool) -> Result<bool, String> {
         if self.last_sent.as_ref() == Some(&s) {
             return Ok(false);
+        }
+        if let Some((rejected, at)) = &self.rejected {
+            if *rejected == s && (!retry_rejected || at.elapsed() < REJECTED_RETRY) {
+                return Ok(false);
+            }
         }
         match conn.call(Request::Apply(s.clone())).await? {
             Response::Ok => {
                 self.errors.clear();
+                self.rejected = None;
                 self.last_sent = Some(s);
             }
             Response::Applied { errors } => {
                 self.errors = errors;
+                self.rejected = None;
                 self.last_sent = Some(s);
             }
-            Response::Error(e) => self.errors = vec![e],
+            Response::Error(e) => {
+                self.errors = vec![e];
+                self.rejected = Some((s, Instant::now()));
+            }
             other => return Err(format!("Apply 的回复不合协议：{other:?}")),
         }
         Ok(true)
@@ -350,6 +371,8 @@ struct Link {
     svc: Option<SvcStatus>,
     bps: HashMap<String, (u64, u64)>,
     flows: Vec<Flow>,
+    /// 退出已开始：不再同步。
+    stopped: bool,
 }
 
 impl Default for Link {
@@ -362,18 +385,19 @@ impl Default for Link {
             svc: None,
             bps: HashMap::new(),
             flows: Vec::new(),
+            stopped: false,
         }
     }
 }
 
-/// 一轮同步：下发期望状态；`poll` 时再取连接列表和服务状态。
+/// 一轮同步：下发期望状态；`poll`（定时同步）时再取连接列表和服务状态，并可重发被拒绝的状态。
 async fn round(
     conn: &mut dyn SvcConn,
     syncer: &mut Syncer,
     desired: DesiredState,
     poll: bool,
 ) -> Result<Option<(Vec<Flow>, SvcStatus)>, String> {
-    syncer.push(conn, desired).await?;
+    syncer.push_with(conn, desired, poll).await?;
     if !poll {
         return Ok(None);
     }
@@ -413,7 +437,15 @@ impl Link {
         self.flows.clear();
     }
 
+    /// 退出开始后：不再下发任何状态（只剩 Goodbye）。
+    fn stop(&mut self) {
+        self.stopped = true;
+    }
+
     async fn sync(&mut self, desired: DesiredState, poll: bool) {
+        if self.stopped {
+            return;
+        }
         let Some(conn) = self.conn.as_deref_mut() else { return };
         match round(conn, &mut self.syncer, desired, poll).await {
             Ok(Some((flows, status))) => {
@@ -554,6 +586,8 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
     let mut emitted_flows: Option<Vec<Flow>> = None;
     loop {
         let poll = tokio::select! {
+            // 命令优先：Goodbye 不能排在一轮同步之后。
+            biased;
             cmd = commands.recv() => match cmd {
                 None => return,
                 Some(Command::Goodbye(done)) => {
@@ -573,6 +607,12 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
             _ = RUNTIME_CHANGED.notified() => false,
             _ = tick.tick() => true,
         };
+
+        // goodbye() 已开始（可能已超时放弃等待）：不再连接或下发，只等 Goodbye 命令。
+        if EXITING.load(Ordering::SeqCst) {
+            link.stop();
+            continue;
+        }
 
         if !link.connected() && Instant::now() >= next_connect {
             next_connect = Instant::now() + RECONNECT;
@@ -679,7 +719,7 @@ mod tests {
         assert_eq!(applies(&sent), 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn changed_state_is_sent() {
         let (mut conn, sent) = FakeConn::new(vec![
             Ok(Response::Ok),
@@ -696,6 +736,9 @@ mod tests {
         // Error：未生效，同一状态下次照常重发。
         assert_eq!(s.push(&mut conn, state(r"C:\c.exe")).await, Ok(true));
         assert_eq!(s.errors(), ["拒绝"]);
+        // 被拒绝的同一状态隔 2 秒才重发。
+        assert_eq!(s.push(&mut conn, state(r"C:\c.exe")).await, Ok(false));
+        tokio::time::advance(REJECTED_RETRY).await;
         assert_eq!(s.push(&mut conn, state(r"C:\c.exe")).await, Ok(true));
         assert!(s.errors().is_empty());
         assert_eq!(applies(&sent), 4);
@@ -738,6 +781,43 @@ mod tests {
         assert!(!link.connected());
         link.sync(state(r"C:\a.exe"), true).await;
         assert_eq!(*sent.lock().unwrap(), vec![Request::Hello { version: PROTO_VERSION }]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rejected_state_retried_only_on_tick() {
+        let mut link = Link::default();
+        let (conn, sent) = FakeConn::new(vec![
+            Ok(Response::Hello { version: PROTO_VERSION, accepted: true }),
+            Ok(Response::Error("拒绝".into())),
+            Ok(Response::Ok),
+        ]);
+        link.attach(handshake(Box::new(conn)).await);
+        link.sync(state(r"C:.exe"), false).await;
+        assert_eq!(applies(&sent), 1);
+        tokio::time::advance(REJECTED_RETRY).await;
+        // 运行状态变化触发的同步不重发被拒绝的同一状态。
+        link.sync(state(r"C:.exe"), false).await;
+        assert_eq!(applies(&sent), 1);
+        // 定时同步才重发（这一轮的 GetFlows 没有预设回复，连接随之断开，与此无关）。
+        link.sync(state(r"C:.exe"), true).await;
+        assert_eq!(applies(&sent), 2);
+    }
+
+    #[tokio::test]
+    async fn stopped_link_sends_nothing_but_goodbye() {
+        let mut link = Link::default();
+        let (conn, sent) = FakeConn::new(vec![
+            Ok(Response::Hello { version: PROTO_VERSION, accepted: true }),
+            Ok(Response::Ok),
+        ]);
+        link.attach(handshake(Box::new(conn)).await);
+        link.stop();
+        link.sync(state(r"C:.exe"), true).await;
+        link.goodbye().await;
+        assert_eq!(
+            *sent.lock().unwrap(),
+            vec![Request::Hello { version: PROTO_VERSION }, Request::Goodbye]
+        );
     }
 
     #[tokio::test]
