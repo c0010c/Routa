@@ -279,10 +279,12 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
             .blocks
             .iter()
             .filter(|(k, _)| {
-                !self
-                    .current
-                    .iter()
-                    .any(|r| guarded(r) && exe_key(&r.exe_path) == **k)
+                // 本次失败的 exe 保持原状（宁可多挡），下次 apply 再清理
+                !fail.keys.contains(*k)
+                    && !self
+                        .current
+                        .iter()
+                        .any(|r| guarded(r) && exe_key(&r.exe_path) == **k)
             })
             .map(|(k, e)| (k.clone(), e.clone()))
             .collect();
@@ -340,6 +342,10 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
         };
         if let Err(e) = result {
             fail.errors.push(format!("{}失败：{e}", describe(op)));
+            // 断开旧连接只是收尾，失败不影响分流与防护状态，仅报错
+            if matches!(op, Op::Reset { .. }) {
+                return;
+            }
             self.fail(fail, old, desired, id.cloned(), key);
         }
     }
@@ -1383,6 +1389,45 @@ mod tests {
         }
 
         #[test]
+        fn failed_reset_is_error_only() {
+            let (mut rec, w) = rig();
+            w.borrow_mut().fail_ops.insert("reset");
+            let rules = vec![proxy_guarded("r", EXE)];
+            let errors = rec.apply(rules.clone());
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            // 规则保持 Proxy，放行保留，没有强制阻断
+            assert_eq!(rec.current(), &rules[..]);
+            let world = w.borrow();
+            assert_eq!(world.rules["r"].1, PbAction::Proxy);
+            assert!(world.permits.contains(&exe_key(EXE)));
+            assert!(!world.log.contains(&format!("set_rule r {EXE} Block")));
+            assert!(!world.log.iter().any(|l| l.starts_with("revoke")));
+        }
+
+        #[test]
+        fn failed_key_keeps_block_until_next_apply() {
+            let (mut rec, w) = rig();
+            assert!(rec.apply(vec![proxy_guarded("r", EXE)]).is_empty());
+            take_log(&w);
+
+            // RemoveBlock 失败：该 exe 属于失败范围，本轮收尾不再重试清理
+            w.borrow_mut().fail_ops.insert("remove_block");
+            assert_eq!(rec.apply(vec![]).len(), 1);
+            assert!(rec.current().is_empty());
+            assert!(w.borrow().blocks.contains_key(&exe_key(EXE)));
+            let removes = take_log(&w)
+                .iter()
+                .filter(|l| l.starts_with("remove_block"))
+                .count();
+            assert_eq!(removes, 1);
+
+            // 下一轮不再失败：残留的阻断被清掉
+            w.borrow_mut().fail_ops.clear();
+            assert!(rec.apply(vec![]).is_empty());
+            assert_world_is(&w, &[], "cleaned");
+        }
+
+        #[test]
         fn reapply_same_state_is_noop() {
             let (mut rec, w) = rig();
             let rules = vec![
@@ -1485,6 +1530,25 @@ mod tests {
             assert_world_is(&w, &rules, "retry");
         }
 
+        /// 同 `assert_world_is`，但允许假实现里多出 `rules` 之外的永久阻断。
+        fn assert_world_is_ignoring_extra_blocks(w: &Shared, rules: &[RuleSpec], ctx: &str) {
+            let want = Sim::built(rules);
+            let mut world = w.borrow_mut();
+            let extra: Vec<String> = world
+                .blocks
+                .keys()
+                .filter(|k| !want.blocks.contains(*k))
+                .cloned()
+                .collect();
+            let saved: Vec<(String, String)> = extra
+                .iter()
+                .filter_map(|k| world.blocks.remove(k).map(|e| (k.clone(), e)))
+                .collect();
+            drop(world);
+            assert_world_is(w, rules, ctx);
+            w.borrow_mut().blocks.extend(saved);
+        }
+
         /// 对 old → new 的每一个操作位置注入一次失败，检查：失败只会更紧、
         /// 记录的 current 与假实现状态一致、下次 apply 同样的 new 能恢复且之后为空操作。
         fn check_single_failures(old: &[RuleSpec], new: &[RuleSpec]) {
@@ -1507,7 +1571,8 @@ mod tests {
                         "{ctx}: loosened {c:?}"
                     );
                 }
-                assert_world_is(&w, &current, &ctx);
+                // 失败范围内的 exe 本轮可能多留一份永久阻断（只会更紧），下次 apply 清理
+                assert_world_is_ignoring_extra_blocks(&w, &current, &ctx);
                 // 期望受保护的 exe：要么已按期望就位，要么被阻断
                 {
                     let world = w.borrow();

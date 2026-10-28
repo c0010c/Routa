@@ -7,6 +7,7 @@ mod fallback;
 mod paths;
 mod pb_ffi;
 mod reconcile;
+mod tcpkill;
 mod wfp;
 
 fn main() {}
