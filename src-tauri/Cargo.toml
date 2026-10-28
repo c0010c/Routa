@@ -1,3 +1,6 @@
+[workspace]
+members = ["procsvc-proto"]
+
 [package]
 name = "routa"
 version = "0.2.0"
@@ -29,6 +32,7 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["process", "io-util", "time", "net", "macros", "rt-multi-thread", "sync"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "gzip", "native-tls"] }
 tokio-tungstenite = "0.26"
+routa-procsvc-proto = { path = "procsvc-proto" }
 anyhow = "1"
 getrandom = "0.3"
 

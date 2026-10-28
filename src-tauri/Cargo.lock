@@ -3123,6 +3123,7 @@ dependencies = [
  "ipconfig",
  "percent-encoding",
  "reqwest",
+ "routa-procsvc-proto",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -3140,6 +3141,14 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
  "wiremock",
+]
+
+[[package]]
+name = "routa-procsvc-proto"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
