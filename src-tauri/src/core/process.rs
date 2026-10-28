@@ -48,6 +48,10 @@ pub trait CoreLauncher: Send + Sync {
     /// Validates `config` (inside the core workdir) with the real core
     /// (`mihomo -t`) without starting it.
     async fn check_config(&self, config: &Path) -> Result<(), CheckError>;
+    /// The mihomo binary this launcher runs, when it is a real file.
+    fn core_binary(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
@@ -381,6 +385,9 @@ impl CoreLauncher for ProcessLauncher {
     }
     async fn check_config(&self, config: &Path) -> Result<(), CheckError> {
         check_config_with(&self.bin, &self.workdir, config).await
+    }
+    fn core_binary(&self) -> Option<PathBuf> {
+        Some(self.bin.clone())
     }
 }
 
