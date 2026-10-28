@@ -1,77 +1,96 @@
 //! 每条规则的实际动作（spec 第 5 节）。纯函数，不做任何 IO。
 
+use std::collections::HashMap;
+use std::net::IpAddr;
+
 use routa_procsvc_proto::{Action, DesiredState, ExitPolicy, FaultPolicy, ProxyKind, ProxyTarget, RuleSpec};
 
 use crate::core::process::CoreState;
 use crate::model::health::ListenerStatus;
-use crate::model::{Listener, ListenerType, Model, ProcessRule};
+use crate::model::{Listener, ListenerType, Model, ProcessRule, ProcessRuleId};
 use crate::runtime::{CoreStopReason, RuntimeStatus};
 
 /// 根据模型和运行状态算出下发给助手的期望状态。全局开关关闭或规则被禁用时，
 /// 规则不出现在结果里（助手不再管理该进程）；其余规则保持原顺序。
 pub fn decide(model: &Model, status: &RuntimeStatus, routa_pid: u32) -> DesiredState {
-    let routing = &model.process_routing;
-    let rules = if routing.enabled {
-        routing
-            .rules
-            .iter()
-            .filter(|r| r.user_enabled)
-            .map(|r| RuleSpec {
-                id: r.id.0.clone(),
-                exe_path: r.exe_path.clone(),
-                action: rule_action(model, status, r),
-                on_fault: r.on_fault.clone(),
-                reset_on_change: r.reset_on_change,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    DesiredState { rules, on_routa_exit: routing.on_routa_exit.clone(), routa_pid }
+    let rules = active_rules(model)
+        .map(|r| RuleSpec {
+            id: r.id.0.clone(),
+            exe_path: r.exe_path.clone(),
+            action: rule_action(model, status, r).0,
+            on_fault: r.on_fault.clone(),
+            reset_on_change: r.reset_on_change,
+        })
+        .collect();
+    DesiredState { rules, on_routa_exit: model.process_routing.on_routa_exit.clone(), routa_pid }
 }
 
-/// spec 第 5 节，按顺序判断，先命中者生效。
-fn rule_action(model: &Model, status: &RuntimeStatus, rule: &ProcessRule) -> Action {
+/// 与 [`decide`] 同一组规则：不是代理时的原因（中文，可直接展示）；代理时为 None。
+pub fn reasons(model: &Model, status: &RuntimeStatus) -> HashMap<ProcessRuleId, Option<String>> {
+    active_rules(model)
+        .map(|r| (r.id.clone(), rule_action(model, status, r).1.map(str::to_string)))
+        .collect()
+}
+
+/// 下发给助手的规则：全局开关打开时用户启用的规则。
+fn active_rules(model: &Model) -> impl Iterator<Item = &ProcessRule> {
+    let routing = &model.process_routing;
+    routing.rules.iter().filter(move |r| routing.enabled && r.user_enabled)
+}
+
+/// spec 第 5 节，按顺序判断，先命中者生效。返回动作和（非代理时的）原因。
+fn rule_action(model: &Model, status: &RuntimeStatus, rule: &ProcessRule) -> (Action, Option<&'static str>) {
     // 为防泄露自动停止的内核：无论内核状态如何都阻断。
     if status.core_stop_reason == Some(CoreStopReason::FailClosed) {
-        return Action::Block;
+        return (Action::Block, Some("新配置无法生效，内核已停止"));
     }
+    let on_exit = &model.process_routing.on_routa_exit;
     match &status.core {
-        CoreState::Crashed { .. } => fault_action(&rule.on_fault),
-        CoreState::Starting if status.core_recovering => fault_action(&rule.on_fault),
-        CoreState::Starting => exit_action(&model.process_routing.on_routa_exit),
+        CoreState::Crashed { .. } => (fault_action(&rule.on_fault), Some("内核崩溃")),
+        CoreState::Starting if status.core_recovering => (fault_action(&rule.on_fault), Some("内核恢复中")),
+        CoreState::Starting => (exit_action(on_exit), Some("内核启动中")),
         CoreState::Stopped => match status.core_stop_reason {
-            Some(CoreStopReason::User) => exit_action(&model.process_routing.on_routa_exit),
-            _ => Action::Block,
+            Some(CoreStopReason::User) => (exit_action(on_exit), Some("内核已手动停止")),
+            _ => (Action::Block, Some("内核未运行")),
         },
+        // Listener 被停用 / 未生效 / 已删除 / 类型不对：一律阻断，与 on_fault 无关。
         CoreState::Running => match model.listeners.iter().find(|l| l.id == rule.listener) {
-            Some(l) if listener_in_effect(status, l) => Action::Proxy(proxy_target(l)),
-            // Listener 被停用 / 未生效 / 已删除 / 类型不对：一律阻断，与 on_fault 无关。
-            _ => Action::Block,
+            None => (Action::Block, Some("Listener 已删除")),
+            Some(l) if l.listener_type == ListenerType::Http => (Action::Block, Some("HTTP 类型的 Listener 不能使用")),
+            Some(l) if !listener_in_effect(status, l) => (Action::Block, Some("Listener 未生效")),
+            Some(l) => match proxy_target(l) {
+                Some(t) => (Action::Proxy(t), None),
+                None => (Action::Block, Some("Listener 的监听地址不是 IP")),
+            },
         },
     }
 }
 
 fn listener_in_effect(status: &RuntimeStatus, l: &Listener) -> bool {
-    l.listener_type != ListenerType::Http
-        && status.health.listeners.get(&l.id) == Some(&ListenerStatus::Active)
+    status.health.listeners.get(&l.id) == Some(&ListenerStatus::Active)
         && status.effective_listeners.contains(&l.id)
         && !status.failed_listeners.iter().any(|f| f.id == l.id)
 }
 
-fn proxy_target(l: &Listener) -> ProxyTarget {
-    // 监听所有地址或回环时连 127.0.0.1，只监听某个局域网 IP 时连那个 IP。
-    let host = match l.listen.as_str() {
-        "0.0.0.0" | "::" | "127.0.0.1" | "" | "localhost" => "127.0.0.1",
-        other => other,
-    };
-    ProxyTarget {
+/// 监听所有地址或回环时连 127.0.0.1，只监听某个局域网 IP 时连那个 IP。
+/// 助手只接受 IP，监听地址不是 IP 字面量时返回 None。
+fn proxy_host(listen: &str) -> Option<String> {
+    let t = listen.trim();
+    let t = t.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(t);
+    if t.eq_ignore_ascii_case("localhost") || matches!(t, "" | "0.0.0.0" | "::" | "::1" | "127.0.0.1") {
+        return Some("127.0.0.1".into());
+    }
+    t.parse::<IpAddr>().ok().map(|ip| ip.to_string())
+}
+
+fn proxy_target(l: &Listener) -> Option<ProxyTarget> {
+    Some(ProxyTarget {
         kind: ProxyKind::Socks5,
-        host: host.to_string(),
+        host: proxy_host(&l.listen)?,
         port: l.port,
         username: l.auth.as_ref().map(|a| a.username.clone()),
         password: l.auth.as_ref().map(|a| a.password.clone()),
-    }
+    })
 }
 
 fn fault_action(p: &FaultPolicy) -> Action {
@@ -95,7 +114,7 @@ mod tests {
     use super::*;
     use crate::core::apply::FailedListener;
     use crate::model::health::Health;
-    use crate::model::{Auth, ListenerId, ProcessRuleId};
+    use crate::model::{Auth, ListenerId};
     use crate::stats::delay::DelayBook;
 
     const PID: u32 = 4242;
@@ -315,6 +334,35 @@ mod tests {
             let d = decide(&model_with(listen, FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
             assert_eq!(only_action(&d), proxy("127.0.0.1"), "listen {listen:?}");
         }
+    }
+
+    #[test]
+    fn ipv6_bracketed_any_maps_to_loopback() {
+        for listen in ["[::]", " [::1] ", "LocalHost", "[0.0.0.0]"] {
+            let d = decide(&model_with(listen, FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
+            assert_eq!(only_action(&d), proxy("127.0.0.1"), "listen {listen:?}");
+        }
+        let d = decide(&model_with("[fe80::1]", FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
+        assert_eq!(only_action(&d), proxy("fe80::1"));
+    }
+
+    #[test]
+    fn non_ip_listen_blocks() {
+        for listen in ["myhost.lan", "[]x", "192.168.1"] {
+            let m = model_with(listen, FaultPolicy::Direct, ExitPolicy::Direct);
+            let d = decide(&m, &running(), PID);
+            assert_eq!(only_action(&d), Action::Block, "listen {listen:?}");
+            let why = reasons(&m, &running());
+            assert_eq!(why[&ProcessRuleId("r1".into())].as_deref(), Some("Listener 的监听地址不是 IP"));
+        }
+    }
+
+    #[test]
+    fn reasons_only_for_non_proxy() {
+        let m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        assert_eq!(reasons(&m, &running()), HashMap::from([(ProcessRuleId("r1".into()), None)]));
+        let why = reasons(&m, &status(crashed(), None, true));
+        assert_eq!(why[&ProcessRuleId("r1".into())].as_deref(), Some("内核崩溃"));
     }
 
     #[test]

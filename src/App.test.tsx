@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import pkg from "../package.json";
 import App from "./App";
 
 vi.mock("./api/events", () => ({ useRuntimeEvents: () => {} }));
@@ -25,7 +26,7 @@ describe("Layout sidebar", () => {
     render(<App />);
     const nav = screen.getByRole("navigation", { name: "主导航" });
     expect(screen.getByText("Routa")).toBeInTheDocument();
-    expect(screen.getByText("v0.1.0")).toBeInTheDocument();
+    expect(screen.getByText(`v${pkg.version}`)).toBeInTheDocument();
     expect(nav).toBeInTheDocument();
   });
 

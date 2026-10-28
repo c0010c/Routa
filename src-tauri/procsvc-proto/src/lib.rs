@@ -89,6 +89,7 @@ pub enum Response {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Flow {
     pub pid: u32,
     pub rule_id: Option<String>,

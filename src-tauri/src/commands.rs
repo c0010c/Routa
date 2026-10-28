@@ -11,6 +11,10 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::core::apply::ApplyOutcome;
 use crate::model::*;
+use crate::procroute;
+use crate::procroute::client::ProcRouteStatus;
+use crate::procroute::elevate::ElevatedCmd;
+use crate::procroute::processes::RunningProcess;
 use crate::runtime::{Runtime, RuntimeStatus};
 use crate::stats::delay::DelayResult;
 
@@ -171,6 +175,40 @@ pub mod ops {
             }
         })
         .await
+    }
+
+    /// Upsert by id. Never reloads mihomo.
+    pub async fn save_process_rule(rt: &Runtime, rule: ProcessRule) -> Result<(), Vec<ValidationError>> {
+        rt.mutate_process_routing(|p| {
+            let id = rule.id.clone();
+            upsert(&mut p.rules, rule, |x| x.id == id)
+        })
+        .await
+    }
+
+    pub async fn delete_process_rule(rt: &Runtime, id: ProcessRuleId) -> Result<(), Vec<ValidationError>> {
+        rt.mutate_process_routing(|p| p.rules.retain(|r| r.id != id)).await
+    }
+
+    pub async fn save_process_routing_settings(
+        rt: &Runtime,
+        enabled: bool,
+        on_routa_exit: ExitPolicy,
+    ) -> Result<(), Vec<ValidationError>> {
+        rt.mutate_process_routing(|p| {
+            p.enabled = enabled;
+            p.on_routa_exit = on_routa_exit;
+        })
+        .await
+    }
+
+    /// Through the connected service when there is one, else an elevated
+    /// one-shot `--cleanup` (works without the service running).
+    pub async fn procroute_cleanup() -> Result<(), String> {
+        match procroute::client::cleanup().await {
+            Some(res) => res,
+            None => procroute::elevate::run_elevated(ElevatedCmd::Cleanup).await,
+        }
     }
 
     /// Keys a pasted proxy must not carry: the exit decides the interface,
@@ -414,6 +452,66 @@ pub fn open_login_url(url: String) -> Result<(), String> {
         .map_err(|e| format!("无法打开浏览器: {e}"))
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn save_process_rule(rt: Rt<'_>, rule: ProcessRule) -> Result<(), Vec<ValidationError>> {
+    ops::save_process_rule(&rt, rule).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_process_rule(rt: Rt<'_>, id: ProcessRuleId) -> Result<(), Vec<ValidationError>> {
+    ops::delete_process_rule(&rt, id).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_process_routing_settings(
+    rt: Rt<'_>,
+    enabled: bool,
+    on_routa_exit: ExitPolicy,
+) -> Result<(), Vec<ValidationError>> {
+    ops::save_process_routing_settings(&rt, enabled, on_routa_exit).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn procroute_status() -> ProcRouteStatus {
+    procroute::client::status()
+}
+
+/// Registers the service (one UAC prompt), then connects right away.
+#[tauri::command]
+#[specta::specta]
+pub async fn procroute_install() -> Result<(), String> {
+    procroute::elevate::run_elevated(ElevatedCmd::Install).await?;
+    procroute::client::reconnect_now();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn procroute_uninstall() -> Result<(), String> {
+    procroute::elevate::run_elevated(ElevatedCmd::Uninstall).await?;
+    procroute::client::reconnect_now();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn procroute_cleanup() -> Result<(), String> {
+    ops::procroute_cleanup().await
+}
+
+/// One entry per exe path, sorted by name.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_running_processes() -> Vec<RunningProcess> {
+    tauri::async_runtime::spawn_blocking(procroute::processes::running_processes)
+        .await
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -496,6 +594,30 @@ mod tests {
         assert!(rt.model().exits.is_empty());
         ops::delete_listener(&rt, l.id).await.unwrap();
         assert!(rt.model().listeners.is_empty());
+    }
+
+    #[tokio::test]
+    async fn process_rule_upsert_delete_and_settings() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = runtime(&td);
+        let l = Listener::new_default("L1".into(), 7891);
+        ops::save_listener(&rt, l.clone()).await.unwrap();
+        let mut rule = ProcessRule { exe_path: r"C:\app\a.exe".into(), listener: l.id.clone(), ..ProcessRule::default() };
+        ops::save_process_rule(&rt, rule.clone()).await.unwrap();
+        rule.reset_on_change = true;
+        ops::save_process_rule(&rt, rule.clone()).await.unwrap();
+        assert_eq!(rt.model().process_routing.rules, vec![rule.clone()]);
+
+        let bad = ProcessRule { exe_path: "a.exe".into(), listener: l.id.clone(), ..ProcessRule::default() };
+        assert!(ops::save_process_rule(&rt, bad).await.is_err());
+        assert_eq!(rt.model().process_routing.rules.len(), 1, "nothing changed");
+
+        ops::save_process_routing_settings(&rt, true, ExitPolicy::Direct).await.unwrap();
+        let pr = rt.model().process_routing;
+        assert_eq!((pr.enabled, pr.on_routa_exit), (true, ExitPolicy::Direct));
+
+        ops::delete_process_rule(&rt, rule.id).await.unwrap();
+        assert!(rt.model().process_routing.rules.is_empty());
     }
 
     #[tokio::test]

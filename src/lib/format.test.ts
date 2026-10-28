@@ -109,6 +109,8 @@ describe("listenerNotEffective", () => {
     tailscale: {},
     tailscale_exit_errors: {},
     tailscale_exit_retrying: {},
+    core_stop_reason: null,
+    core_recovering: false,
   };
   it("is false for a listener in the config a running core holds", () => {
     expect(listenerNotEffective(base, "l1")).toBe(false);

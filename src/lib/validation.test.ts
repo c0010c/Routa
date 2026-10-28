@@ -33,6 +33,22 @@ describe("fieldErrors", () => {
     expect(r.form).toEqual(["mihomo 拒绝了该配置：proxy 0: '' has unset fields: cipher"]);
   });
 
+  it("puts process rule errors at form level", () => {
+    const r = fieldErrors([
+      { DuplicateProcessRule: { exe_path: "C:\a.exe" } },
+      { InvalidExePath: { exe_path: "a.exe", reason: "必须是绝对路径" } },
+      { ListenerTypeNotAllowed: { listener: "办公" } },
+      { TooManyProcessRules: { max: 32 } },
+    ]);
+    expect(r.name).toBeUndefined();
+    expect(r.form).toEqual([
+      "程序「C:\a.exe」已有分流规则",
+      "程序路径「a.exe」无效：必须是绝对路径",
+      "Listener「办公」是 HTTP 类型，不能用于进程分流",
+      "启用的分流规则最多 32 条",
+    ]);
+  });
+
   it("puts interface mismatch and invalid proxy at form level", () => {
     expect(fieldErrors([{ InterfaceMismatch: { exit: "E", node: "ts" } }]).form).toEqual([
       "出口「E」与 Tailscale「ts」的网卡不一致",

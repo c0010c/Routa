@@ -216,6 +216,66 @@ async retryTailscaleExitNodes() : Promise<Result<ApplyOutcome, null>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async saveProcessRule(rule: ProcessRule) : Promise<Result<null, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_process_rule", { rule }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteProcessRule(id: ProcessRuleId) : Promise<Result<null, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_process_rule", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveProcessRoutingSettings(enabled: boolean, onRoutaExit: ExitPolicy) : Promise<Result<null, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_process_routing_settings", { enabled, onRoutaExit }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async procrouteStatus() : Promise<ProcRouteStatus> {
+    return await TAURI_INVOKE("procroute_status");
+},
+/**
+ * Registers the service (one UAC prompt), then connects right away.
+ */
+async procrouteInstall() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("procroute_install") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async procrouteUninstall() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("procroute_uninstall") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async procrouteCleanup() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("procroute_cleanup") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * One entry per exe path, sorted by name.
+ */
+async listRunningProcesses() : Promise<RunningProcess[]> {
+    return await TAURI_INVOKE("list_running_processes");
 }
 }
 
@@ -249,7 +309,25 @@ uncut: number } } | { FailedCoreStopped: { error: string } } |
 { NotRunning: { error: string } }
 export type Auth = { username: string; password: string }
 export type Bytes = { up: number; down: number }
+export type ComponentState = "NotInstalled" | "Stopped" | "Running" | 
+/**
+ * 服务的协议版本与本程序不一致，需要重新安装组件；此时不下发任何状态。
+ */
+"NeedsUpdate" | 
+/**
+ * 管道只放行注册组件的用户：组件归其他 Windows 用户所有。
+ */
+"OwnedByOtherUser" | { Error: { message: string } }
 export type CoreState = "Stopped" | "Starting" | "Running" | { Crashed: { exit_code: number | null } }
+export type CoreStopReason = 
+/**
+ * `stop_core`.
+ */
+"User" | 
+/**
+ * An apply failed and even the empty config could not be loaded.
+ */
+"FailClosed"
 /**
  * Latest delay result per proxy name.
  */
@@ -301,13 +379,16 @@ export type ExitKind = { Node: { node: NodeRef } } | { Group: { strategy: GroupS
  * 出口组的成员：单个节点，或整组节点。
  */
 export type ExitMember = NodeRef | { group: GroupRef }
+export type ExitPolicy = "Direct" | "Block"
 export type ExitStatus = "Ok" | "NodeMissing" | "AllMembersMissing" | "InterfaceUnavailable"
 export type FailedListener = { id: ListenerId; name: string; port: number }
+export type FaultPolicy = "Direct" | "Block"
 export type FetchResult = { Ok: { node_count: number; 
 /**
  * 解析时丢弃的 `type: tailscale` 条目数
  */
 skipped_tailscale?: number } } | { Failed: { reason: string } }
+export type Flow = { pid: number; rule_id: string | null; exe_path: string | null; host: string; port: number; udp: boolean; age_ms: number | null; sent: number; received: number }
 /**
  * 指向一组节点：一个订阅的全部节点，或一个自定义节点组。
  */
@@ -318,6 +399,7 @@ export type Health = { exits: Partial<{ [key in ExitId]: ExitHealth }>; listener
  * Windows 网卡标识（GUID）。
  */
 export type InterfaceGuid = string
+export type InterruptionView = { at_unix: number; reason: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
 export type Listener = { id: ListenerId; name: string; listener_type: ListenerType; listen: string; port: number; auth: Auth | null; exit: ExitId | null; user_enabled: boolean }
 export type ListenerId = string
@@ -333,7 +415,7 @@ export type ManualNodeKind =
  * 原样的 mihomo proxy 映射
  */
 { Proxy: { raw: JsonValue } } | { Tailscale: TailscaleOpts }
-export type Model = { subscriptions: Subscription[]; exits: Exit[]; listeners: Listener[]; settings: Settings; manual_nodes: ManualNode[]; node_groups: NodeGroup[] }
+export type Model = { subscriptions: Subscription[]; exits: Exit[]; listeners: Listener[]; settings: Settings; manual_nodes: ManualNode[]; node_groups: NodeGroup[]; process_routing: ProcessRouting }
 export type NetInterface = { 
 /**
  * Adapter GUID exactly as Windows reports it, e.g. `{XXXXXXXX-...}`.
@@ -365,10 +447,43 @@ export type ParsedProxy = { raw: JsonValue;
  * `["interface-name", "routing-mark", "dialer-proxy"]` in that order.
  */
 stripped: string[] }
+export type ProcRouteStatus = { component: ComponentState; 
+/**
+ * 下发给服务的规则（全局开关打开时用户启用的规则）的实际动作。
+ */
+actions: Partial<{ [key in ProcessRuleId]: RuleView }>; last_interruption: InterruptionView | null; conflicts: string[]; 
+/**
+ * 最近一次下发时服务报告的错误：部分规则失败（状态已生效），或整个状态被拒绝（未生效，会重试）。
+ */
+apply_errors: string[]; 
+/**
+ * 连接列表达到服务的上限、被截断了（界面标明"仅显示最近 400 条"）。
+ */
+truncated_flows: boolean }
+export type ProcessRouting = { enabled: boolean; on_routa_exit: ExitPolicy; rules: ProcessRule[] }
+/**
+ * 按进程分流的一条规则：指定 exe 的流量走某个 Listener。
+ */
+export type ProcessRule = { id: ProcessRuleId; exe_path: string; listener: ListenerId; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean }
+export type ProcessRuleId = string
 /**
  * Bytes per second.
  */
 export type Rate = { up: number; down: number }
+export type RuleView = { 
+/**
+ * "Proxy" | "Direct" | "Block"
+ */
+action: string; 
+/**
+ * 不是代理时的原因（中文）。
+ */
+reason: string | null; up_bps: number; down_bps: number }
+export type RunningProcess = { pid: number; 
+/**
+ * exe 文件名。
+ */
+name: string; exe_path: string }
 export type RuntimeStatus = { core: CoreState; last_apply: ApplyOutcome | null; health: Health; delays: DelayBook; traffic: TrafficTick | null; interfaces: NetInterface[]; failed_listeners: FailedListener[]; 
 /**
  * Listeners in the config mihomo currently holds (empty when no core
@@ -400,7 +515,18 @@ tailscale_exit_errors: Partial<{ [key in string]: string }>;
  * Per Tailscale proxy name: the automatic retry (1..=EXIT_NODE_MAX_RETRIES)
  * scheduled for its exit node failure. A failure without an entry here is final.
  */
-tailscale_exit_retrying: Partial<{ [key in string]: number }> }
+tailscale_exit_retrying: Partial<{ [key in string]: number }>; 
+/**
+ * Why Routa last stopped the core itself; `None` once a start succeeds
+ * (and before any stop). `shutdown` leaves it as it was.
+ */
+core_stop_reason: CoreStopReason | null; 
+/**
+ * The core exited unexpectedly and has not reached `Running` since: a
+ * `Starting` in this state is a recovery, not a normal start. Not set by
+ * a fail-closed stop (`core_stop_reason` says `FailClosed` instead).
+ */
+core_recovering: boolean }
 export type Settings = { autostart: boolean; core_path: string | null; controller_port: number; delay_test_interval_mins: number | null; delay_test_url: string }
 export type Subscription = { id: SubscriptionId; name: string; url: string; update_interval_mins: number | null; fallback_exit: ExitId | null; 
 /**
@@ -442,7 +568,7 @@ export type ValidationError = { DuplicateName: { kind: string; name: string } } 
 /**
  * The generated config was rejected by `mihomo -t`.
  */
-{ CoreRejected: { message: string } }
+{ CoreRejected: { message: string } } | { DuplicateProcessRule: { exe_path: string } } | { InvalidExePath: { exe_path: string; reason: string } } | { ListenerTypeNotAllowed: { listener: string } } | { TooManyProcessRules: { max: number } }
 
 /** tauri-specta globals **/
 

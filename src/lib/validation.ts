@@ -24,6 +24,14 @@ export function fieldErrors(errors: ValidationError[]): FieldErrors {
       out.form.push(`出口「${e.InterfaceMismatch.exit}」与 Tailscale「${e.InterfaceMismatch.node}」的网卡不一致`);
     } else if ("InvalidProxy" in e) {
       out.form.push(`节点「${e.InvalidProxy.name}」：${e.InvalidProxy.reason}`);
+    } else if ("DuplicateProcessRule" in e) {
+      out.form.push(`程序「${e.DuplicateProcessRule.exe_path}」已有分流规则`);
+    } else if ("InvalidExePath" in e) {
+      out.form.push(`程序路径「${e.InvalidExePath.exe_path}」无效：${e.InvalidExePath.reason}`);
+    } else if ("ListenerTypeNotAllowed" in e) {
+      out.form.push(`Listener「${e.ListenerTypeNotAllowed.listener}」是 HTTP 类型，不能用于进程分流`);
+    } else if ("TooManyProcessRules" in e) {
+      out.form.push(`启用的分流规则最多 ${e.TooManyProcessRules.max} 条`);
     } else {
       out.form.push(`${e.IntervalOutOfRange.field} 的值 ${e.IntervalOutOfRange.value} 超出允许范围`);
     }
