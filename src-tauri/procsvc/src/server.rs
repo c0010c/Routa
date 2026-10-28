@@ -18,7 +18,7 @@ use routa_procsvc_proto::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
-use tokio::time::{interval, Interval, MissedTickBehavior};
+use tokio::time::{interval, timeout_at, Instant, Interval, MissedTickBehavior};
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, WAIT_OBJECT_0};
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -43,6 +43,8 @@ const MAX_PROXY_RULES: usize = 32;
 const FLOW_LIMIT: usize = 400;
 /// 检查 Routa 进程是否已退出的间隔。
 const WATCH_INTERVAL: Duration = Duration::from_millis(250);
+/// 连上后必须在这段时间内握手成功，否则断开（防止空占唯一的管道实例）。
+const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const ROUTA_CRASHED: &str = "Routa 意外退出";
 const SERVICE_RESTARTED: &str = "分流服务意外退出后已重启";
 const CONFLICT_SERVICE: &str = "ProxyBridgeSvc";
@@ -113,7 +115,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
                 if !previous_stop_clean {
                     srv.interrupted(SERVICE_RESTARTED);
                 }
-                srv.remove_stale_blocks(&guarded_keys(&state.rules));
+                let _ = srv.remove_stale_blocks(&guarded_keys(&state.rules));
                 srv.last = Some(state);
             }
             None => {
@@ -173,13 +175,17 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
             }),
             Request::CleanupFilters => {
                 let keep = guarded_keys(self.reconciler.current());
-                reply(self.remove_stale_blocks(&keep))
+                match self.remove_stale_blocks(&keep) {
+                    Ok(errors) => applied(errors),
+                    Err(e) => Response::Error(e),
+                }
             }
         }
     }
 
-    /// 校验 → 打开 Routa 进程句柄 → 保存 → 落地。校验或打开句柄失败时什么都不动。
-    /// 引擎的非致命错误以 `Error` 返回（失败的规则已按 Block 处理）。
+    /// 校验 → 打开 Routa 进程句柄 → 保存 → 落地。校验、打开句柄或保存失败时什么都不动，
+    /// 回 `Error`（保存不了就不落地：否则服务重启后会按旧状态回落）。
+    /// 落地时引擎的非致命错误以 `Applied` 返回（失败的规则已按 Block 处理）。
     fn apply(&mut self, state: DesiredState, session: &mut Session) -> Response {
         if let Err(e) = validate(&state) {
             return Response::Error(e);
@@ -188,11 +194,10 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
             Ok(p) => p,
             Err(e) => return Response::Error(e),
         };
-        let mut errors = Vec::new();
         if let Err(e) = persist::save(&self.state_path, &state) {
-            errors.push(format!("保存状态失败：{e}"));
+            return Response::Error(format!("保存状态失败：{e}"));
         }
-        errors.extend(self.reconciler.apply(state.rules.clone()));
+        let errors = self.reconciler.apply(state.rules.clone());
         self.last = Some(state);
         self.routa = Some(Routa {
             session: session.id,
@@ -200,7 +205,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
             said_goodbye: false,
         });
         session.said_goodbye = false;
-        reply(errors)
+        applied(errors)
     }
 
     /// 会话结束（管道断开）。若是在场 Routa 的会话，按是否说过 Goodbye 回落。
@@ -258,14 +263,15 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
         });
     }
 
-    /// 删除 exe（按 [`exe_key`]）不在 `keep` 里的永久阻断，返回错误。
-    fn remove_stale_blocks(&mut self, keep: &HashSet<String>) -> Vec<String> {
+    /// 删除 exe（按 [`exe_key`]）不在 `keep` 里的永久阻断，返回逐条删除的错误。
+    /// 读不到现有阻断时什么都不删，返回 `Err`。
+    fn remove_stale_blocks(&mut self, keep: &HashSet<String>) -> Result<Vec<String>, String> {
         let guard = self.reconciler.guard();
-        let exes = match guard.blocked_exes() {
-            Ok(v) => v,
-            Err(e) => return vec![format!("读取永久阻断失败：{e}")],
-        };
-        exes.into_iter()
+        let exes = guard
+            .blocked_exes()
+            .map_err(|e| format!("读取永久阻断失败：{e}"))?;
+        Ok(exes
+            .into_iter()
             .filter(|exe| !keep.contains(&exe_key(exe)))
             .filter_map(|exe| {
                 guard
@@ -273,15 +279,16 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
                     .err()
                     .map(|e| format!("移除 {exe} 的永久阻断失败：{e}"))
             })
-            .collect()
+            .collect())
     }
 }
 
-fn reply(errors: Vec<String>) -> Response {
+/// 已执行的请求的回复：没有错误为 `Ok`，部分失败为 `Applied`。
+fn applied(errors: Vec<String>) -> Response {
     if errors.is_empty() {
         Response::Ok
     } else {
-        Response::Error(errors.join("；"))
+        Response::Applied { errors }
     }
 }
 
@@ -401,6 +408,13 @@ fn service_running(name: &str) -> bool {
 }
 
 /// 管道 DACL：SYSTEM、Administrators 完全控制，组件所有者读写（spec 6.5）。
+///
+/// 所有者的权限是 `FILE_GENERIC_READ | FILE_GENERIC_WRITE` 去掉 `FILE_CREATE_PIPE_INSTANCE`
+/// （0x4）：能连接收发，但不能创建同名管道实例冒充服务。
+///
+/// 服务自己要不断创建新实例，所以管道对象的属主（`OW`，即创建管道的进程的默认属主）完全控制。
+/// 服务以 LocalSystem 运行时属主是 SYSTEM / Administrators，与前两条重复；
+/// 测试里以组件所有者身份运行服务，靠这一条才能创建后续实例。
 fn pipe_sddl(owner_sid: &str) -> io::Result<String> {
     let valid = owner_sid.strip_prefix("S-1-").is_some_and(|rest| {
         !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || b == b'-')
@@ -412,15 +426,15 @@ fn pipe_sddl(owner_sid: &str) -> io::Result<String> {
         ));
     }
     Ok(format!(
-        "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{owner_sid})"
+        "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;0x12019b;;;{owner_sid})"
     ))
 }
 
 /// 由 SDDL 转换得到的安全描述符（LocalAlloc 分配）。
-struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
+pub struct SecurityDescriptor(pub PSECURITY_DESCRIPTOR);
 
 impl SecurityDescriptor {
-    fn from_sddl(sddl: &str) -> io::Result<Self> {
+    pub fn from_sddl(sddl: &str) -> io::Result<Self> {
         let wide: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
         let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
         // SAFETY: wide 以 NUL 结尾；成功时 sd 指向 LocalAlloc 的内存，由 Drop 释放。
@@ -468,7 +482,8 @@ fn create_pipe(name: &str, sd: &SecurityDescriptor, first: bool) -> io::Result<N
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+/// 取锁；锁中毒（持锁时 panic）时照常取用里面的值。
+pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -517,7 +532,8 @@ async fn write_frame(pipe: &mut NamedPipeServer, resp: &Response) -> io::Result<
 }
 
 /// 在管道 `pipe_name` 上一个接一个地服务客户端，直到出现无法恢复的错误。
-/// DACL 按服务的 `owner_sid` 生成。会话结束（断开、协议错误）时调用 [`Server::end_session`]；
+/// DACL 按服务的 `owner_sid` 生成。连上后 [`HELLO_TIMEOUT`] 内没有握手成功的客户端被断开。
+/// 会话结束（断开、协议错误、握手超时）时调用 [`Server::end_session`]；
 /// 全程每 250 ms 调用一次 [`Server::check_routa`]。
 ///
 /// 不在内部 spawn 任务，引擎类型不需要 `Send`。
@@ -539,7 +555,18 @@ where
         // 例如客户端连上又立刻断开：换一个新实例再等
         if watching(pipe.connect(), &server, &mut tick).await.is_ok() {
             let mut session = lock(&server).new_session();
-            while let Ok(Some(req)) = watching(read_frame(&mut pipe), &server, &mut tick).await {
+            let hello_deadline = Instant::now() + HELLO_TIMEOUT;
+            loop {
+                let read = read_frame(&mut pipe);
+                let req = if session.hello_ok {
+                    watching(read, &server, &mut tick).await
+                } else {
+                    match watching(timeout_at(hello_deadline, read), &server, &mut tick).await {
+                        Ok(r) => r,
+                        Err(_) => break,
+                    }
+                };
+                let Ok(Some(req)) = req else { break };
                 let resp = match req {
                     Ok(req) => lock(&server).handle(req, &mut session),
                     Err(e) => Response::Error(format!("无法解析请求：{e}")),
@@ -582,6 +609,8 @@ mod tests {
         blocks: HashMap<String, String>,
         permits: HashSet<String>,
         flows: usize,
+        /// 这些规则 id 的非 Block `set_rule` 失败。
+        fail_rules: HashSet<String>,
     }
 
     type Shared = Arc<Mutex<World>>;
@@ -601,6 +630,9 @@ mod tests {
         fn set_rule(&mut self, rule: &str, exe: &str, action: PbAction) -> Result<(), String> {
             let mut w = w(&self.0);
             w.log.push(format!("set_rule {rule} {exe} {action:?}"));
+            if action != PbAction::Block && w.fail_rules.contains(rule) {
+                return Err(format!("{rule} 坏了"));
+            }
             w.rules.insert(rule.into(), (exe.into(), action));
             Ok(())
         }
@@ -1087,6 +1119,43 @@ mod tests {
     }
 
     #[test]
+    fn apply_refused_when_state_cannot_be_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let (rec, world) = rig(&[]);
+        // 状态文件所在目录不存在：保存必然失败
+        let path = dir.path().join("missing").join(persist::STATE_FILE);
+        let mut srv = Server::boot(rec, path, "S-1-5-21-1".into(), true);
+        let mut s = hello(&mut srv);
+        let before = log(&world);
+        match srv.handle(Request::Apply(state(ExitPolicy::Direct)), &mut s) {
+            Response::Error(e) => assert!(e.contains("保存状态失败"), "{e}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(log(&world), before);
+        // 没有接管：断开时不回落
+        srv.end_session(&s);
+        assert_eq!(log(&world), before);
+    }
+
+    #[test]
+    fn apply_with_engine_errors_returns_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut srv, world) = boot(dir.path(), &[], true);
+        w(&world).fail_rules.insert("a".into());
+        let mut s = hello(&mut srv);
+        match srv.handle(Request::Apply(state(ExitPolicy::Direct)), &mut s) {
+            Response::Applied { errors } => {
+                assert!(errors.iter().any(|e| e.contains("a 坏了")), "{errors:?}")
+            }
+            other => panic!("{other:?}"),
+        }
+        // 已落地：失败的 a 按 Block，b 照常
+        assert_eq!(action(&world, "a"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Proxy));
+        assert!(dir.path().join(persist::STATE_FILE).exists());
+    }
+
+    #[test]
     fn flows_and_status() {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
@@ -1260,6 +1329,40 @@ mod tests {
                     call(&mut c, Request::GetFlows).await,
                     Response::Flows(_)
                 ));
+            };
+
+            tokio::select! {
+                r = run_pipe(server.clone(), &name) => panic!("run_pipe ended: {r:?}"),
+                () = client => {}
+            }
+        }
+
+        #[tokio::test]
+        async fn disconnects_client_without_hello() {
+            let dir = tempfile::tempdir().unwrap();
+            let (rec, _world) = rig(&[]);
+            let srv = Server::boot(
+                rec,
+                dir.path().join(persist::STATE_FILE),
+                current_user_sid(),
+                true,
+            );
+            let server = Arc::new(Mutex::new(srv));
+            let name = unique_pipe_name();
+
+            let client = async {
+                let mut c = open(&name).await;
+                let start = Instant::now();
+                let mut buf = [0u8; 1];
+                let r = tokio::time::timeout(Duration::from_secs(10), c.read(&mut buf))
+                    .await
+                    .expect("服务应在握手超时后断开");
+                assert!(matches!(r, Ok(0) | Err(_)), "{r:?}");
+                let waited = start.elapsed();
+                assert!(waited >= Duration::from_millis(4500), "{waited:?}");
+                // 之后的客户端照常服务
+                let mut c = open(&name).await;
+                hello(&mut c).await;
             };
 
             tokio::select! {

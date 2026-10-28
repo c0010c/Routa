@@ -70,10 +70,19 @@ pub enum Request {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum Response {
-    Hello { version: u32, accepted: bool },
+    Hello {
+        version: u32,
+        accepted: bool,
+    },
+    /// 请求已完整执行。
     Ok,
+    /// 请求已执行（例如状态已落地），但部分规则或操作出现非致命错误（中文，可直接展示）。
+    Applied {
+        errors: Vec<String>,
+    },
     Flows(Vec<Flow>),
     Status(SvcStatus),
+    /// 请求被拒绝，什么都没改。
     Error(String),
 }
 
@@ -158,6 +167,16 @@ mod tests {
         assert_eq!(len, buf.len() - 4);
         let back: Request = decode(&buf[4..]).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn roundtrip_applied() {
+        let resp = Response::Applied {
+            errors: vec!["规则 r1 失败".into()],
+        };
+        let buf = encode(&resp).unwrap();
+        let back: Response = decode(&buf[4..]).unwrap();
+        assert_eq!(back, resp);
     }
 
     #[test]
