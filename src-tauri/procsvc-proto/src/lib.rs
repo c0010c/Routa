@@ -9,12 +9,14 @@ pub const SERVICE_NAME: &str = "RoutaProcSvc";
 pub const MAX_FRAME: usize = 1 << 20;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub enum FaultPolicy {
     Direct,
     Block,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub enum ExitPolicy {
     Direct,
     Block,
