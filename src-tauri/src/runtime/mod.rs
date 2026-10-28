@@ -86,7 +86,8 @@ pub struct RuntimeStatus {
     /// (and before any stop). `shutdown` leaves it as it was.
     pub core_stop_reason: Option<CoreStopReason>,
     /// The core exited unexpectedly and has not reached `Running` since: a
-    /// `Starting` in this state is a recovery, not a normal start.
+    /// `Starting` in this state is a recovery, not a normal start. Not set by
+    /// a fail-closed stop (`core_stop_reason` says `FailClosed` instead).
     pub core_recovering: bool,
 }
 
@@ -311,7 +312,11 @@ impl Inner {
     /// mihomo and the custom core (`settings.core_path`) if one is set.
     fn forbidden_exes(&self, settings: &Settings) -> Vec<PathBuf> {
         let bundled = Settings { core_path: None, ..settings.clone() };
-        let mut out: Vec<PathBuf> = std::env::current_exe().ok().into_iter().collect();
+        let mut out = Vec::new();
+        match std::env::current_exe() {
+            Ok(p) => out.push(p),
+            Err(e) => eprintln!("runtime: cannot resolve Routa's own exe for process rule checks: {e}"),
+        }
         out.extend((self.launcher_for)(&bundled).core_binary());
         out.extend(settings.core_path.as_deref().filter(|p| !p.trim().is_empty()).map(PathBuf::from));
         out
@@ -616,6 +621,10 @@ impl Inner {
             self.drop_core(eng).await;
             let mut st = self.status.lock().unwrap();
             set_core(&mut st, CoreState::Crashed { exit_code: None });
+            // Routa stopped it on purpose (fail closed), it did not crash:
+            // the reason, not a recovery, describes it until a start reaches
+            // Running, including the supervisor's Starting retries.
+            st.core_recovering = false;
             st.core_stop_reason = Some(CoreStopReason::FailClosed);
         }
         {
@@ -995,8 +1004,13 @@ impl Runtime {
             return;
         }
         eng.supervise = true;
-        // Asked for by the user: not a recovery, whatever happened before.
-        self.inner.status.lock().unwrap().core_recovering = false;
+        // Asked for by the user: not a recovery and no longer a stop,
+        // whatever happened before.
+        {
+            let mut st = self.inner.status.lock().unwrap();
+            st.core_recovering = false;
+            st.core_stop_reason = None;
+        }
         let _ = self.inner.start_core(&mut eng).await;
     }
 

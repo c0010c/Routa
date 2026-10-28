@@ -1162,11 +1162,21 @@ async fn stop_core_records_user_reason() {
     assert_eq!(h.rt.status().core_stop_reason, Some(CoreStopReason::User));
 }
 
+fn statuses(rx: &mut mpsc::Receiver<RuntimeEvent>) -> Vec<RuntimeStatus> {
+    drain(rx)
+        .into_iter()
+        .filter_map(|e| match e {
+            RuntimeEvent::Status(s) => Some(s),
+            _ => None,
+        })
+        .collect()
+}
+
 #[tokio::test(start_paused = true)]
 async fn fail_closed_records_reason() {
     let m = model_with_listener(false);
-    let h = harness(&m);
-    h.rt.restart_core().await;
+    let mut h = harness(&m);
+    h.rt.start().await.unwrap();
     let rejected = || crate::core::api::ApiError::Rejected { status: 400, message: "bad".into() };
     // Renaming is restrictive; the empty config fails too: the core is stopped.
     h.api.reload_results.lock().unwrap().extend([Err(rejected()), Err(rejected())]);
@@ -1177,19 +1187,36 @@ async fn fail_closed_records_reason() {
     let st = h.rt.status();
     assert!(matches!(st.core, CoreState::Crashed { .. }), "{:?}", st.core);
     assert_eq!(st.core_stop_reason, Some(CoreStopReason::FailClosed));
-    assert!(st.core_recovering);
+    assert!(!st.core_recovering, "a fail-closed stop is not a crash recovery");
+    drain(&mut h.events);
+
+    // The supervisor's restart is still a fail-closed state until it is Running.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let all = statuses(&mut h.events);
+    let starting = all.iter().find(|s| s.core == CoreState::Starting).expect("supervisor restarted");
+    assert_eq!(starting.core_stop_reason, Some(CoreStopReason::FailClosed));
+    assert!(!starting.core_recovering);
+    let st = h.rt.status();
+    assert_eq!(st.core, CoreState::Running);
+    assert_eq!(st.core_stop_reason, None);
+    h.rt.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn restart_clears_reason() {
     let m = model_with_listener(false);
-    let h = harness(&m);
+    let mut h = harness(&m);
     h.rt.restart_core().await;
     h.rt.stop_core().await;
     assert_eq!(h.rt.status().core_stop_reason, Some(CoreStopReason::User));
+    drain(&mut h.events);
 
     h.rt.restart_core().await;
 
+    // Cleared as soon as the user asks, not only once Running is reached.
+    let starting = statuses(&mut h.events).into_iter().find(|s| s.core == CoreState::Starting).unwrap();
+    assert_eq!(starting.core_stop_reason, None);
+    assert!(!starting.core_recovering);
     let st = h.rt.status();
     assert_eq!(st.core, CoreState::Running);
     assert_eq!(st.core_stop_reason, None);
