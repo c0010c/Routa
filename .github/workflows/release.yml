@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build installers and create draft release
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check tag matches app version
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $versions = @{
+            'src-tauri/tauri.conf.json' = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+            'package.json' = (Get-Content package.json -Raw | ConvertFrom-Json).version
+            'src-tauri/Cargo.toml' = ((Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value)
+          }
+          foreach ($file in $versions.Keys) {
+            if ("v$($versions[$file])" -ne $tag) { throw "Tag $tag does not match version $($versions[$file]) in $file" }
+          }
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '10'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Fetch and verify the pinned mihomo core
+        run: pnpm fetch-mihomo
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build NSIS and MSI installers
+        run: pnpm tauri build --bundles nsis,msi -- --locked
+      - name: Package portable build
+        run: pnpm pack:portable --skip-build
+      - name: Collect release assets
+        run: |
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $name = $config.productName
+          $version = $config.version
+          $bundle = 'src-tauri/target/release/bundle'
+          $assets = @(
+            "$bundle/nsis/${name}_${version}_x64-setup.exe",
+            "$bundle/msi/${name}_${version}_x64_en-US.msi",
+            "$bundle/portable/${name}_${version}_x64_portable.zip"
+          )
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          foreach ($asset in $assets) {
+            if (!(Test-Path $asset)) { throw "Missing release asset: $asset" }
+            Copy-Item $asset release-assets/
+          }
+          Get-ChildItem release-assets | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Set-Content -Encoding ascii release-assets/SHA256SUMS.txt
+          Get-Content release-assets/SHA256SUMS.txt
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ghArgs = @($env:GITHUB_REF_NAME) + (Get-ChildItem release-assets).FullName + @(
+            '--repo', $env:GITHUB_REPOSITORY, '--title', $env:GITHUB_REF_NAME, '--generate-notes', '--draft'
+          )
+          # Tags like v0.2.0-beta.1 are marked as pre-releases.
+          if ($env:GITHUB_REF_NAME -match '-') { $ghArgs += '--prerelease' }
+          gh release create @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
