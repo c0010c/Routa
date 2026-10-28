@@ -96,7 +96,7 @@ spike S2 仅通过代理验证了“网卡不存在时拨号失败且不回落�
 ### 打包与安装钩子
 
 - NSIS 安装包、MSI、便携版 zip 都包含 `routa-procsvc.exe` 和 `procsvc\`（`ProxyBridgeCore.dll`、`WinDivert.dll`、`WinDivert64.sys`）。
-- NSIS 安装包按当前用户安装、本身不提权：安装完成后单独弹一次 UAC，以管理员身份运行 `routa-procsvc.exe --install` 注册服务；卸载前同样弹一次 UAC 运行 `--uninstall`（服务和组件目录都不存在时跳过）。拒绝 UAC 或命令失败不影响安装 / 卸载，之后可在“进程分流”页面启用或卸载组件。静默安装（`/S`）且安装程序不在前台时，UAC 可能只在任务栏闪烁，安装会一直等到用户响应。
+- NSIS 安装包按当前用户安装、本身不提权：安装完成后单独弹一次 UAC，以管理员身份运行 `routa-procsvc.exe --install` 注册服务；卸载前同样弹一次 UAC 运行 `--uninstall`（服务和组件目录都不存在时跳过；安装程序覆盖安装时调用的卸载也跳过，见 `src-tauri/nsis/hooks.nsh`）。拒绝 UAC 或命令失败不影响安装 / 卸载，之后可在“进程分流”页面启用或卸载组件。静默安装（`/S`）且安装程序不在前台时，UAC 可能只在任务栏闪烁，安装会一直等到用户响应。
 - MSI 安装时不注册服务，和便携版一样在页面上点“启用进程分流”时弹 UAC。**卸载 MSI 前请先在页面上点“卸载组件”**，否则服务和防护规则会留在系统里（之后可用便携版或 `routa-procsvc.exe --uninstall` 清理）。
 
 ### 准备
@@ -128,4 +128,6 @@ spike S2 仅通过代理验证了“网卡不存在时拨号失败且不回落�
 | 15 | 关闭进程分流全局开关；再打开 | 关闭后程序按系统默认直连、不残留阻断；打开后恢复 | 待人工验收 |
 | 16 | 页面上点“清理残留阻断规则”、“卸载组件” | 清理后 WFP 中搜不到 Routa 的阻断过滤器；卸载后服务和 `%ProgramFiles%\Routa\ProcessRouting` 都不存在 | 待人工验收 |
 | 17 | 便携版：解压后首次点“启用进程分流” | 弹一次 UAC，服务注册并运行 | 待人工验收 |
-| 18 | 卸载 NSIS 安装版，在 UAC 中点“是” | `sc query RoutaProcSvc` 报服务不存在；`%ProgramFiles%\Routa\ProcessRouting` 不存在；`netsh wfp show filters` 的输出中搜不到 Routa 的 GUID | 待人工验收 |
+| 18 | 保持一条 Block 规则处于阻断状态（如停用其 Listener），持续执行 `curl.exe https://api.ipify.org`。用 NSIS 安装包覆盖安装：同版本时分别选“添加/重新安装”和“卸载”；（可临时改版本号构建一个更高版本）升级时分别选“先卸载再安装”和“不卸载”；每种情况下都分别在 UAC 中点“是”和“否”各试一次 | 整个过程中 curl 始终被阻断；卸载阶段不弹 UAC、不删除服务（详细日志显示“覆盖安装，保留服务和防护规则”）；安装末尾的 UAC 选“否”时服务和阻断仍在 | 待人工验收 |
+| 19 | Routa 运行时卸载 NSIS 安装版，在“Routa 正在运行”的提示中点“取消” | 卸载中止，服务和防护规则都还在（未弹 UAC） | 待人工验收 |
+| 20 | 卸载 NSIS 安装版，在 UAC 中点“是” | `sc query RoutaProcSvc` 报服务不存在；`%ProgramFiles%\Routa\ProcessRouting` 不存在；`netsh wfp show filters` 的输出中搜不到 Routa 的 GUID | 待人工验收 |

@@ -23,13 +23,18 @@
     DetailPrint "进程分流组件：无法以管理员身份运行 ${ROUTA_PROCSVC_EXE}（错误 $3），已跳过"
   ${Else}
     System::Call '*$1(i, i, p, p, p, p, p, i, p, p, p, p, i, p, p.r4)'
-    System::Call 'kernel32::WaitForSingleObject(p r4, i -1)'
-    System::Call 'kernel32::GetExitCodeProcess(p r4, *i.r5)'
-    System::Call 'kernel32::CloseHandle(p r4)'
-    ${If} $5 = 0
-      DetailPrint "进程分流组件：${ROUTA_PROCSVC_EXE} 执行成功"
+    ${If} $4 = 0
+      ; 没拿到进程句柄（例如由已有进程处理了请求），无法得知结果
+      DetailPrint "进程分流组件：${ROUTA_PROCSVC_EXE} 已启动，但无法得知执行结果"
     ${Else}
-      DetailPrint "进程分流组件：${ROUTA_PROCSVC_EXE} 执行失败（退出码 $5），已跳过"
+      System::Call 'kernel32::WaitForSingleObject(p r4, i -1)'
+      System::Call 'kernel32::GetExitCodeProcess(p r4, *i.r5)'
+      System::Call 'kernel32::CloseHandle(p r4)'
+      ${If} $5 = 0
+        DetailPrint "进程分流组件：${ROUTA_PROCSVC_EXE} 执行成功"
+      ${Else}
+        DetailPrint "进程分流组件：${ROUTA_PROCSVC_EXE} 执行失败（退出码 $5），已跳过"
+      ${EndIf}
     ${EndIf}
   ${EndIf}
   System::Free $1
@@ -100,8 +105,19 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  ; 更新时紧接着会重新安装，不删除服务
-  ${If} $UpdateMode <> 1
+  ; 安装程序覆盖安装（重新安装 / 升级 / 降级页选了“先卸载”）时，Tauri 模板
+  ; （installer.nsi 的 PageLeaveReinstall，reinst_uninstall 分支）用
+  ;   ExecWait '"<旧目录>\uninstall.exe" [/UPDATE] [/P] _?=<旧目录>'
+  ; 原地运行旧卸载程序，随后马上重新安装。这时不能删除服务：--uninstall 会删掉全部 Routa
+  ; WFP 过滤器（包括持久阻断），到重新安装的 UAC 之前（拒绝则一直）“阻断”的程序会直连。
+  ; 区分方法：用户正常卸载时 NSIS 卸载程序先把自己复制到 %TEMP%\~nsuX.tmp 再从那里运行，
+  ; $EXEDIR 是临时目录；只有带 _?= 原地运行时 $EXEDIR 才等于 $INSTDIR（_?= 本身不出现在
+  ; $CMDLINE 里，无法直接判断）。手工带 _?= 运行卸载程序同样会跳过，此时可在页面上“卸载组件”。
+  ; /UPDATE（更新模式）同理跳过。
+  ${If} $UpdateMode = 1
+  ${OrIf} $EXEDIR == $INSTDIR
+    DetailPrint "进程分流组件：覆盖安装，保留服务和防护规则"
+  ${Else}
     Push $0
     Push $R9
     ; 服务和组件目录都不存在（例如安装时拒绝了 UAC）就不必再弹 UAC
@@ -112,6 +128,9 @@
     ${AndIfNot} ${FileExists} "${ROUTA_PROCSVC_DIR}\*.*"
       DetailPrint "进程分流组件：未安装，跳过"
     ${Else}
+      ; 先确认 Routa 已退出（模板的检查，用户取消则中止卸载），再删除组件：
+      ; 否则取消卸载后组件已经没了
+      !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
       DetailPrint "进程分流组件：删除服务和防护规则（需要管理员权限）"
       StrCpy $R9 "--uninstall"
       !insertmacro ROUTA_PROCSVC_RUN_ELEVATED
