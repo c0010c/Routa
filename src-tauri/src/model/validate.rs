@@ -22,36 +22,14 @@ pub enum ValidationError {
 /// 已启用的进程分流规则数上限（与服务端一致）。
 pub const MAX_PROCESS_RULES: u32 = 32;
 
-/// 绝对路径：盘符（`C:\`）或 UNC（`\\server`）开头。入参已规范化（`/` 已转 `\`）。
-fn is_absolute_win(p: &str) -> bool {
-    let b = p.as_bytes();
-    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\')
-        || (p.starts_with("\\\\") && p.len() > 2)
-}
-
-/// 返回路径不合法的原因（中文）；合法返回 None。入参已规范化。
-fn exe_path_problem(p: &str) -> Option<&'static str> {
-    if p.is_empty() {
-        Some("路径不能为空")
-    } else if p.contains(',') || p.contains(';') {
-        Some("路径不能包含 \",\" 或 \";\"")
-    } else if !is_absolute_win(p) {
-        Some("必须是绝对路径")
-    } else if !p.to_lowercase().ends_with(".exe") {
-        Some("必须是 .exe 文件")
-    } else {
-        None
-    }
-}
-
 fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
     let pr = &model.process_routing;
     let mut seen = std::collections::HashSet::new();
     let mut reported = std::collections::HashSet::new();
     for r in &pr.rules {
         let path = normalize_exe_path(&r.exe_path);
-        if let Some(reason) = exe_path_problem(&path) {
-            errors.push(ValidationError::InvalidExePath { exe_path: r.exe_path.clone(), reason: reason.to_string() });
+        if let Some(reason) = routa_procsvc_proto::exe_path_problem(&path) {
+            errors.push(ValidationError::InvalidExePath { exe_path: r.exe_path.clone(), reason });
         } else {
             let key = path.to_lowercase();
             if !seen.insert(key.clone()) && reported.insert(key) {

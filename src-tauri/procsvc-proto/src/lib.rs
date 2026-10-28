@@ -117,6 +117,28 @@ pub struct Interruption {
 }
 
 /// 编码为一帧：u32 小端长度 + JSON 正文。
+/// exe 路径的共享校验（Routa 与服务端同用）。入参应已规范化（去首尾空白、`/` → `\`）。
+/// 合法返回 None，否则返回中文原因。
+pub fn exe_path_problem(p: &str) -> Option<String> {
+    let reason = if p.is_empty() {
+        "路径不能为空"
+    } else if p.contains([',', ';']) {
+        "路径不能包含 \",\" 或 \";\""
+    } else if !std::path::Path::new(p).is_absolute()
+        // UNC 前缀（`\srv\share`）本身算绝对路径，但必须还有文件部分。
+        || !std::path::Path::new(p)
+            .components()
+            .any(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        "必须是绝对路径"
+    } else if !p.to_lowercase().ends_with(".exe") {
+        "必须是 .exe 文件"
+    } else {
+        return None;
+    };
+    Some(reason.to_string())
+}
+
 pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, String> {
     let body = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
     if body.len() > MAX_FRAME {
@@ -179,6 +201,17 @@ mod tests {
         let buf = encode(&resp).unwrap();
         let back: Response = decode(&buf[4..]).unwrap();
         assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn exe_path_problem_table() {
+        let bad = [r"\\server.exe", r"\\srv\share.exe", r"C:a.exe", r"\x.exe", "", r"a.exe", r"C:\a.txt", r"C:\a,b.exe", r"C:\a;b.exe"];
+        for p in bad {
+            assert!(exe_path_problem(p).is_some(), "{p:?} should be rejected");
+        }
+        for p in [r"C:\a.exe", r"c:\A\B.EXE", r"\\srv\share\a.exe"] {
+            assert_eq!(exe_path_problem(p), None, "{p:?}");
+        }
     }
 
     #[test]

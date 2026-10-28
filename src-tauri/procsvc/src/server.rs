@@ -8,7 +8,7 @@ use std::ffi::c_void;
 use std::future::Future;
 use std::io;
 use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -328,11 +328,8 @@ fn validate(state: &DesiredState) -> Result<(), String> {
             return Err(format!("规则 id 重复：{}", r.id));
         }
         let exe = &r.exe_path;
-        if exe.contains([',', ';']) {
-            return Err(format!("程序路径不能包含 ',' 或 ';'：{exe}"));
-        }
-        if !Path::new(exe).is_absolute() || !exe_key(exe).ends_with(".exe") {
-            return Err(format!("程序路径必须是以 .exe 结尾的绝对路径：{exe}"));
+        if let Some(reason) = routa_procsvc_proto::exe_path_problem(exe) {
+            return Err(format!("程序路径无效（{reason}）：{exe}"));
         }
         if !exes.insert(exe_key(exe)) {
             return Err(format!("程序路径重复：{exe}"));
@@ -1112,7 +1109,7 @@ pub(crate) mod tests {
             (
                 "not exe",
                 |s| s.rules[0].exe_path = r"C:\app\a.bat".into(),
-                "绝对路径",
+                ".exe",
             ),
             (
                 "comma",
