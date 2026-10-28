@@ -6,6 +6,7 @@
 mod engine;
 mod fallback;
 mod install;
+mod lazy;
 mod localfile;
 mod paths;
 mod pb_ffi;

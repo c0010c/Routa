@@ -21,6 +21,11 @@ pub trait Interceptor {
     fn set_rule(&mut self, rule: &str, exe: &str, action: PbAction) -> Result<(), String>;
     fn remove_rule(&mut self, rule: &str) -> Result<(), String>;
     fn flows(&mut self) -> Vec<Flow>;
+    /// 已生效规则集为空时由 `Reconciler` 调用：停止拦截（不再占用 WinDivert、不再经用户态转发流量）。
+    /// 之后的 `set_rule` 会重新启动。默认什么也不做。
+    fn suspend(&mut self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// WFP 防护：低权重永久阻断 + 动态会话里的高权重放行。

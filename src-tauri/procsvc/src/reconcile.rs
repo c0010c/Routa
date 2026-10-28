@@ -301,6 +301,14 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
                 Err(e) => fail.errors.push(format!("移除 {exe} 的永久阻断失败：{e}")),
             }
         }
+
+        // 没有任何规则时停止拦截，不让全机流量白白经过用户态（WFP 阻断不依赖拦截器）。
+        // 有规则删除失败时不停：那条规则仍记在 current 里，停掉会让它在下次 plan 认为"未变"时失效。
+        if self.current.is_empty() && self.installed.rules.is_empty() {
+            if let Err(e) = self.interceptor.suspend() {
+                fail.errors.push(format!("停止 ProxyBridge 失败：{e}"));
+            }
+        }
         fail.errors
     }
 
@@ -1192,6 +1200,8 @@ mod tests {
             proxies: HashMap<String, ProxyTarget>,
             blocks: HashMap<String, String>,
             permits: HashSet<String>,
+            /// `suspend` 被调用的次数（不进日志，免得影响按日志断言的测试）。
+            suspends: usize,
         }
 
         impl World {
@@ -1259,6 +1269,10 @@ mod tests {
             }
             fn flows(&mut self) -> Vec<Flow> {
                 Vec::new()
+            }
+            fn suspend(&mut self) -> Result<(), String> {
+                self.0.borrow_mut().suspends += 1;
+                Ok(())
             }
         }
 
@@ -1515,6 +1529,33 @@ mod tests {
             assert!(rec.apply(vec![]).is_empty());
             assert!(rec.current().is_empty());
             assert_world_is(&w, &[], "cleaned");
+        }
+
+        #[test]
+        fn suspends_interceptor_only_when_no_rules_remain() {
+            let (mut rec, w) = rig();
+            let suspends = |w: &Shared| w.borrow().suspends;
+            assert!(rec.apply(vec![proxy_guarded("r", EXE)]).is_empty());
+            assert_eq!(suspends(&w), 0);
+
+            // 删除规则失败：规则仍在（记为 Block），不能停
+            w.borrow_mut().fail_ops.insert("remove_rule");
+            assert!(!rec.apply(vec![]).is_empty());
+            assert_eq!(rec.current().len(), 1);
+            assert_eq!(suspends(&w), 0);
+
+            w.borrow_mut().fail_ops.clear();
+            assert!(rec.apply(vec![]).is_empty());
+            assert!(rec.current().is_empty());
+            assert_eq!(suspends(&w), 1);
+
+            // 空集合再 apply 一次：照常调用（由拦截器自己保证幂等）
+            assert!(rec.apply(vec![]).is_empty());
+            assert_eq!(suspends(&w), 2);
+
+            // 有规则时不调用
+            assert!(rec.apply(vec![proxy_guarded("r", EXE)]).is_empty());
+            assert_eq!(suspends(&w), 2);
         }
 
         #[test]

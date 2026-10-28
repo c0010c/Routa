@@ -23,6 +23,7 @@ use windows_service::{define_windows_service, service_dispatcher};
 
 use crate::engine::{ConnKiller, Guard, Interceptor};
 use crate::install::{install_dir, OWNER_SID_FILE};
+use crate::lazy::Lazy;
 use crate::pb_ffi::{self, ProxyBridge};
 use crate::persist;
 use crate::reconcile::Reconciler;
@@ -32,7 +33,6 @@ use crate::wfp::{self, Wfp};
 
 /// 服务特定退出码（`sc query` 的 SERVICE_EXIT_CODE），便于定位启动失败的原因。
 const EXIT_OWNER_SID: u32 = 1;
-const EXIT_RELAY_PORTS: u32 = 2;
 const EXIT_PROXYBRIDGE: u32 = 3;
 const EXIT_WFP: u32 = 4;
 const EXIT_RUNTIME: u32 = 5;
@@ -41,7 +41,7 @@ const EXIT_PIPE: u32 = 6;
 const START_WAIT_HINT: Duration = Duration::from_secs(30);
 const STOP_WAIT_HINT: Duration = Duration::from_secs(10);
 
-type RealServer = Server<ProxyBridge, Wfp, TcpKiller>;
+type RealServer = Server<Lazy<ProxyBridge>, Wfp, TcpKiller>;
 
 define_windows_service!(ffi_service_main, service_main);
 
@@ -122,15 +122,15 @@ fn run_service(status: &ServiceStatusHandle, rx: UnboundedReceiver<Event>) -> Se
 }
 
 /// 用安装目录里的 owner.sid、ProxyBridgeCore.dll 和 WFP 装配服务。失败时返回服务特定退出码。
+/// ProxyBridge 此时只加载不启动：有规则时才启动（见 [`Lazy`]）。
 fn boot(dir: &Path, previous_stop_clean: bool) -> Result<RealServer, u32> {
     let owner_sid = std::fs::read_to_string(dir.join(OWNER_SID_FILE))
         .map(|s| s.trim().to_string())
         .map_err(|_| EXIT_OWNER_SID)?;
-    let relay = pb_ffi::pick_relay_ports().map_err(|_| EXIT_RELAY_PORTS)?;
-    let pb = pb_ffi::load(dir, relay).map_err(|_| EXIT_PROXYBRIDGE)?;
+    let pb = pb_ffi::load(dir).map_err(|_| EXIT_PROXYBRIDGE)?;
     let wfp = wfp::open().map_err(|_| EXIT_WFP)?;
     Ok(Server::boot(
-        Reconciler::new(pb, wfp, TcpKiller),
+        Reconciler::new(Lazy::new(pb), wfp, TcpKiller),
         dir.join(persist::STATE_FILE),
         owner_sid,
         previous_stop_clean,

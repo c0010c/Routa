@@ -3,6 +3,8 @@
 //!
 //! 每个 Routa 规则 id 对应一条 ProxyBridge 规则，代理规则另有一份 ProxyBridge 代理配置
 //! （首次 `set_proxy` 时创建、之后编辑、`remove_rule` 时删除）。
+//!
+//! [`load`] 只加载 DLL，不启动；启停由 [`crate::lazy::Lazy`] 按规则集是否为空决定（[`Bridge`]）。
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CString};
@@ -18,6 +20,7 @@ use libloading::os::windows::{
 use routa_procsvc_proto::{Flow, ProxyKind, ProxyTarget};
 
 use crate::engine::{Interceptor, PbAction};
+use crate::lazy::Bridge;
 use crate::paths::{exe_of_pid, same_path};
 
 pub const DLL_NAME: &str = "ProxyBridgeCore.dll";
@@ -153,6 +156,8 @@ pub struct ProxyBridge {
     /// 从不卸载：Stop 等待工作线程有超时，线程可能比 Stop 活得久，卸载后会执行已卸载的代码。
     _lib: ManuallyDrop<Library>,
     rules: HashMap<String, Entry>,
+    /// `ProxyBridge_Start` 成功、尚未 `ProxyBridge_Stop`。
+    running: bool,
 }
 
 /// 各取一个当前空闲的本机 TCP / UDP 端口（随即释放），作为 ProxyBridge 的中转端口。两者保证不同。
@@ -174,23 +179,22 @@ pub fn pick_relay_ports() -> Result<(u16, u16), String> {
     Err("获取空闲中转端口失败：TCP 与 UDP 端口总是相同".into())
 }
 
-/// 从 `dir`（必须是绝对路径）加载 ProxyBridgeCore.dll，设置中转端口 `(tcp, udp)` 并启动。
-/// 同一进程内已有实例时返回错误。
-pub fn load(dir: &Path, relay_ports: (u16, u16)) -> Result<ProxyBridge, String> {
+/// 从 `dir`（必须是绝对路径）加载 ProxyBridgeCore.dll（不启动）。同一进程内已有实例时返回错误。
+pub fn load(dir: &Path) -> Result<ProxyBridge, String> {
     if !dir.is_absolute() {
         return Err(format!("{DLL_NAME} 目录必须是绝对路径：{}", dir.display()));
     }
     if LOADED.swap(true, Ordering::AcqRel) {
         return Err(format!("{DLL_NAME} 已在本进程中加载"));
     }
-    let result = start(&dir.join(DLL_NAME), relay_ports);
+    let result = open(&dir.join(DLL_NAME));
     if result.is_err() {
         LOADED.store(false, Ordering::Release);
     }
     result
 }
 
-fn start(path: &Path, (tcp, udp): (u16, u16)) -> Result<ProxyBridge, String> {
+fn open(path: &Path) -> Result<ProxyBridge, String> {
     // SAFETY: 绝对路径 + LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32：
     // 依赖（WinDivert.dll）只从 DLL 自身目录和 System32 解析，从不搜索当前目录或 PATH
     // （以 LocalSystem 运行的服务不能被这些位置的同名 DLL 劫持）。DllMain 无额外前置条件。
@@ -200,18 +204,52 @@ fn start(path: &Path, (tcp, udp): (u16, u16)) -> Result<ProxyBridge, String> {
     let lib = ManuallyDrop::new(lib);
     // SAFETY: lib 永不卸载。
     let api = unsafe { Api::resolve(&lib)? };
-    // SAFETY: 以下均为无指针参数的 C 调用。
-    if unsafe { (api.set_relay_ports)(tcp, udp) } == FALSE {
-        return Err(format!("设置 ProxyBridge 中转端口 {tcp}/{udp} 失败"));
-    }
-    if unsafe { (api.start)() } == FALSE {
-        return Err("启动 ProxyBridge 失败（需要管理员权限与 WinDivert 驱动）".into());
-    }
     Ok(ProxyBridge {
         api,
         _lib: lib,
         rules: HashMap::new(),
+        running: false,
     })
+}
+
+impl Bridge for ProxyBridge {
+    /// 每次启动都重新挑空闲的中转端口：停止期间原端口可能已被别的程序占用。
+    fn start(&mut self) -> Result<(), String> {
+        if self.running {
+            return Ok(());
+        }
+        let (tcp, udp) = pick_relay_ports()?;
+        // SAFETY: 以下均为无指针参数的 C 调用。
+        if unsafe { (self.api.set_relay_ports)(tcp, udp) } == FALSE {
+            return Err(format!("设置 ProxyBridge 中转端口 {tcp}/{udp} 失败"));
+        }
+        if unsafe { (self.api.start)() } == FALSE {
+            return Err("启动 ProxyBridge 失败（需要管理员权限与 WinDivert 驱动）".into());
+        }
+        self.running = true;
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        if self.running {
+            // SAFETY: 无指针参数。DLL 的 Stop 会等工作线程退出并清空连接表、端口缓存，之后可再次 Start。
+            unsafe { (self.api.stop)() };
+            self.running = false;
+        }
+    }
+
+    fn clear(&mut self) -> Result<(), String> {
+        let ids: Vec<String> = self.rules.keys().cloned().collect();
+        let errors: Vec<String> = ids
+            .iter()
+            .filter_map(|id| self.remove_rule(id).err())
+            .collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("；"))
+        }
+    }
 }
 
 fn cstring(what: &str, s: &str) -> Result<CString, String> {
@@ -431,12 +469,8 @@ impl Interceptor for ProxyBridge {
 impl Drop for ProxyBridge {
     fn drop(&mut self) {
         // 清掉自己下发的规则与代理配置，再停止；DLL 不卸载，之后重新 load 时状态是干净的。
-        let ids: Vec<String> = self.rules.keys().cloned().collect();
-        for id in ids {
-            let _ = self.remove_rule(&id);
-        }
-        // SAFETY: 无指针参数。
-        unsafe { (self.api.stop)() };
+        let _ = self.clear();
+        self.stop();
         LOADED.store(false, Ordering::Release);
     }
 }
@@ -654,6 +688,7 @@ mod tests {
                 },
                 _lib: ManuallyDrop::new(Library::this().unwrap()),
                 rules: HashMap::new(),
+                running: false,
             }
         }
     }
@@ -698,6 +733,18 @@ mod tests {
         pb.remove_rule("r").unwrap();
         pb.remove_rule("unknown").unwrap();
         assert!(take().is_empty());
+
+        // clear：删掉全部规则与代理配置，簿记清空
+        pb.set_proxy("p", &target).unwrap();
+        pb.set_rule("q", r"C:\q.exe", PbAction::Block).unwrap();
+        take();
+        pb.clear().unwrap();
+        let mut log = take();
+        log.sort();
+        assert_eq!(log, ["del_cfg 4", "del_rule 5"]);
+        assert!(pb.rules.is_empty());
+        pb.clear().unwrap();
+        assert!(take().is_empty());
     }
 
     #[test]
@@ -708,34 +755,40 @@ mod tests {
 
     #[test]
     fn load_rejects_relative_dir() {
-        let err = load(Path::new("binaries"), (1, 2)).err().unwrap();
+        let err = load(Path::new("binaries")).err().unwrap();
         assert!(err.contains("绝对路径"), "{err}");
+    }
+
+    fn built_dll_dir() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("binaries")
+            .join("procsvc")
+    }
+
+    const CURL: &str = r"C:\Windows\System32\curl.exe";
+
+    fn curl_ok() -> bool {
+        std::process::Command::new(CURL)
+            .args(["-s", "-m", "8", "-o", "NUL", "https://example.com"])
+            .status()
+            .expect("run curl")
+            .success()
     }
 
     #[test]
     #[ignore = "needs admin + built DLL"]
     fn start_add_rule_stop() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("binaries")
-            .join("procsvc");
-        const CURL: &str = r"C:\Windows\System32\curl.exe";
-        let curl_ok = || {
-            std::process::Command::new(CURL)
-                .args(["-s", "-m", "8", "-o", "NUL", "https://example.com"])
-                .status()
-                .expect("run curl")
-                .success()
-        };
         // 基线：没有规则时必须能访问，否则下面的"被阻断"断言没有意义。
         assert!(curl_ok(), "需要网络：基线 curl https://example.com 失败");
 
-        let mut pb = load(&dir, pick_relay_ports().unwrap()).expect("load + start");
+        let mut pb = load(&built_dll_dir()).expect("load");
         assert!(
-            load(&dir, (1, 2)).is_err(),
+            load(&built_dll_dir()).is_err(),
             "second instance must be refused"
         );
+        pb.start().expect("start");
         pb.set_rule("t", CURL, PbAction::Block)
             .expect("add block rule");
         assert!(!curl_ok(), "Block 规则生效时 curl 应失败");
@@ -744,5 +797,29 @@ mod tests {
         assert!(curl_ok(), "删除 Block 规则后 curl 应恢复");
         pb.remove_rule("t").expect("remove unknown rule is Ok");
         drop(pb);
+    }
+
+    /// final review I2：规则集为空时 ProxyBridge 停止；同一个已加载的实例能反复启停。
+    #[test]
+    #[ignore = "needs admin + built DLL"]
+    fn lazy_restart_on_same_instance() {
+        use crate::lazy::Lazy;
+        assert!(curl_ok(), "需要网络：基线 curl https://example.com 失败");
+
+        let mut l = Lazy::new(load(&built_dll_dir()).expect("load"));
+        assert!(!l.running(), "加载后不应启动");
+        for round in 0..2 {
+            l.set_rule("t", CURL, PbAction::Block)
+                .expect("add block rule");
+            assert!(l.running(), "round {round}: 有规则时应已启动");
+            assert!(!curl_ok(), "round {round}: Block 规则生效时 curl 应失败");
+            l.remove_rule("t").expect("remove rule");
+            l.suspend().expect("suspend");
+            assert!(!l.running(), "round {round}: 规则集为空时应已停止");
+            assert!(curl_ok(), "round {round}: 停止后 curl 应恢复");
+        }
+        // 已停止时再 suspend 是空操作。
+        l.suspend().expect("suspend again");
+        drop(l);
     }
 }
