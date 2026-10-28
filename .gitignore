@@ -7,3 +7,5 @@ spike/bin/
 spike/work/
 src-tauri/gen/
 *.log
+third_party/windivert/
+src-tauri/binaries/procsvc/
