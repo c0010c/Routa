@@ -10,4 +10,10 @@ path = "src/main.rs"
 [dependencies]
 routa-procsvc-proto = { path = "../procsvc-proto" }
 libloading = "0.8"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_WindowsFilteringPlatform",
+    "Win32_Security",
+    "Win32_System_Rpc",
+    "Win32_System_Threading",
+] }

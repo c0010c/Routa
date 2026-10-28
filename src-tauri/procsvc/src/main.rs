@@ -7,5 +7,6 @@ mod fallback;
 mod paths;
 mod pb_ffi;
 mod reconcile;
+mod wfp;
 
 fn main() {}
