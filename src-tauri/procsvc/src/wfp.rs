@@ -738,6 +738,14 @@ mod tests {
         false
     }
 
+    /// 单个 UDP 包在公网上可能丢（或被解析器限速），所以"应通"的检查最多试 `tries` 次，
+    /// 返回第几次成功。每次用不同的查询 id，迟到的旧回包不会被误认。
+    fn udp_echo_retry(sock: &UdpSocket, base_id: u16, tries: u16) -> Option<u16> {
+        (0..tries)
+            .find(|i| udp_echo(sock, base_id + i))
+            .map(|i| i + 1)
+    }
+
     fn udp_sock(server: &str) -> UdpSocket {
         let s = UdpSocket::bind("0.0.0.0:0").unwrap();
         s.connect(server).unwrap();
@@ -745,7 +753,7 @@ mod tests {
     }
 
     /// 被防护的 exe 是测试程序自己：本进程的 UDP 收发即"该 exe 的 UDP 会话"。
-    /// 关闭动态会话后观察已授权套接字是否还能收到回包；结论只打印，不作为断言。
+    /// 关闭动态会话后观察已授权套接字是否还能收到回包（spec 第 10 节：应为 0）。
     #[test]
     #[ignore = "needs admin"]
     fn udp_leak_after_session_close() {
@@ -758,7 +766,7 @@ mod tests {
         ];
         let server = *servers
             .iter()
-            .find(|s| udp_echo(&udp_sock(s), 1))
+            .find(|s| udp_echo_retry(&udp_sock(s), 1, 3).is_some())
             .expect("需要网络：没有可达的 DNS 服务器做 UDP 回显");
         let me = std::env::current_exe().unwrap();
         let me = me.to_str().unwrap();
@@ -769,7 +777,16 @@ mod tests {
         assert!(!udp_echo(&udp_sock(server), 2), "阻断时新 UDP 套接字应不通");
         w.permit(me).unwrap();
         let authorized = udp_sock(server);
-        assert!(udp_echo(&authorized, 3), "放行时 UDP 应通");
+        let tries = udp_echo_retry(&authorized, 10, 5);
+        if tries.is_none() {
+            let fresh = udp_echo_retry(&udp_sock(server), 20, 3).is_some();
+            let n = w.list().map(|l| l.len());
+            panic!(
+                "放行时 UDP 应通（5 次均无回包；新套接字{}；本 provider 过滤器数 {n:?}）",
+                if fresh { "能通" } else { "也不通" }
+            );
+        }
+        println!("放行后第 {} 次查询收到回包", tries.unwrap());
 
         drop(w); // 动态会话结束 = 服务崩溃
         let mut leaked = 0;
