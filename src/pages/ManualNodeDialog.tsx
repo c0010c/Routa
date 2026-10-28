@@ -43,13 +43,17 @@ function isFormType(t: JsonValue | undefined): t is FormType {
   return t === "socks5" || t === "http";
 }
 
-/** Converts a pasted `type: tailscale` proxy; `state-dir` is managed by the app and dropped. */
+/**
+ * Converts a pasted `type: tailscale` proxy; `state-dir` is managed by the app and dropped.
+ * `ephemeral` always starts off: the app recreates the instance on every reload, and an
+ * ephemeral machine removed from the tailnet meanwhile has to log in again.
+ */
 export function tailscaleFromRaw(raw: Raw, name: string): TailscaleOpts {
   const s = (k: string) => (typeof raw[k] === "string" && (raw[k] as string).trim() !== "" ? (raw[k] as string) : null);
   return {
     hostname: s("hostname") ?? `mihomo-${name}`,
-    exit_node: s("exit-node") ?? "auto:any",
-    ephemeral: typeof raw.ephemeral === "boolean" ? raw.ephemeral : false,
+    exit_node: s("exit-node") ?? "",
+    ephemeral: false,
     udp: typeof raw.udp === "boolean" ? raw.udp : true,
     auth_key: s("auth-key"),
     interface: null,

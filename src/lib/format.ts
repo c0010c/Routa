@@ -1,4 +1,4 @@
-import type { ApplyOutcome, ExitStatus, ListenerId, ListenerStatus, RuntimeStatus } from "../bindings";
+import type { ApplyOutcome, DelayError, DelayResult, ExitStatus, ListenerId, ListenerStatus, RuntimeStatus } from "../bindings";
 
 export type LabelColor = "success" | "default" | "warning" | "error";
 export interface Label {
@@ -94,4 +94,19 @@ export function applyOutcomeMessages(o: ApplyOutcome): string[] {
 export function delayColor(ms: number | null): "success" | "warning" | "error" {
   if (ms === null || ms > 500) return "error";
   return ms < 200 ? "success" : "warning";
+}
+
+/** Short label and explanation for a delay test that produced no number. */
+export function delayFailure(error: DelayError | null | undefined): { text: string; detail: string } {
+  if (error == null || error === "Timeout") return { text: "超时", detail: "在超时时间内没有收到测速地址的响应" };
+  if (error === "Failed") return { text: "连接失败", detail: "节点连不上测速地址：连接被拒绝、域名解析失败或握手出错" };
+  if (error === "NotFound") return { text: "未生效", detail: "内核中还没有这个节点，配置可能尚未应用" };
+  if (error === "NoCore") return { text: "内核未运行", detail: "内核未运行，无法测速" };
+  if ("CoreUnreachable" in error) return { text: "内核无响应", detail: `无法访问内核控制接口：${error.CoreUnreachable}` };
+  return { text: "测速失败", detail: error.Other };
+}
+
+/** `123 ms`, or the failure label. */
+export function delayText(d: DelayResult): string {
+  return d.ms === null ? delayFailure(d.error).text : `${d.ms} ms`;
 }

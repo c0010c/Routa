@@ -229,7 +229,9 @@ impl TailscaleOpts {
     pub fn defaults_for(name: &str) -> Self {
         Self {
             hostname: format!("mihomo-{name}"),
-            exit_node: "auto:any".to_string(),
+            // `auto:any` never selects an exit node on mihomo v1.19.33
+            // (spike/TAILSCALE.md); the user picks one after logging in.
+            exit_node: String::new(),
             ephemeral: false,
             udp: true,
             auth_key: None,
@@ -437,7 +439,7 @@ mod tests {
     #[test]
     fn tailscale_defaults() {
         let t = TailscaleOpts::defaults_for("家里");
-        assert_eq!((t.hostname.as_str(), t.exit_node.as_str(), t.ephemeral, t.udp), ("mihomo-家里", "auto:any", false, true));
+        assert_eq!((t.hostname.as_str(), t.exit_node.as_str(), t.ephemeral, t.udp), ("mihomo-家里", "", false, true));
         assert_eq!((t.auth_key, t.interface), (None, None));
     }
 }

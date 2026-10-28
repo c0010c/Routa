@@ -1,6 +1,8 @@
 import {
   applyOutcomeMessages,
   delayColor,
+  delayFailure,
+  delayText,
   exitStatusLabel,
   formatBytes,
   formatRate,
@@ -105,6 +107,8 @@ describe("listenerNotEffective", () => {
     startup_error: null,
     save_error: null,
     tailscale: {},
+    tailscale_exit_errors: {},
+    tailscale_exit_retrying: {},
   };
   it("is false for a listener in the config a running core holds", () => {
     expect(listenerNotEffective(base, "l1")).toBe(false);
@@ -137,4 +141,27 @@ describe("delayColor", () => {
     [501, "error"],
     [null, "error"],
   ] as const)("%s ms -> %s", (ms, color) => expect(delayColor(ms)).toBe(color));
+});
+
+describe("delayFailure", () => {
+  it.each([
+    ["Timeout", "超时"],
+    ["Failed", "连接失败"],
+    ["NotFound", "未生效"],
+    ["NoCore", "内核未运行"],
+    [{ CoreUnreachable: "refused" }, "内核无响应"],
+    [{ Other: "400: bad" }, "测速失败"],
+    [null, "超时"],
+    [undefined, "超时"],
+  ] as const)("%j -> %s", (error, text) => expect(delayFailure(error).text).toBe(text));
+
+  it("carries the raw message in the detail", () => {
+    expect(delayFailure({ CoreUnreachable: "refused" }).detail).toContain("refused");
+    expect(delayFailure({ Other: "400: bad" }).detail).toBe("400: bad");
+  });
+});
+
+describe("delayText", () => {
+  it("formats a number", () => expect(delayText({ ms: 42, tested_at: 0 })).toBe("42 ms"));
+  it("labels a failure", () => expect(delayText({ ms: null, tested_at: 0, error: "Failed" })).toBe("连接失败"));
 });

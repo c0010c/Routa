@@ -22,6 +22,8 @@ pub enum TailscaleState {
 #[derive(Default, Debug)]
 pub struct TailscaleTracker {
     states: HashMap<String, TailscaleState>,
+    /// Why the running instance could not apply its `exit-node`.
+    exit_errors: HashMap<String, String>,
 }
 
 impl TailscaleTracker {
@@ -33,23 +35,32 @@ impl TailscaleTracker {
     /// whether any state changed.
     pub fn on_log_line(&mut self, line: &str) -> bool {
         let Some((name, event)) = parse(line) else { return false };
+        let event = match event {
+            Event::ExitNodeFailed(reason) => {
+                let old = self.exit_errors.insert(name.to_string(), reason.to_string());
+                return old.as_deref() != Some(reason);
+            }
+            Event::Login(e) => e,
+        };
+        // A new instance applies its exit node afresh.
+        let cleared = matches!(event, LoginEvent::Started) && self.exit_errors.remove(name).is_some();
         let old = self.states.get(name);
         let new = match (event, old) {
             // A (re)started tsnet server: a logged-in node stays logged in, a
             // pending URL is stale (every start registers anew).
-            (Event::Started, Some(s @ TailscaleState::LoggedIn { .. })) => s.clone(),
-            (Event::Started, Some(TailscaleState::NeedsLogin { .. })) => {
+            (LoginEvent::Started, Some(s @ TailscaleState::LoggedIn { .. })) => s.clone(),
+            (LoginEvent::Started, Some(TailscaleState::NeedsLogin { .. })) => {
                 TailscaleState::NeedsLogin { url: None }
             }
-            (Event::Started, _) => TailscaleState::Unknown,
+            (LoginEvent::Started, _) => TailscaleState::Unknown,
             // The NeedsLogin line precedes the URL line; never drop a URL.
-            (Event::NeedsLogin, Some(s @ TailscaleState::NeedsLogin { .. })) => s.clone(),
-            (Event::NeedsLogin, _) => TailscaleState::NeedsLogin { url: None },
-            (Event::AuthUrl(url), _) => TailscaleState::NeedsLogin { url: Some(url.to_string()) },
-            (Event::LoggedIn, _) => TailscaleState::LoggedIn { ip: None },
+            (LoginEvent::NeedsLogin, Some(s @ TailscaleState::NeedsLogin { .. })) => s.clone(),
+            (LoginEvent::NeedsLogin, _) => TailscaleState::NeedsLogin { url: None },
+            (LoginEvent::AuthUrl(url), _) => TailscaleState::NeedsLogin { url: Some(url.to_string()) },
+            (LoginEvent::LoggedIn, _) => TailscaleState::LoggedIn { ip: None },
         };
         if old == Some(&new) {
-            return false;
+            return cleared;
         }
         self.states.insert(name.to_string(), new);
         true
@@ -60,23 +71,35 @@ impl TailscaleTracker {
         self.states.clone()
     }
 
+    /// Proxy name -> why its exit node was not applied.
+    pub fn exit_errors(&self) -> HashMap<String, String> {
+        self.exit_errors.clone()
+    }
+
     /// Forgets nodes no longer in the config. Returns whether any were dropped.
     pub fn retain(&mut self, names: &[String]) -> bool {
-        let before = self.states.len();
+        let before = self.states.len() + self.exit_errors.len();
         self.states.retain(|k, _| names.contains(k));
-        self.states.len() != before
+        self.exit_errors.retain(|k, _| names.contains(k));
+        self.states.len() + self.exit_errors.len() != before
     }
 
     /// Forgets everything (a new mihomo process logs every state afresh).
     /// Returns whether anything was dropped.
     pub fn reset(&mut self) -> bool {
-        let had = !self.states.is_empty();
+        let had = !self.states.is_empty() || !self.exit_errors.is_empty();
         self.states.clear();
+        self.exit_errors.clear();
         had
     }
 }
 
 enum Event<'a> {
+    Login(LoginEvent<'a>),
+    ExitNodeFailed(&'a str),
+}
+
+enum LoginEvent<'a> {
     Started,
     NeedsLogin,
     AuthUrl(&'a str),
@@ -90,6 +113,8 @@ const NEEDS_LOGIN: &str = ") LocalBackend state is NeedsLogin; running StartLogi
 const AUTH_URL: &str = ") To start this tsnet server, restart with TS_AUTHKEY set, or go to: ";
 const AUTH_LOOP: &str = ") AuthLoop: state is ";
 const AUTH_LOOP_END: &str = "; done";
+// warning level, e.g. `set exit node failed: no node found in netmap with IP 100.91.166.56`.
+const EXIT_NODE_FAILED: &str = ") set exit node failed: ";
 
 /// `(proxy name, event)` of a Tailscale state line. The name is everything
 /// between `[Tailscale](` and the fixed text, so names containing `)` work.
@@ -99,18 +124,23 @@ fn parse(line: &str) -> Option<(&str, Event<'_>)> {
     if let Some((name, url)) = at(AUTH_URL) {
         let end = url.find(|c: char| c.is_whitespace() || c == '"').unwrap_or(url.len());
         let url = &url[..end];
-        return url.starts_with("https://").then_some((name, Event::AuthUrl(url)));
+        return url.starts_with("https://").then_some((name, Event::Login(LoginEvent::AuthUrl(url))));
     }
     if let Some((name, tail)) = at(AUTH_LOOP) {
         let state = &tail[..tail.find(AUTH_LOOP_END)?];
         // Starting | Running = logged in (spike phase B).
-        return matches!(state, "Starting" | "Running").then_some((name, Event::LoggedIn));
+        return matches!(state, "Starting" | "Running").then_some((name, Event::Login(LoginEvent::LoggedIn)));
+    }
+    if let Some((name, reason)) = at(EXIT_NODE_FAILED) {
+        // A raw stdout line ends with the closing quote of `msg="..."`.
+        let reason = reason.strip_suffix('"').unwrap_or(reason).trim();
+        return Some((name, Event::ExitNodeFailed(reason)));
     }
     if let Some((name, _)) = at(NEEDS_LOGIN) {
-        return Some((name, Event::NeedsLogin));
+        return Some((name, Event::Login(LoginEvent::NeedsLogin)));
     }
     if let Some((name, _)) = at(STARTED) {
-        return Some((name, Event::Started));
+        return Some((name, Event::Login(LoginEvent::Started)));
     }
     None
 }
@@ -239,6 +269,32 @@ mod tests {
         t.on_log_line(r#"time="2026-10-27T12:06:43.031216500+08:00" level=info msg="[Tailscale](ts-a) LocalBackend state is NeedsLogin; running StartLoginInteractive...""#);
         assert!(!t.on_log_line(r#"time="2026-10-27T12:06:47.923911600+08:00" level=warning msg="[TCP] dial ts-a 127.0.0.1:55041 --> www.gstatic.com:443 error: context deadline exceeded""#));
         assert_eq!(st(&t, "ts-a"), Some(needs(None)));
+    }
+
+    #[test]
+    fn exit_node_failure_is_tracked_until_the_next_start() {
+        let mut t = TailscaleTracker::new();
+        t.on_log_line(RUN2_RUNNING);
+        // Verbatim from this app's mihomo.log.
+        let line = r#"time="2026-10-28T00:01:20.648504300+08:00" level=warning msg="[Tailscale](手动/1) set exit node failed: no node found in netmap with IP 100.91.166.56""#;
+        assert!(t.on_log_line(line));
+        assert!(!t.on_log_line(line));
+        assert_eq!(
+            t.exit_errors().get("手动/1").map(String::as_str),
+            Some("no node found in netmap with IP 100.91.166.56")
+        );
+        assert_eq!(st(&t, "ts-b"), Some(LOGGED_IN));
+        // `/logs` payload form (no quotes).
+        assert!(t.on_log_line("[Tailscale](手动/2) set exit node failed: boom"));
+        assert_eq!(t.exit_errors().get("手动/2").map(String::as_str), Some("boom"));
+        // A new instance clears it, and that counts as a change.
+        assert!(t.on_log_line(r"[Tailscale](手动/1) tsnet running state path C:\x\tailscaled.state"));
+        assert!(!t.exit_errors().contains_key("手动/1"));
+        assert!(t.retain(&[]));
+        assert!(t.exit_errors().is_empty());
+        t.on_log_line("[Tailscale](手动/2) set exit node failed: boom");
+        assert!(t.reset());
+        assert!(t.exit_errors().is_empty());
     }
 
     #[test]

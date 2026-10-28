@@ -2,6 +2,7 @@ import { Autocomplete, Box, TextField, Typography } from "@mui/material";
 import { useMemo } from "react";
 import { useModel, useStatus } from "../api/client";
 import type { ExitMember } from "../bindings";
+import { delayText } from "../lib/format";
 import { isGroupMember, memberKey, nodeLabel, proxyNameOf } from "../lib/refs";
 
 interface Option {
@@ -72,7 +73,7 @@ export function MemberPicker({
     const key = proxyNameOf(model.data, o.member);
     const d = key ? status.data?.delays[key] : undefined;
     if (!d) return "";
-    return d.ms === null ? "超时" : `${d.ms} ms`;
+    return delayText(d);
   };
 
   return (

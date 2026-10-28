@@ -33,7 +33,7 @@ use crate::model::{
     validate, FetchResult, ListenerId, Model, Node, Settings, Subscription, SubscriptionId, ValidationError,
 };
 use crate::netif::{InterfaceSource, NetInterface};
-use crate::stats::delay::{test_many, DelayBook, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
+use crate::stats::delay::{test_many, DelayBook, DelayError, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
 use crate::stats::traffic::{Rate, TrafficAggregator, TrafficTick};
 use crate::store::{Store, TrafficTotals};
 use crate::subscription::Parsed;
@@ -75,6 +75,12 @@ pub struct RuntimeStatus {
     /// Login state per Tailscale proxy name (`手动/<名>`), from the log of
     /// the current mihomo process; empty while no core runs.
     pub tailscale: HashMap<String, TailscaleState>,
+    /// Per Tailscale proxy name: why mihomo could not apply its `exit-node`
+    /// (until that instance restarts).
+    pub tailscale_exit_errors: HashMap<String, String>,
+    /// Per Tailscale proxy name: the automatic retry (1..=EXIT_NODE_MAX_RETRIES)
+    /// scheduled for its exit node failure. A failure without an entry here is final.
+    pub tailscale_exit_retrying: HashMap<String, u32>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
@@ -101,7 +107,21 @@ struct CoreRun {
 struct TailscaleTrack {
     generation: u64,
     tracker: TailscaleTracker,
+    /// Automatic reloads spent per proxy name on an exit node mihomo failed
+    /// to apply; reset by any reload that is not one of them.
+    exit_retries: HashMap<String, u32>,
+    /// Names waiting for the scheduled reload (status: "retrying n/MAX").
+    exit_retrying: HashMap<String, u32>,
+    /// The reload in flight is one of those retries.
+    healing: bool,
 }
+
+/// mihomo v1.19.33 applies `exit-node` once, right after the instance starts,
+/// and gives up when the netmap has not arrived yet (about half of the starts
+/// here): the instance then has no exit node until it restarts. A reload
+/// restarts it.
+pub const EXIT_NODE_MAX_RETRIES: u32 = 5;
+const EXIT_NODE_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 /// State guarded by the engine mutex.
 struct Engine {
@@ -345,30 +365,85 @@ impl Inner {
             let mut ts = self.tailscale.lock().unwrap();
             ts.generation += 1;
             ts.tracker.reset();
+            ts.exit_retrying.clear();
             let mut st = self.status.lock().unwrap();
             st.effective_listeners.clear();
             st.tailscale.clear();
+            st.tailscale_exit_errors.clear();
+            st.tailscale_exit_retrying.clear();
         }
     }
 
     /// Feeds one core log line from the log task of `generation`; updates the
     /// status and emits when a login state changed.
-    fn on_core_log(&self, generation: u64, line: &str) {
-        {
+    fn on_core_log(self: &Arc<Self>, generation: u64, line: &str) {
+        let heal = {
             let mut ts = self.tailscale.lock().unwrap();
-            if ts.generation != generation || !ts.tracker.on_log_line(line) {
+            if ts.generation != generation {
                 return;
             }
-            self.status.lock().unwrap().tailscale = ts.tracker.states();
-        }
+            let before = ts.tracker.exit_errors();
+            if !ts.tracker.on_log_line(line) {
+                return;
+            }
+            let mut heal = false;
+            for name in ts.tracker.exit_errors().into_keys().filter(|n| !before.contains_key(n)) {
+                let used = ts.exit_retries.get(&name).copied().unwrap_or(0);
+                if used < EXIT_NODE_MAX_RETRIES {
+                    ts.exit_retries.insert(name.clone(), used + 1);
+                    ts.exit_retrying.insert(name, used + 1);
+                    heal = true;
+                }
+            }
+            sync_tailscale(&ts, &mut self.status.lock().unwrap());
+            heal
+        };
         self.emit_status();
+        if heal {
+            self.schedule_exit_node_retry();
+        }
+    }
+
+    /// Reloads the config shortly (once for every failure reported meanwhile).
+    fn schedule_exit_node_retry(self: &Arc<Self>) {
+        let me = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(EXIT_NODE_RETRY_DELAY).await;
+            let mut eng = me.engine.lock().await;
+            {
+                let mut ts = me.tailscale.lock().unwrap();
+                if ts.exit_retrying.is_empty() {
+                    return; // An earlier scheduled retry covered it.
+                }
+                ts.exit_retrying.clear();
+                ts.healing = true;
+                sync_tailscale(&ts, &mut me.status.lock().unwrap());
+            }
+            if !me.is_shut_down() && eng.core.is_some() {
+                eprintln!("runtime: a Tailscale exit node was not applied; reloading to restart the instance");
+                me.apply(&mut eng).await;
+            }
+            me.tailscale.lock().unwrap().healing = false;
+            me.emit_status();
+        });
+    }
+
+    /// Forgets automatic retries, e.g. before a reload the user asked for.
+    fn reset_exit_node_retries(&self) {
+        let mut ts = self.tailscale.lock().unwrap();
+        if ts.healing {
+            return;
+        }
+        ts.exit_retries.clear();
+        ts.exit_retrying.clear();
+        sync_tailscale(&ts, &mut self.status.lock().unwrap());
     }
 
     /// Forgets login states of Tailscale nodes no longer in the config.
     fn retain_tailscale(&self, names: &[String]) {
         let mut ts = self.tailscale.lock().unwrap();
         if ts.tracker.retain(names) {
-            self.status.lock().unwrap().tailscale = ts.tracker.states();
+            sync_tailscale(&ts, &mut self.status.lock().unwrap());
         }
     }
 
@@ -558,6 +633,7 @@ impl Inner {
     /// `apply_once`, escalating to a core restart when connections that must
     /// not continue could not be cut (a restart drops every connection).
     async fn apply(self: &Arc<Self>, eng: &mut Engine) -> ApplyOutcome {
+        self.reset_exit_node_retries();
         match self.apply_once(eng).await {
             Some(out) => {
                 if uncut(&out) > 0 {
@@ -677,7 +753,7 @@ impl Inner {
             // No core to test through: report failures, keep the DelayBook.
             return names
                 .into_iter()
-                .map(|n| (n, DelayResult { ms: None, tested_at: now_unix() }))
+                .map(|n| (n, DelayResult::failed(DelayError::NoCore, now_unix())))
                 .collect();
         };
         let url = self.model.lock().unwrap().settings.delay_test_url.clone();
@@ -691,6 +767,12 @@ impl Inner {
         self.emit_status();
         results
     }
+}
+
+fn sync_tailscale(ts: &TailscaleTrack, st: &mut RuntimeStatus) {
+    st.tailscale = ts.tracker.states();
+    st.tailscale_exit_errors = ts.tracker.exit_errors();
+    st.tailscale_exit_retrying = ts.exit_retrying.clone();
 }
 
 impl Runtime {
@@ -722,6 +804,8 @@ impl Runtime {
             startup_error: (!errors.is_empty()).then(|| errors.join("\n")),
             save_error: None,
             tailscale: HashMap::new(),
+            tailscale_exit_errors: HashMap::new(),
+            tailscale_exit_retrying: HashMap::new(),
         };
         let inner = Inner {
             store,
@@ -887,6 +971,16 @@ impl Runtime {
     /// Without a running core every result is `ms: None` and nothing is recorded.
     pub async fn test_delays(&self, names: Vec<String>) -> Vec<(String, DelayResult)> {
         self.inner.test_delays(names).await
+    }
+
+    /// Reloads the config so every Tailscale instance restarts and applies
+    /// its exit node again, with a fresh budget of automatic retries.
+    pub async fn retry_tailscale_exit_nodes(&self) -> ApplyOutcome {
+        let mut eng = self.inner.engine.lock().await;
+        if self.inner.is_shut_down() {
+            return ApplyOutcome::FailedCoreStopped { error: SHUT_DOWN.into() };
+        }
+        self.inner.apply(&mut eng).await
     }
 
     /// Exit name -> the member mihomo currently uses for it. Names mihomo

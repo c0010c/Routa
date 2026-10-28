@@ -1,3 +1,4 @@
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import HubOutlined from "@mui/icons-material/HubOutlined";
 import {
   Alert,
@@ -8,6 +9,8 @@ import {
   ListItemButton,
   ListItemText,
   ListSubheader,
+  Menu,
+  MenuItem,
   Paper,
   Stack,
   Table,
@@ -41,7 +44,8 @@ import { MANUAL_PREFIX } from "../lib/refs";
 import { ManualNodeDialog, newManualNode, type ManualNodeMode } from "./ManualNodeDialog";
 import { NodeGroupDialog, newNodeGroup } from "./NodeGroupDialog";
 import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
-import { TailscaleStateChip } from "./Tailscale";
+import { TailscaleStateChip } from "../components/TailscaleState";
+import { TailscaleDialog, newTailscaleNode } from "./TailscaleDialog";
 
 function formatInterval(mins: number | null): string {
   if (mins === null) return "已关闭";
@@ -53,6 +57,9 @@ function formatInterval(mins: number | null): string {
 function formatTime(secs: number | null): string {
   return secs === null ? "从未更新" : new Date(secs * 1000).toLocaleString("zh-CN");
 }
+
+const TAILSCALE_DELAY_HINT =
+  "Tailscale 节点请确认已登录，且 exit-node 是 tailnet 中可用的出口节点；改配置或重启内核后，实例要半分钟到一分钟才能经出口节点上网，这段时间测速也会失败";
 
 const subProxyName = (s: Subscription, node: string) => `${s.name}/${node}`;
 const manualProxyName = (n: ManualNode) => `${MANUAL_PREFIX}/${n.name}`;
@@ -103,6 +110,8 @@ export function Nodes() {
   const [editingSub, setEditingSub] = useState<Subscription | null>(null);
   const [deletingSub, setDeletingSub] = useState<Subscription | null>(null);
   const [editingNode, setEditingNode] = useState<{ node: ManualNode; mode?: ManualNodeMode } | null>(null);
+  const [creatingTs, setCreatingTs] = useState<ManualNode | null>(null);
+  const [newMenu, setNewMenu] = useState<HTMLElement | null>(null);
   const [deletingNode, setDeletingNode] = useState<ManualNode | null>(null);
   const [editingGroup, setEditingGroup] = useState<NodeGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
@@ -253,9 +262,27 @@ export function Nodes() {
             <Typography variant="subtitle1">{title}</Typography>
             {sel.kind !== "sub" && (
               <Stack direction="row" spacing={1}>
-                <Button variant="contained" onClick={() => setEditingNode({ node: newManualNode(newNodeGroups), mode: "form" })}>
+                <Button variant="contained" endIcon={<ArrowDropDownIcon />} onClick={(e) => setNewMenu(e.currentTarget)}>
                   新建节点
                 </Button>
+                <Menu anchorEl={newMenu} open={newMenu !== null} onClose={() => setNewMenu(null)}>
+                  <MenuItem
+                    onClick={() => {
+                      setNewMenu(null);
+                      setEditingNode({ node: newManualNode(newNodeGroups), mode: "form" });
+                    }}
+                  >
+                    socks5 / http 节点
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      setNewMenu(null);
+                      setCreatingTs(newTailscaleNode(newNodeGroups));
+                    }}
+                  >
+                    Tailscale 实例
+                  </MenuItem>
+                </Menu>
                 <Button variant="outlined" onClick={() => setEditingNode({ node: newManualNode(newNodeGroups), mode: "yaml" })}>
                   粘贴 YAML
                 </Button>
@@ -298,6 +325,7 @@ export function Nodes() {
           onClose={() => setEditingNode(null)}
         />
       )}
+      {creatingTs && <TailscaleDialog key={creatingTs.id} node={creatingTs} onClose={() => setCreatingTs(null)} />}
       {deletingNode && (
         <ConfirmDeleteDialog
           text={`确定删除节点「${deletingNode.name}」吗？`}
@@ -395,7 +423,7 @@ function NodeTable({
                     {r.type}
                     {n && "Tailscale" in n.kind && (
                       <Box component="span" sx={{ ml: 1 }}>
-                        <TailscaleStateChip node={n} />
+                        <TailscaleStateChip node={n} compact />
                       </Box>
                     )}
                   </TableCell>
@@ -403,7 +431,7 @@ function NodeTable({
                     {r.server}
                   </TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>
-                    <DelayText ms={d?.ms} />
+                    <DelayText result={d} hint={n && "Tailscale" in n.kind ? TAILSCALE_DELAY_HINT : undefined} />
                   </TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>
                     <Button size="small" aria-label={`测速 ${r.name}`} disabled={testing} onClick={() => onTest(r.proxyName)}>

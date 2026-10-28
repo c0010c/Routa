@@ -139,8 +139,12 @@ fn tailscale_proxy(node: &ManualNode, opts: &TailscaleOpts, iface: Option<&str>)
         ("state-dir", s(&tailscale_state_dir(&node.id))),
         ("ephemeral", Value::Bool(opts.ephemeral)),
         ("udp", Value::Bool(opts.udp)),
-        ("exit-node", s(&opts.exit_node)),
     ];
+    // Empty = no exit node: the instance only reaches tailnet devices.
+    let exit_node = opts.exit_node.trim();
+    if !exit_node.is_empty() {
+        entries.push(("exit-node", s(exit_node)));
+    }
     if let Some(k) = opts.auth_key.as_deref().filter(|k| !k.is_empty()) {
         entries.push(("auth-key", s(k)));
     }
@@ -789,6 +793,7 @@ mod tests {
     }
     fn ts_manual(id: &str, name: &str, groups: &[&str], iface: Option<&str>) -> ManualNode {
         let mut opts = TailscaleOpts::defaults_for(name);
+        opts.exit_node = "100.64.0.9".into();
         opts.interface = iface.map(|g| InterfaceGuid(g.into()));
         ManualNode {
             id: ManualNodeId(id.into()),
@@ -859,13 +864,26 @@ mod tests {
         assert_eq!(ts[0]["name"], "手动/ts");
         assert_eq!(ts[0]["state-dir"], "tailscale/t1");
         assert_eq!(ts[0]["hostname"], "mihomo-ts");
-        assert_eq!(ts[0]["exit-node"], "auto:any");
+        assert_eq!(ts[0]["exit-node"], "100.64.0.9");
         assert_eq!(ts[0]["udp"], true);
         assert_eq!(ts[0]["ephemeral"], false);
         assert_eq!(keys(ts[0]), ["name", "type", "hostname", "state-dir", "ephemeral", "udp", "exit-node"]);
         for g in ["出口B", "出口D"] {
             assert_eq!(find(&v, "proxy-groups", g).unwrap()["proxies"], seq(&["手动/ts"]), "{g}");
         }
+    }
+
+    #[test]
+    fn tailscale_without_exit_node_omits_the_key() {
+        let mut m = base();
+        let mut t = ts_manual("t1", "ts", &[], None);
+        if let ManualNodeKind::Tailscale(o) = &mut t.kind {
+            o.exit_node = "  ".into();
+        }
+        m.manual_nodes = vec![t];
+        let v = parse(&gen(&m).yaml);
+        let p = find(&v, "proxies", "手动/ts").unwrap();
+        assert!(p.get("exit-node").is_none(), "{p:?}");
     }
 
     #[test]

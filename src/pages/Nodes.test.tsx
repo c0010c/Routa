@@ -60,6 +60,8 @@ const status: RuntimeStatus = {
   startup_error: null,
   save_error: null,
   tailscale: {},
+  tailscale_exit_errors: {},
+  tailscale_exit_retrying: {},
 };
 
 function renderNodes(st: RuntimeStatus = status) {
@@ -123,6 +125,18 @@ describe("Nodes", () => {
     expect(within(tsRow).getByRole("cell", { name: /^tailscale/ })).toBeInTheDocument();
     const link = within(tsRow).getByRole("link", { name: "去 Tailscale 页编辑" });
     expect(link).toHaveAttribute("href", "/tailscale");
+  });
+
+  it("offers socks5/http nodes and Tailscale instances under 新建节点", async () => {
+    renderNodes();
+    fireEvent.click(within(await screen.findByRole("navigation", { name: "节点分组" })).getByText("自建组1"));
+    fireEvent.click(screen.getByRole("button", { name: "新建节点" }));
+    expect(screen.getByRole("menuitem", { name: "socks5 / http 节点" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Tailscale 实例" }));
+    expect(await screen.findByText("新建 Tailscale 实例")).toBeInTheDocument();
+    // Created from a group: the instance joins it.
+    fireEvent.click(screen.getByRole("button", { name: "高级选项" }));
+    expect(screen.getByRole("checkbox", { name: "自建组1" })).toBeChecked();
   });
 
   it("shows the login state on Tailscale rows", async () => {

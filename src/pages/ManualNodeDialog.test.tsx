@@ -109,7 +109,7 @@ describe("ManualNodeDialog", () => {
   it("turns a pasted tailscale proxy into a Tailscale instance", async () => {
     vi.mocked(commands.parseProxyYaml).mockResolvedValue({
       status: "ok",
-      data: { raw: { name: "ts", type: "tailscale", hostname: "h", "state-dir": "x", "exit-node": "auto:any" }, stripped: [] },
+      data: { raw: { name: "ts", type: "tailscale", hostname: "h", "state-dir": "x", "exit-node": "auto:any", ephemeral: true }, stripped: [] },
     });
     const onClose = renderDialog(newManualNode(), "yaml");
     fireEvent.change(await screen.findByLabelText("YAML"), {

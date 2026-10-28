@@ -9,6 +9,7 @@ pub mod scheduler;
 pub mod stats;
 pub mod store;
 pub mod subscription;
+pub mod tailnet;
 pub mod tailscale;
 pub mod tray;
 
@@ -164,6 +165,9 @@ pub fn run() {
         commands::core_stop,
         commands::core_restart,
         commands::open_log_dir,
+        commands::tailnet_peers,
+        commands::open_login_url,
+        commands::retry_tailscale_exit_nodes,
     ]);
 
     #[cfg(debug_assertions)]

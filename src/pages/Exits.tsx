@@ -104,7 +104,7 @@ export function Exits() {
                       <TableCell>{nodeOrMembers(e, m)}</TableCell>
                       <TableCell>{iface}</TableCell>
                       <TableCell>
-                        <DelayText ms={d?.ms} />
+                        <DelayText result={d} />
                       </TableCell>
                       <TableCell>{users.length > 0 ? users.join("、") : "—"}</TableCell>
                       <TableCell>{h ? <ExitStatusChip status={h.status} /> : "—"}</TableCell>

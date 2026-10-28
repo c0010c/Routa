@@ -1,5 +1,6 @@
 import { Button, ThemeProvider } from "@mui/material";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { DelayError } from "../bindings";
 import { theme } from "../theme";
 import { DelayText } from "./DelayText";
 import { EmptyState } from "./EmptyState";
@@ -47,10 +48,10 @@ describe("RowActions disabled item", () => {
 
 describe("DelayText", () => {
   const colorOf = (text: string) => getComputedStyle(screen.getByText(text)).color;
-  const renderDelay = (ms: number | null | undefined) =>
+  const renderDelay = (ms: number | null | undefined, error?: DelayError) =>
     render(
       <ThemeProvider theme={theme}>
-        <DelayText ms={ms} />
+        <DelayText result={ms === undefined ? undefined : { ms, tested_at: 0, error }} hint={error ? "看看登录" : undefined} />
       </ThemeProvider>,
     );
 
@@ -67,6 +68,13 @@ describe("DelayText", () => {
   it("shows a timeout", () => {
     renderDelay(null);
     expect(colorOf("超时")).toMatch(/error/i);
+  });
+
+  it("shows the failure reason with details on hover", async () => {
+    renderDelay(null, "Failed");
+    expect(colorOf("连接失败")).toMatch(/error/i);
+    fireEvent.mouseOver(screen.getByText("连接失败"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(/域名解析失败.*看看登录/);
   });
 
   it("shows a dash when untested", () => {

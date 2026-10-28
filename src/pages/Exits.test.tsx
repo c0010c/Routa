@@ -31,6 +31,8 @@ const status: RuntimeStatus = {
   startup_error: null,
   save_error: null,
   tailscale: {},
+  tailscale_exit_errors: {},
+  tailscale_exit_retrying: {},
 };
 
 function renderExits(m: Model) {

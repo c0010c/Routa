@@ -365,7 +365,7 @@ export function Overview() {
                       <TableCell>{currentNode(m, exit, groupNow.data)}</TableCell>
                       <TableCell>{exit ? iface : "—"}</TableCell>
                       <TableCell>
-                        <DelayText ms={d?.ms} />
+                        <DelayText result={d} />
                       </TableCell>
                       <TableCell>
                         ↑ {formatRate(rate?.up ?? 0)} ↓ {formatRate(rate?.down ?? 0)}

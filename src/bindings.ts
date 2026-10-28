@@ -181,6 +181,41 @@ async openLogDir() : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Devices of the system Tailscale client's tailnet (exit node choices and
+ * the instances' own addresses). An error says why there is no list.
+ */
+async tailnetPeers() : Promise<Result<TailnetPeer[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tailnet_peers") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Opens a Tailscale login link in the default browser.
+ */
+async openLoginUrl(url: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_login_url", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Restarts every Tailscale instance (one reload) so each applies its exit
+ * node again; also renews the automatic retries.
+ */
+async retryTailscaleExitNodes() : Promise<Result<ApplyOutcome, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("retry_tailscale_exit_nodes") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -219,6 +254,28 @@ export type CoreState = "Stopped" | "Starting" | "Running" | { Crashed: { exit_c
  * Latest delay result per proxy name.
  */
 export type DelayBook = Partial<{ [key in string]: DelayResult }>
+/**
+ * Why a delay test produced no number. mihomo's delay endpoint only tells
+ * these apart by status: 504 timeout, 503 any dial/DNS/HTTP failure, 404
+ * no such proxy.
+ */
+export type DelayError = "Timeout" | 
+/**
+ * The proxy could not reach the test URL (connect, DNS or HTTP error).
+ */
+"Failed" | 
+/**
+ * mihomo holds no proxy by that name (config not applied yet).
+ */
+"NotFound" | 
+/**
+ * No mihomo running.
+ */
+"NoCore" | 
+/**
+ * The controller did not answer.
+ */
+{ CoreUnreachable: string } | { Other: string }
 export type DelayResult = { 
 /**
  * `None` means the test failed or timed out.
@@ -227,7 +284,11 @@ ms: number | null;
 /**
  * Unix seconds at completion.
  */
-tested_at: number }
+tested_at: number; 
+/**
+ * Why `ms` is `None`.
+ */
+error?: DelayError | null }
 export type Exit = { id: ExitId; name: string; kind: ExitKind; interface: InterfaceGuid | null }
 export type ExitHealth = { status: ExitStatus; effective_members: NodeRef[]; missing_members: ExitMember[]; 
 /**
@@ -329,7 +390,17 @@ save_error: string | null;
  * Login state per Tailscale proxy name (`手动/<名>`), from the log of
  * the current mihomo process; empty while no core runs.
  */
-tailscale: Partial<{ [key in string]: TailscaleState }> }
+tailscale: Partial<{ [key in string]: TailscaleState }>; 
+/**
+ * Per Tailscale proxy name: why mihomo could not apply its `exit-node`
+ * (until that instance restarts).
+ */
+tailscale_exit_errors: Partial<{ [key in string]: string }>; 
+/**
+ * Per Tailscale proxy name: the automatic retry (1..=EXIT_NODE_MAX_RETRIES)
+ * scheduled for its exit node failure. A failure without an entry here is final.
+ */
+tailscale_exit_retrying: Partial<{ [key in string]: number }> }
 export type Settings = { autostart: boolean; core_path: string | null; controller_port: number; delay_test_interval_mins: number | null; delay_test_url: string }
 export type Subscription = { id: SubscriptionId; name: string; url: string; update_interval_mins: number | null; fallback_exit: ExitId | null; 
 /**
@@ -337,6 +408,20 @@ export type Subscription = { id: SubscriptionId; name: string; url: string; upda
  */
 last_updated: number | null; last_result: FetchResult | null; nodes: Node[] }
 export type SubscriptionId = string
+export type TailnetPeer = { 
+/**
+ * The machine's requested hostname (what a Tailscale instance's
+ * `hostname` registers as).
+ */
+host_name: string; 
+/**
+ * MagicDNS name without the trailing dot.
+ */
+dns_name: string; ips: string[]; online: boolean; 
+/**
+ * Advertises itself as an exit node and is approved for this tailnet.
+ */
+exit_node_option: boolean }
 export type TailscaleOpts = { hostname: string; exit_node: string; ephemeral: boolean; udp: boolean; auth_key: string | null; 
 /**
  * None = 走系统默认网卡

@@ -1,83 +1,26 @@
 import VpnLockOutlined from "@mui/icons-material/VpnLockOutlined";
-import { Button, Card, CardContent, Chip, type ChipProps, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Card, CardContent, Stack, Typography } from "@mui/material";
 import { useState } from "react";
-import { useDeleteManualNode, useModel, useStatus } from "../api/client";
-import type { ManualNode, Model, TailscaleOpts, TailscaleState } from "../bindings";
+import { useDeleteManualNode, useModel, useStatus, useTestDelays } from "../api/client";
+import type { Exit, ManualNode, Model, TailscaleOpts } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { DelayText } from "../components/DelayText";
 import { EmptyState } from "../components/EmptyState";
 import { RowActions } from "../components/RowActions";
-import { MANUAL_PREFIX, expandMembers } from "../lib/refs";
+import {
+  TailscaleLoginLink,
+  TailscaleStateChip,
+  tailscaleProxyName,
+  ExitNodeIssueAlert,
+  useExitNodeIssue,
+  useTailscaleState,
+} from "../components/TailscaleState";
+import { expandMembers } from "../lib/refs";
+import { exitNodeText, isAutoExitNode, useTailnetPeers } from "../lib/tailnet";
+import { ExitDialog, newExit } from "./ExitDialog";
 import { TailscaleDialog, newTailscaleNode } from "./TailscaleDialog";
 
-/** Login state of a Tailscale node from the runtime status (keyed by proxy name). */
-function useTailscaleState(node: ManualNode): TailscaleState {
-  const status = useStatus();
-  return status.data?.tailscale?.[`${MANUAL_PREFIX}/${node.name}`] ?? "Unknown";
-}
-
-function stateChip(s: TailscaleState): { label: string; color: ChipProps["color"] } {
-  if (s === "Unknown") return { label: "状态未知", color: "default" };
-  if ("NeedsLogin" in s) return { label: "待登录", color: "warning" };
-  if ("LoggedIn" in s) return { label: s.LoggedIn.ip ? `已登录 · ${s.LoggedIn.ip}` : "已登录", color: "success" };
-  return { label: `登录失败：${s.Failed.reason}`, color: "error" };
-}
-
-/** Compact login state label (also used on the Nodes page's Tailscale rows). */
-export function TailscaleStateChip({ node }: { node: ManualNode }) {
-  const { label, color } = stateChip(useTailscaleState(node));
-  return <Chip size="small" label={label} color={color} />;
-}
-
-/** Login state with the authorization link when one is pending. */
-export function TailscaleLoginState({ node }: { node: ManualNode }) {
-  const s = useTailscaleState(node);
-  // Copy result per URL, so a fresh URL offers 复制链接 again.
-  const [copy, setCopy] = useState<{ url: string; ok: boolean } | null>(null);
-  const url = s !== "Unknown" && "NeedsLogin" in s ? s.NeedsLogin.url : null;
-  return (
-    <Stack spacing={1} sx={{ mt: 1, alignItems: "flex-start" }}>
-      <TailscaleStateChip node={node} />
-      {s !== "Unknown" && "NeedsLogin" in s && url === null && (
-        <Typography variant="body2" color="text.secondary">
-          正在获取授权链接…若长时间没有出现，请检查网络或该实例的网卡设置
-        </Typography>
-      )}
-      {url !== null && (
-        <>
-          <Typography variant="body2" sx={{ userSelect: "text", wordBreak: "break-all", fontFamily: "monospace" }}>
-            {url}
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={async () => {
-                try {
-                  // navigator.clipboard may be missing: that throws synchronously.
-                  await navigator.clipboard.writeText(url);
-                  setCopy({ url, ok: true });
-                } catch (e) {
-                  console.error("copy failed", e);
-                  setCopy({ url, ok: false });
-                }
-              }}
-            >
-              {copy?.url === url && copy.ok ? "已复制" : "复制链接"}
-            </Button>
-            {copy?.url === url && !copy.ok && (
-              <Typography variant="body2" color="error">
-                复制失败，请手动选择链接
-              </Typography>
-            )}
-            <Typography variant="body2" color="text.secondary">
-              在浏览器中打开此链接完成授权
-            </Typography>
-          </Stack>
-        </>
-      )}
-    </Stack>
-  );
-}
+export const TAILSCALE_EMPTY_HELP = "通过 tailnet 中的出口节点访问网络，或直接访问 tailnet 内的设备。点击「新建实例」开始。";
 
 type TsNode = ManualNode & { kind: { Tailscale: TailscaleOpts } };
 const isTs = (n: ManualNode): n is TsNode => "Tailscale" in n.kind;
@@ -95,16 +38,114 @@ function referencingExits(model: Model, id: string): string[] {
     .map((e) => e.name);
 }
 
+function InstanceCard({
+  node,
+  model,
+  onEdit,
+  onDelete,
+  onCreateExit,
+}: {
+  node: TsNode;
+  model: Model;
+  onEdit: () => void;
+  onDelete: () => void;
+  onCreateExit: () => void;
+}) {
+  const status = useStatus();
+  const test = useTestDelays();
+  const state = useTailscaleState(node);
+  const exitIssue = useExitNodeIssue(node);
+  const loggedIn = state !== "Unknown" && "LoggedIn" in state;
+  const { peers } = useTailnetPeers(loggedIn);
+  const o = node.kind.Tailscale;
+  const name = tailscaleProxyName(node);
+  const refs = referencingExits(model, node.id);
+  const interfaces = status.data?.interfaces ?? [];
+  const iface =
+    o.interface === null
+      ? "系统默认"
+      : (interfaces.find((i) => i.guid === o.interface)?.friendly_name ?? (status.data ? "（已移除的网卡）" : "—"));
+  const delay = status.data?.delays[name];
+
+  return (
+    <Card component="article" aria-label={node.name}>
+      <CardContent>
+        <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between" }}>
+          <Typography variant="h6">{node.name}</Typography>
+          <RowActions
+            label={node.name}
+            items={[
+              { label: "编辑", onClick: onEdit },
+              { label: "删除", onClick: onDelete, danger: true },
+            ]}
+          />
+        </Stack>
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", my: 1 }}>
+          <TailscaleStateChip node={node} />
+          {loggedIn && <DelayText result={delay} hint="改配置或重启内核后，实例要半分钟到一分钟才能经出口节点上网，这段时间测速会失败" />}
+        </Stack>
+        <Box sx={{ mb: 1 }}>
+          <TailscaleLoginLink node={node} hideChip />
+        </Box>
+        <Typography variant="body2">出口节点：{exitNodeText(peers, o.exit_node)}</Typography>
+        <Typography variant="body2">被出口引用：{refs.length > 0 ? refs.join("、") : "无"}</Typography>
+        <Typography variant="body2" color="text.secondary">
+          机器名 {o.hostname} · 网卡 {iface} · UDP {o.udp ? "开" : "关"}
+          {o.ephemeral ? " · 临时节点" : ""}
+        </Typography>
+        {exitIssue && (
+          <Box sx={{ mt: 1 }}>
+            <ExitNodeIssueAlert issue={exitIssue} onChangeExitNode={onEdit} />
+          </Box>
+        )}
+        {!exitIssue && isAutoExitNode(o.exit_node) && (
+          <Alert
+            severity="warning"
+            sx={{ mt: 1 }}
+            action={
+              <Button size="small" color="inherit" onClick={onEdit}>
+                选择出口节点
+              </Button>
+            }
+          >
+            {o.exit_node} 在当前内核下无法自动选中出口节点，请改选一个出口节点
+          </Alert>
+        )}
+        {loggedIn && o.exit_node.trim() === "" && (
+          <Alert
+            severity="info"
+            sx={{ mt: 1 }}
+            action={
+              <Button size="small" color="inherit" onClick={onEdit}>
+                设置出口节点
+              </Button>
+            }
+          >
+            未设置出口节点，只能访问 tailnet 内的设备
+          </Alert>
+        )}
+        <Box sx={{ display: "flex", gap: 1, mt: 1.5 }}>
+          <Button size="small" variant="outlined" disabled={test.isPending || !loggedIn} onClick={() => test.mutate([name])}>
+            测速
+          </Button>
+          <Button size="small" onClick={onCreateExit}>
+            用它新建出口
+          </Button>
+        </Box>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function Tailscale() {
   const model = useModel();
-  const status = useStatus();
   const del = useDeleteManualNode();
   const [editing, setEditing] = useState<ManualNode | null>(null);
   const [deleting, setDeleting] = useState<ManualNode | null>(null);
+  const [creatingExit, setCreatingExit] = useState<Exit | null>(null);
 
   if (!model.data) return <Typography>加载中…</Typography>;
   const m = model.data;
-  const interfaces = status.data?.interfaces ?? [];
   const nodes = m.manual_nodes.filter(isTs);
 
   return (
@@ -115,39 +156,21 @@ export function Tailscale() {
           新建实例
         </Button>
       </Stack>
-      {nodes.length === 0 && (
-        <EmptyState icon={<VpnLockOutlined />} title="还没有 Tailscale 实例" description="点击「新建实例」添加。" />
-      )}
-      {nodes.map((n) => {
-        const o = n.kind.Tailscale;
-        const refs = referencingExits(m, n.id);
-        const iface = o.interface === null ? "系统默认" : (interfaces.find((i) => i.guid === o.interface)?.friendly_name ?? "（已移除的网卡）");
-        return (
-          <Card key={n.id} component="article" aria-label={n.name}>
-            <CardContent>
-              <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between" }}>
-                <Typography variant="h6">{n.name}</Typography>
-                <RowActions
-                  label={n.name}
-                  items={[
-                    { label: "编辑", onClick: () => setEditing(n) },
-                    { label: "删除", onClick: () => setDeleting(n), danger: true },
-                  ]}
-                />
-              </Stack>
-              <Typography variant="body2">hostname：{o.hostname}</Typography>
-              <Typography variant="body2">exit-node：{o.exit_node}</Typography>
-              <Typography variant="body2">
-                UDP：{o.udp ? "开" : "关"} · ephemeral：{o.ephemeral ? "是" : "否"}
-              </Typography>
-              <Typography variant="body2">网卡：{iface}</Typography>
-              <Typography variant="body2">被出口引用：{refs.length > 0 ? refs.join("、") : "无"}</Typography>
-              <TailscaleLoginState node={n} />
-            </CardContent>
-          </Card>
-        );
-      })}
+      {nodes.length === 0 && <EmptyState icon={<VpnLockOutlined />} title="还没有 Tailscale 实例" description={TAILSCALE_EMPTY_HELP} />}
+      {nodes.map((n) => (
+        <InstanceCard
+          key={n.id}
+          node={n}
+          model={m}
+          onEdit={() => setEditing(n)}
+          onDelete={() => setDeleting(n)}
+          onCreateExit={() =>
+            setCreatingExit({ ...newExit(), name: n.name, kind: { Node: { node: { manual_id: n.id } } }, interface: n.kind.Tailscale.interface })
+          }
+        />
+      ))}
       {editing && <TailscaleDialog key={editing.id} node={editing} onClose={() => setEditing(null)} />}
+      {creatingExit && <ExitDialog key={creatingExit.id} exit={creatingExit} onClose={() => setCreatingExit(null)} />}
       {deleting && (
         <ConfirmDeleteDialog
           text={`确定删除实例「${deleting.name}」吗？登录状态也会一并删除。`}

@@ -2,6 +2,7 @@ import { Autocomplete, Box, TextField, Typography } from "@mui/material";
 import { useMemo } from "react";
 import { useModel, useStatus } from "../api/client";
 import type { NodeRef } from "../bindings";
+import { delayText } from "../lib/format";
 import { isSubRef, nodeKey, proxyNameOf } from "../lib/refs";
 
 interface Option {
@@ -58,7 +59,7 @@ export function NodePicker(props: Props) {
     const pn = model.data ? proxyNameOf(model.data, o.ref) : null;
     const d = pn ? status.data?.delays[pn] : undefined;
     if (!d) return "";
-    return d.ms === null ? "超时" : `${d.ms} ms`;
+    return delayText(d);
   };
   const toOption = (r: NodeRef) => options.find((o) => key(o.ref) === key(r)) as Option;
   const common = {

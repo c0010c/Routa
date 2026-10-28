@@ -384,6 +384,36 @@ pub async fn open_log_dir(rt: Rt<'_>) -> Result<(), String> {
         .map_err(|e| format!("无法打开日志目录: {e}"))
 }
 
+/// Devices of the system Tailscale client's tailnet (exit node choices and
+/// the instances' own addresses). An error says why there is no list.
+#[tauri::command]
+#[specta::specta]
+pub async fn tailnet_peers() -> Result<Vec<crate::tailnet::TailnetPeer>, String> {
+    crate::tailnet::system_peers().await
+}
+
+/// Restarts every Tailscale instance (one reload) so each applies its exit
+/// node again; also renews the automatic retries.
+#[tauri::command]
+#[specta::specta]
+pub async fn retry_tailscale_exit_nodes(rt: Rt<'_>) -> Result<ApplyOutcome, ()> {
+    Ok(rt.retry_tailscale_exit_nodes().await)
+}
+
+/// Opens a Tailscale login link in the default browser.
+#[tauri::command]
+#[specta::specta]
+pub fn open_login_url(url: String) -> Result<(), String> {
+    if !crate::tailnet::is_login_url(&url) {
+        return Err("不是 Tailscale 登录链接".into());
+    }
+    std::process::Command::new("explorer.exe")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("无法打开浏览器: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;

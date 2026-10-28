@@ -532,6 +532,7 @@ async fn delay_test_records_results() {
 
     let res = h.rt.test_delays(vec!["x".into()]).await;
     assert_eq!(res[0].1.ms, None);
+    assert!(res[0].1.error.is_some());
     assert!(h.rt.status().delays.get("x").is_some());
     h.rt.shutdown().await;
 }
@@ -596,6 +597,7 @@ async fn no_core_launch_after_shutdown() {
     // No core: Nones go to the caller only, the DelayBook keeps old results.
     let res = h.rt.test_delays(vec!["直连出口".into()]).await;
     assert_eq!(res[0].1.ms, None);
+    assert_eq!(res[0].1.error, Some(crate::stats::delay::DelayError::NoCore));
     assert_eq!(h.rt.status().delays.get("直连出口").unwrap().ms, Some(42));
     assert!(!h.rt.refresh_interfaces().await);
     tokio::time::sleep(Duration::from_secs(120)).await;
@@ -1055,4 +1057,55 @@ async fn tailscale_state_follows_core_log() {
     assert!(ts_state(&h, "手动/家里").is_some());
     h.rt.stop_core().await;
     assert!(h.rt.status().tailscale.is_empty());
+}
+
+const TS_EXIT_FAIL: &str = "[Tailscale](手动/家里) set exit node failed: no node found in netmap with IP 100.64.0.9";
+const TS_STARTED: &str = r"[Tailscale](手动/家里) tsnet running state path C:\x\tailscaled.state";
+
+#[tokio::test(start_paused = true)]
+async fn exit_node_failure_reloads_up_to_the_limit() {
+    let name = "手动/家里";
+    let mut m = model_with_listener(false);
+    m.manual_nodes.push(ts_manual("家里", None));
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    let reloads = || h.api.reloads.lock().unwrap().len();
+    let retrying = || h.rt.status().tailscale_exit_retrying.get(name).copied();
+    let base = reloads();
+
+    for i in 1..=EXIT_NODE_MAX_RETRIES {
+        h.api.push_log(TS_EXIT_FAIL);
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert_eq!(retrying(), Some(i), "retry {i} scheduled");
+        assert!(h.rt.status().tailscale_exit_errors.contains_key(name));
+        assert_eq!(reloads(), base + i as usize - 1, "not yet reloaded");
+        tokio::time::sleep(EXIT_NODE_RETRY_DELAY + Duration::from_secs(1)).await;
+        assert_eq!(reloads(), base + i as usize, "retry {i} reloaded");
+        assert_eq!(retrying(), None);
+        // The restarted instance clears the failure.
+        h.api.push_log(TS_STARTED);
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(!h.rt.status().tailscale_exit_errors.contains_key(name));
+    }
+
+    // Out of retries: the failure stays, nothing reloads.
+    h.api.push_log(TS_EXIT_FAIL);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert_eq!(reloads(), base + EXIT_NODE_MAX_RETRIES as usize);
+    assert_eq!(retrying(), None);
+    assert!(h.rt.status().tailscale_exit_errors.contains_key(name));
+
+    // Asking again reloads at once and renews the budget.
+    h.rt.retry_tailscale_exit_nodes().await;
+    assert_eq!(reloads(), base + EXIT_NODE_MAX_RETRIES as usize + 1);
+    h.api.push_log(TS_STARTED);
+    h.api.push_log(TS_EXIT_FAIL);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(retrying(), Some(1));
+
+    // Stopping the core forgets the pending retry.
+    h.rt.stop_core().await;
+    assert!(h.rt.status().tailscale_exit_retrying.is_empty());
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(reloads(), base + EXIT_NODE_MAX_RETRIES as usize + 1, "no reload without a core");
 }
