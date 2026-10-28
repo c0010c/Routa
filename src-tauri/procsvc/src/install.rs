@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -14,22 +15,21 @@ use windows_service::service::{
     ServiceType,
 };
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, LocalFree, ERROR_INSUFFICIENT_BUFFER, ERROR_SERVICE_ALREADY_RUNNING,
-    ERROR_SERVICE_CANNOT_ACCEPT_CTRL, ERROR_SERVICE_DOES_NOT_EXIST,
-    ERROR_SERVICE_MARKED_FOR_DELETE, ERROR_SERVICE_NOT_ACTIVE, HANDLE,
-};
-use windows_sys::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW, SDDL_REVISION_1,
+    CloseHandle, ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL,
+    ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SERVICE_MARKED_FOR_DELETE, ERROR_SERVICE_NOT_ACTIVE,
+    HANDLE,
 };
 use windows_sys::Win32::Security::{
     GetTokenInformation, TokenElevation, DACL_SECURITY_INFORMATION, TOKEN_ELEVATION, TOKEN_QUERY,
 };
+use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::Services::{
-    QueryServiceObjectSecurity, SetServiceObjectSecurity, SERVICE_QUERY_STATUS, SERVICE_START,
-    SERVICE_STOP,
+    SetServiceObjectSecurity, SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STOP,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
 
 use crate::engine::Guard;
 use crate::paths::same_path;
@@ -41,6 +41,8 @@ pub const OWNER_SID_FILE: &str = "owner.sid";
 const EXE_NAME: &str = "routa-procsvc.exe";
 const DISPLAY_NAME: &str = "Routa 进程分流";
 const DESCRIPTION: &str = "按进程把程序的网络连接转发到 Routa 的代理或阻断（Routa 进程分流组件）。";
+/// SCM 给新建服务的默认 DACL：SYSTEM 管理、Administrators 完全控制、交互/服务登录用户只读。
+const DEFAULT_SERVICE_DACL: &str = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)     (A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)";
 /// 授予组件所有者的服务权限。
 const OWNER_SERVICE_RIGHTS: u32 = SERVICE_START | SERVICE_STOP | SERVICE_QUERY_STATUS;
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -50,11 +52,32 @@ const FILE_RETRY: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(250);
 
 /// `%ProgramFiles%\Routa\ProcessRouting`：组件文件、状态文件所在的受保护目录。
+///
+/// Program Files 取自已知文件夹（`FOLDERID_ProgramFiles`）而不是环境变量：安装命令和
+/// LocalSystem 服务必须得到同一个目录，且用户改环境变量不能把服务的二进制路径引到可写目录。
 pub fn install_dir() -> PathBuf {
-    let base = std::env::var_os("ProgramFiles")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"));
-    base.join("Routa").join("ProcessRouting")
+    program_files().join("Routa").join("ProcessRouting")
+}
+
+fn program_files() -> PathBuf {
+    let mut p: PWSTR = std::ptr::null_mut();
+    // SAFETY: 成功与否 p 都要用 CoTaskMemFree 释放（失败时为 null，释放 null 无害）；
+    // 成功时 p 是以 NUL 结尾的宽字符串。
+    unsafe {
+        let hr = SHGetKnownFolderPath(
+            &FOLDERID_ProgramFiles,
+            KF_FLAG_DEFAULT as u32,
+            std::ptr::null_mut(),
+            &mut p,
+        );
+        let path = (hr >= 0 && !p.is_null()).then(|| {
+            let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+            PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(p, len)))
+        });
+        CoTaskMemFree(p as *const _);
+        // 实际上不会失败；失败时退回系统默认位置（同样只有管理员能写）
+        path.unwrap_or_else(|| PathBuf::from(r"C:\Program Files"))
+    }
 }
 
 /// 复制到安装目录的文件。第一个（服务 exe）取自正在运行的 exe，其余取自 `--source`。
@@ -69,12 +92,14 @@ pub fn files_to_copy() -> [&'static str; 4] {
 
 /// 本机或域用户的 SID：`S-1-5-21-` 后跟 4 段十进制数。
 pub fn valid_owner_sid(sid: &str) -> bool {
-    sid.strip_prefix("S-1-5-21-").is_some_and(|rest| {
-        let parts: Vec<&str> = rest.split('-').collect();
-        parts.len() == 4
-            && parts
-                .iter()
-                .all(|p| p.parse::<u32>().is_ok() && !p.starts_with('+'))
+    ["S-1-5-21-", "S-1-12-1-"].iter().any(|prefix| {
+        sid.strip_prefix(prefix).is_some_and(|rest| {
+            let parts: Vec<&str> = rest.split('-').collect();
+            parts.len() == 4
+                && parts
+                    .iter()
+                    .all(|p| p.parse::<u32>().is_ok() && !p.starts_with('+'))
+        })
     })
 }
 
@@ -302,10 +327,9 @@ fn wait_running(svc: &Service) -> Result<(), String> {
     }
 }
 
-/// 在服务现有 DACL 上加一条所有者 ACE（启动、停止、查询状态）。
+/// 把服务 DACL 设为 [`service_sddl`]。
 fn grant_owner(svc: &Service, owner_sid: &str) -> Result<(), String> {
-    let current = service_dacl(svc).map_err(|e| format!("读取服务权限失败：{e}"))?;
-    let sd = SecurityDescriptor::from_sddl(&with_owner_ace(&current, owner_sid))
+    let sd = SecurityDescriptor::from_sddl(&service_sddl(owner_sid))
         .map_err(|e| format!("生成服务权限失败：{e}"))?;
     // SAFETY: 服务句柄由 svc 持有且有 WRITE_DAC；sd 是有效的自相对安全描述符。
     let ok = unsafe { SetServiceObjectSecurity(svc.raw_handle(), DACL_SECURITY_INFORMATION, sd.0) };
@@ -315,67 +339,10 @@ fn grant_owner(svc: &Service, owner_sid: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 服务当前 DACL 的 SDDL 形式。
-fn service_dacl(svc: &Service) -> io::Result<String> {
-    let h = svc.raw_handle();
-    let mut buf: Vec<u8> = Vec::new();
-    let mut needed = 0u32;
-    // SAFETY: 第一次以空缓冲区询问所需大小，第二次 buf 长度即为 needed。
-    unsafe {
-        if QueryServiceObjectSecurity(
-            h,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            0,
-            &mut needed,
-        ) == 0
-        {
-            let e = io::Error::last_os_error();
-            if e.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
-                return Err(e);
-            }
-        }
-        buf.resize(needed as usize, 0);
-        if QueryServiceObjectSecurity(
-            h,
-            DACL_SECURITY_INFORMATION,
-            buf.as_mut_ptr() as *mut _,
-            needed,
-            &mut needed,
-        ) == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        let mut s: *mut u16 = std::ptr::null_mut();
-        if ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            buf.as_mut_ptr() as *mut _,
-            SDDL_REVISION_1,
-            DACL_SECURITY_INFORMATION,
-            &mut s,
-            std::ptr::null_mut(),
-        ) == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        let len = (0..).take_while(|&i| *s.add(i) != 0).count();
-        let sddl = String::from_utf16_lossy(std::slice::from_raw_parts(s, len));
-        LocalFree(s as *mut _);
-        Ok(sddl)
-    }
-}
-
-/// 去掉 DACL（SDDL）里已有的 `sid` 的 ACE，再追加所有者 ACE，所以重复安装结果不变。
-fn with_owner_ace(sddl: &str, sid: &str) -> String {
-    let start = sddl.find('(').unwrap_or(sddl.len());
-    let mut out = sddl[..start].to_string();
-    for ace in sddl[start..].split_inclusive(')') {
-        let trustee = ace.trim_end_matches(')').rsplit(';').next().unwrap_or("");
-        if !trustee.eq_ignore_ascii_case(sid) {
-            out.push_str(ace);
-        }
-    }
-    out.push_str(&format!("(A;;{OWNER_SERVICE_RIGHTS:#x};;;{sid})"));
-    out
+/// 服务 DACL：SCM 给新服务的默认 DACL（[`DEFAULT_SERVICE_DACL`]）加一条所有者 ACE
+/// （启动、停止、查询状态）。每次安装都从固定基线生成，换所有者重新安装时旧所有者的权限随之消失。
+fn service_sddl(owner_sid: &str) -> String {
+    format!("{DEFAULT_SERVICE_DACL}(A;;{OWNER_SERVICE_RIGHTS:#x};;;{owner_sid})")
 }
 
 /// 在 [`FILE_RETRY`] 内重试文件操作（服务刚停止时文件可能仍被占用）；`NotFound` 不重试。
@@ -412,7 +379,9 @@ mod tests {
 
     #[test]
     fn install_plan_paths() {
+        // 测试进程未改环境变量：已知文件夹与 ProgramFiles 一致
         let base = PathBuf::from(std::env::var_os("ProgramFiles").unwrap());
+        assert!(base.is_absolute());
         let dir = install_dir();
         assert_eq!(dir, base.join(r"Routa\ProcessRouting"));
         assert!(dir.ends_with(r"Routa\ProcessRouting"));
@@ -430,11 +399,17 @@ mod tests {
     #[test]
     fn owner_sid_validation() {
         assert!(valid_owner_sid(
+            "S-1-12-1-1234567890-1234567890-123456789-1234567890"
+        ));
+        assert!(valid_owner_sid(
             "S-1-5-21-1004336348-1177238915-682003330-1001"
         ));
         for bad in [
             "",
             "S-1-5-18",
+            "S-1-12-1-1-2-3",
+            "S-1-12-2-1-2-3-4",
+            "S-1-5-32-544",
             "S-1-5-21-1-2-3",
             "S-1-5-21-1-2-3-4-5",
             "S-1-5-21-1-2-3-x",
@@ -447,17 +422,16 @@ mod tests {
     }
 
     #[test]
-    fn owner_ace_appended_once() {
-        let sid = "S-1-5-21-1-2-3-1001";
-        let base = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWLOCRRC;;;IU)";
-        let once = with_owner_ace(base, sid);
-        assert_eq!(once, format!("{base}(A;;0x34;;;{sid})"));
-        // 重复安装（SID 大小写不同也算同一个）
-        assert_eq!(with_owner_ace(&once, sid), once);
-        assert_eq!(
-            with_owner_ace(&format!("{base}(A;;LC;;;s-1-5-21-1-2-3-1001)"), sid),
-            once
-        );
-        assert_eq!(with_owner_ace("D:", sid), format!("D:(A;;0x34;;;{sid})"));
+    fn service_dacl_from_fixed_baseline() {
+        let old = "S-1-5-21-1-2-3-1001";
+        let new = "S-1-12-1-5-6-7-8";
+        let sddl = service_sddl(new);
+        assert_eq!(sddl, format!("{DEFAULT_SERVICE_DACL}(A;;0x34;;;{new})"));
+        // 换所有者：只有新所有者的 ACE，与上次安装无关
+        assert!(!sddl.contains(old), "{sddl}");
+        assert_eq!(sddl.matches(";;;S-1-").count(), 1, "{sddl}");
+        // 生成的 SDDL 能被系统解析
+        SecurityDescriptor::from_sddl(&service_sddl(old)).unwrap();
+        SecurityDescriptor::from_sddl(&sddl).unwrap();
     }
 }

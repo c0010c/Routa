@@ -24,6 +24,7 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows_sys::Win32::System::Services::{
     CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_CONNECT,
     SERVICE_QUERY_STATUS, SERVICE_STATUS, SERVICE_STOPPED,
@@ -76,6 +77,8 @@ pub struct Session {
 struct Routa {
     session: u64,
     process: Process,
+    /// Routa 进程所在的 Windows 会话；查不到时为 None（注销不会触发它的回落）。
+    windows_session: Option<u32>,
     said_goodbye: bool,
 }
 
@@ -198,10 +201,12 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
             return Response::Error(format!("保存状态失败：{e}"));
         }
         let errors = self.reconciler.apply(state.rules.clone());
+        let state_pid = state.routa_pid;
         self.last = Some(state);
         self.routa = Some(Routa {
             session: session.id,
             process,
+            windows_session: windows_session_of(state_pid),
             said_goodbye: false,
         });
         session.said_goodbye = false;
@@ -247,9 +252,21 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
         }
     }
 
-    /// 关机 / 注销：等同 Routa 正常退出。
+    /// 关机：等同 Routa 正常退出。
     pub fn system_ending(&mut self) {
         self.routa_gone(RoutaGone::Graceful);
+    }
+
+    /// Windows 会话 `windows_session` 注销：只有在场 Routa 所在的会话注销时才等同 Routa 正常退出；
+    /// 别的用户注销（快速切换用户、断开的远程桌面）不影响。
+    pub fn session_logoff(&mut self, windows_session: u32) {
+        if self
+            .routa
+            .as_ref()
+            .is_some_and(|r| r.windows_session == Some(windows_session))
+        {
+            self.system_ending();
+        }
     }
 
     fn interrupted(&mut self, reason: &str) {
@@ -336,6 +353,14 @@ fn validate(state: &DesiredState) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// 进程所在的 Windows 会话 id；进程不存在或无权查询时为 None。
+pub fn windows_session_of(pid: u32) -> Option<u32> {
+    let mut id = 0u32;
+    // SAFETY: id 是可写的局部变量。
+    let ok = unsafe { ProcessIdToSessionId(pid, &mut id) };
+    (ok != 0).then_some(id)
 }
 
 /// 等待用的进程句柄。
@@ -586,7 +611,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::engine::PbAction;
     use crate::persist;
@@ -603,22 +628,22 @@ mod tests {
 
     /// 三个假引擎共享的"系统"。
     #[derive(Debug, Default)]
-    struct World {
-        log: Vec<String>,
-        rules: HashMap<String, (String, PbAction)>,
-        blocks: HashMap<String, String>,
-        permits: HashSet<String>,
-        flows: usize,
+    pub(crate) struct World {
+        pub(crate) log: Vec<String>,
+        pub(crate) rules: HashMap<String, (String, PbAction)>,
+        pub(crate) blocks: HashMap<String, String>,
+        pub(crate) permits: HashSet<String>,
+        pub(crate) flows: usize,
         /// 这些规则 id 的非 Block `set_rule` 失败。
-        fail_rules: HashSet<String>,
+        pub(crate) fail_rules: HashSet<String>,
     }
 
-    type Shared = Arc<Mutex<World>>;
-    struct FakeI(Shared);
-    struct FakeG(Shared);
-    struct FakeK(Shared);
+    pub(crate) type Shared = Arc<Mutex<World>>;
+    pub(crate) struct FakeI(pub(crate) Shared);
+    pub(crate) struct FakeG(pub(crate) Shared);
+    pub(crate) struct FakeK(pub(crate) Shared);
 
-    fn w(s: &Shared) -> std::sync::MutexGuard<'_, World> {
+    pub(crate) fn w(s: &Shared) -> std::sync::MutexGuard<'_, World> {
         s.lock().unwrap()
     }
 
@@ -705,9 +730,9 @@ mod tests {
         }
     }
 
-    type Srv = Server<FakeI, FakeG, FakeK>;
+    pub(crate) type Srv = Server<FakeI, FakeG, FakeK>;
 
-    fn rig(blocks: &[&str]) -> (Reconciler<FakeI, FakeG, FakeK>, Shared) {
+    pub(crate) fn rig(blocks: &[&str]) -> (Reconciler<FakeI, FakeG, FakeK>, Shared) {
         let world = Shared::default();
         for b in blocks {
             w(&world).blocks.insert(exe_key(b), b.to_string());
@@ -721,7 +746,7 @@ mod tests {
     }
 
     /// 用假引擎启动服务：`blocks` 是启动前就存在的永久阻断。
-    fn boot(dir: &Path, blocks: &[&str], clean: bool) -> (Srv, Shared) {
+    pub(crate) fn boot(dir: &Path, blocks: &[&str], clean: bool) -> (Srv, Shared) {
         let (rec, world) = rig(blocks);
         let srv = Server::boot(
             rec,
@@ -732,7 +757,7 @@ mod tests {
         (srv, world)
     }
 
-    fn proxy() -> Action {
+    pub(crate) fn proxy() -> Action {
         Action::Proxy(ProxyTarget {
             kind: ProxyKind::Socks5,
             host: "127.0.0.1".into(),
@@ -742,7 +767,7 @@ mod tests {
         })
     }
 
-    fn rule(id: &str, exe: &str, on_fault: FaultPolicy) -> RuleSpec {
+    pub(crate) fn rule(id: &str, exe: &str, on_fault: FaultPolicy) -> RuleSpec {
         RuleSpec {
             id: id.into(),
             exe_path: exe.into(),
@@ -753,7 +778,7 @@ mod tests {
     }
 
     /// a：on_fault=Block；b：on_fault=Direct；两条都是 Proxy。
-    fn state(exit: ExitPolicy) -> DesiredState {
+    pub(crate) fn state(exit: ExitPolicy) -> DesiredState {
         DesiredState {
             rules: vec![
                 rule("a", A, FaultPolicy::Block),
@@ -764,19 +789,19 @@ mod tests {
         }
     }
 
-    fn action(world: &Shared, id: &str) -> Option<PbAction> {
+    pub(crate) fn action(world: &Shared, id: &str) -> Option<PbAction> {
         w(world).rules.get(id).map(|(_, a)| *a)
     }
 
-    fn permitted(world: &Shared, exe: &str) -> bool {
+    pub(crate) fn permitted(world: &Shared, exe: &str) -> bool {
         w(world).permits.contains(&exe_key(exe))
     }
 
-    fn log(world: &Shared) -> Vec<String> {
+    pub(crate) fn log(world: &Shared) -> Vec<String> {
         w(world).log.clone()
     }
 
-    fn hello(srv: &mut Srv) -> Session {
+    pub(crate) fn hello(srv: &mut Srv) -> Session {
         let mut s = srv.new_session();
         let r = srv.handle(
             Request::Hello {
@@ -794,15 +819,35 @@ mod tests {
         s
     }
 
-    fn status(srv: &mut Srv, s: &mut Session) -> routa_procsvc_proto::SvcStatus {
+    pub(crate) fn status(srv: &mut Srv, s: &mut Session) -> routa_procsvc_proto::SvcStatus {
         match srv.handle(Request::GetStatus, s) {
             Response::Status(st) => st,
             other => panic!("{other:?}"),
         }
     }
 
-    fn applied(srv: &mut Srv, s: &mut Session, st: DesiredState) {
+    pub(crate) fn applied(srv: &mut Srv, s: &mut Session, st: DesiredState) {
         assert_eq!(srv.handle(Request::Apply(st), s), Response::Ok);
+    }
+
+    /// 当前用户的 SID（非提权测试里 Administrators 只是拒绝项，DACL 要靠它放行）。
+    pub(crate) fn current_user_sid() -> String {
+        let out = std::process::Command::new("whoami")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        let sid = text.trim().rsplit(',').next().unwrap().trim_matches('"');
+        assert!(sid.starts_with("S-1-"), "{text}");
+        sid.to_string()
+    }
+
+    pub(crate) fn unique_pipe_name() -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!(r"\\.\pipe\RoutaProcSvc-test-{}-{nanos}", std::process::id())
     }
 
     #[test]
@@ -963,6 +1008,26 @@ mod tests {
         srv.end_session(&s);
         srv.check_routa();
         assert_eq!(log(&world), before);
+        assert_eq!(status(&mut srv, &mut s).last_interruption, None);
+    }
+
+    #[test]
+    fn logoff_only_of_routa_session_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut srv, world) = boot(dir.path(), &[], true);
+        let mine = windows_session_of(std::process::id()).unwrap();
+        // 没有在场的 Routa：什么都不做
+        srv.session_logoff(mine);
+        let mut s = hello(&mut srv);
+        applied(&mut srv, &mut s, state(ExitPolicy::Block));
+        let before = log(&world);
+        srv.session_logoff(mine + 1);
+        assert_eq!(log(&world), before);
+        assert_eq!(action(&world, "b"), Some(PbAction::Proxy));
+        // Routa 所在会话注销：按正常退出
+        srv.session_logoff(mine);
+        assert_eq!(action(&world, "a"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Block));
         assert_eq!(status(&mut srv, &mut s).last_interruption, None);
     }
 
@@ -1192,26 +1257,6 @@ mod tests {
         use super::*;
         use std::time::{Duration, Instant};
         use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
-
-        /// 当前用户的 SID（非提权测试里 Administrators 只是拒绝项，DACL 要靠它放行）。
-        fn current_user_sid() -> String {
-            let out = std::process::Command::new("whoami")
-                .args(["/user", "/fo", "csv", "/nh"])
-                .output()
-                .unwrap();
-            let text = String::from_utf8_lossy(&out.stdout);
-            let sid = text.trim().rsplit(',').next().unwrap().trim_matches('"');
-            assert!(sid.starts_with("S-1-"), "{text}");
-            sid.to_string()
-        }
-
-        fn unique_pipe_name() -> String {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            format!(r"\\.\pipe\RoutaProcSvc-test-{}-{nanos}", std::process::id())
-        }
 
         async fn open(name: &str) -> NamedPipeClient {
             let deadline = Instant::now() + Duration::from_secs(5);

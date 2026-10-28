@@ -51,9 +51,11 @@ pub fn run() -> windows_service::Result<()> {
 }
 
 /// SCM 控制请求，经通道转交给服务主线程处理。
+#[derive(Debug)]
 enum Event {
     Stop,
-    Logoff,
+    /// 该 Windows 会话注销。
+    Logoff(u32),
 }
 
 fn service_main(_args: Vec<OsString>) {
@@ -65,7 +67,7 @@ fn service_main(_args: Vec<OsString>) {
         }
         ServiceControl::SessionChange(p) => {
             if p.reason == SessionChangeReason::SessionLogoff {
-                let _ = tx.send(Event::Logoff);
+                let _ = tx.send(Event::Logoff(p.notification.session_id));
             }
             ServiceControlHandlerResult::NoError
         }
@@ -107,14 +109,13 @@ fn run_service(status: &ServiceStatusHandle, rx: UnboundedReceiver<Event>) -> Se
         ..service_status(ServiceState::Running, ServiceExitCode::NO_ERROR)
     });
 
-    if rt.block_on(serve(&server, rx)).is_err() {
+    if rt.block_on(serve(&server, PIPE_NAME, rx)).is_err() {
         return ServiceExitCode::ServiceSpecific(EXIT_PIPE);
     }
     let _ = status.set_service_status(ServiceStatus {
         wait_hint: STOP_WAIT_HINT,
         ..service_status(ServiceState::StopPending, ServiceExitCode::NO_ERROR)
     });
-    lock(&server).system_ending();
     // 写不了标记只会让下次启动按崩溃处理（更紧），无处上报
     let _ = persist::mark_clean_stop(&dir);
     ServiceExitCode::NO_ERROR
@@ -136,9 +137,13 @@ fn boot(dir: &Path, previous_stop_clean: bool) -> Result<RealServer, u32> {
     ))
 }
 
-/// 服务管道，同时处理 SCM 事件。收到停止请求时返回 `Ok`；管道出错时返回 `Err`。
+/// 在 `pipe_name` 上服务管道，同时处理 SCM 事件：
+/// - 停止：按 Routa 正常退出回落一次，返回 `Ok`；
+/// - 注销：该会话是在场 Routa 所在的会话时按正常退出回落，继续运行；
+/// - 管道出错：返回 `Err`（不回落，由服务重启后的启动流程按崩溃处理）。
 async fn serve<I, G, K>(
     server: &Arc<Mutex<Server<I, G, K>>>,
+    pipe_name: &str,
     mut rx: UnboundedReceiver<Event>,
 ) -> io::Result<()>
 where
@@ -146,7 +151,7 @@ where
     G: Guard,
     K: ConnKiller,
 {
-    let pipe = run_pipe(server.clone(), PIPE_NAME);
+    let pipe = run_pipe(server.clone(), pipe_name);
     tokio::pin!(pipe);
     loop {
         tokio::select! {
@@ -154,8 +159,11 @@ where
                 return Err(r.err().unwrap_or_else(|| io::Error::other("管道服务意外结束")));
             }
             ev = rx.recv() => match ev {
-                Some(Event::Logoff) => lock(server).system_ending(),
-                Some(Event::Stop) | None => return Ok(()),
+                Some(Event::Logoff(id)) => lock(server).session_logoff(id),
+                Some(Event::Stop) | None => {
+                    lock(server).system_ending();
+                    return Ok(());
+                }
             },
         }
     }
@@ -170,5 +178,101 @@ fn service_status(state: ServiceState, exit_code: ServiceExitCode) -> ServiceSta
         checkpoint: 0,
         wait_hint: Duration::default(),
         process_id: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::PbAction;
+    use crate::server::tests::{
+        action, applied, current_user_sid, hello, log, rig, state, unique_pipe_name, Shared,
+    };
+    use crate::server::windows_session_of;
+    use routa_procsvc_proto::ExitPolicy;
+    use std::future::Future;
+    use std::pin::Pin;
+    use tokio::sync::mpsc::UnboundedSender;
+
+    type TestServer = Arc<Mutex<crate::server::tests::Srv>>;
+
+    /// 用假引擎启动服务，并以本进程为 Routa 下发 a(on_fault=Block)、b(on_fault=Direct)，
+    /// on_routa_exit=Block。
+    fn applied_server(dir: &Path, sid: String) -> (TestServer, Shared) {
+        let (rec, world) = rig(&[]);
+        let mut srv = Server::boot(rec, dir.join(persist::STATE_FILE), sid, true);
+        let mut s = hello(&mut srv);
+        applied(&mut srv, &mut s, state(ExitPolicy::Block));
+        (Arc::new(Mutex::new(srv)), world)
+    }
+
+    /// 让 `serve` 跑一小会儿处理事件，断言它仍在运行。
+    async fn settle(fut: &mut Pin<&mut impl Future<Output = io::Result<()>>>) {
+        let r = tokio::time::timeout(Duration::from_millis(200), fut.as_mut()).await;
+        assert!(r.is_err(), "serve ended early: {r:?}");
+    }
+
+    fn send(tx: &UnboundedSender<Event>, ev: Event) {
+        tx.send(ev).unwrap();
+    }
+
+    #[tokio::test]
+    async fn serve_handles_logoff_and_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let (server, world) = applied_server(dir.path(), current_user_sid());
+        let mine = windows_session_of(std::process::id()).unwrap();
+        let name = unique_pipe_name();
+        let (tx, rx) = unbounded_channel();
+        let fut = serve(&server, &name, rx);
+        tokio::pin!(fut);
+        settle(&mut fut).await;
+        assert_eq!(action(&world, "b"), Some(PbAction::Proxy));
+
+        // 别的会话注销：不回落
+        let before = log(&world);
+        send(&tx, Event::Logoff(mine + 1));
+        settle(&mut fut).await;
+        assert_eq!(log(&world), before);
+
+        // Routa 所在会话注销：按 on_routa_exit 回落，服务继续
+        send(&tx, Event::Logoff(mine));
+        settle(&mut fut).await;
+        assert_eq!(action(&world, "a"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Block));
+        let after_logoff = log(&world);
+        assert_ne!(after_logoff, before);
+
+        // 停止：Ok；Routa 已不在，不再重复回落
+        send(&tx, Event::Stop);
+        fut.await.unwrap();
+        assert_eq!(log(&world), after_logoff);
+    }
+
+    #[tokio::test]
+    async fn serve_stop_falls_back_exactly_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (server, world) = applied_server(dir.path(), current_user_sid());
+        let (tx, rx) = unbounded_channel();
+        send(&tx, Event::Stop);
+        let before = log(&world).len();
+        serve(&server, &unique_pipe_name(), rx).await.unwrap();
+        assert_eq!(action(&world, "b"), Some(PbAction::Block));
+        let after = log(&world);
+        // 再要一次回落（例如随后的关机路径）：已无在场的 Routa，没有新操作
+        lock(&server).system_ending();
+        assert_eq!(log(&world), after);
+        assert!(after.len() > before);
+    }
+
+    #[tokio::test]
+    async fn serve_returns_err_when_pipe_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        // 非法 SID：run_pipe 立即出错
+        let (server, world) = applied_server(dir.path(), "WD".into());
+        let (_tx, rx) = unbounded_channel();
+        let before = log(&world);
+        assert!(serve(&server, &unique_pipe_name(), rx).await.is_err());
+        // 管道出错不回落（由重启后的启动流程处理）
+        assert_eq!(log(&world), before);
     }
 }
