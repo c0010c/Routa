@@ -720,17 +720,28 @@ mod tests {
             .unwrap()
             .join("binaries")
             .join("procsvc");
+        const CURL: &str = r"C:\Windows\System32\curl.exe";
+        let curl_ok = || {
+            std::process::Command::new(CURL)
+                .args(["-s", "-m", "8", "-o", "NUL", "https://example.com"])
+                .status()
+                .expect("run curl")
+                .success()
+        };
+        // 基线：没有规则时必须能访问，否则下面的"被阻断"断言没有意义。
+        assert!(curl_ok(), "需要网络：基线 curl https://example.com 失败");
+
         let mut pb = load(&dir, pick_relay_ports().unwrap()).expect("load + start");
         assert!(
             load(&dir, (1, 2)).is_err(),
             "second instance must be refused"
         );
-        pb.set_rule("t", r"C:\Windows\System32\curl.exe", PbAction::Block)
+        pb.set_rule("t", CURL, PbAction::Block)
             .expect("add block rule");
-        // 期间 `curl https://example.com` 应失败。
-        std::thread::sleep(std::time::Duration::from_secs(15));
+        assert!(!curl_ok(), "Block 规则生效时 curl 应失败");
         let _ = pb.flows();
         pb.remove_rule("t").expect("remove rule");
+        assert!(curl_ok(), "删除 Block 规则后 curl 应恢复");
         pb.remove_rule("t").expect("remove unknown rule is Ok");
         drop(pb);
     }
