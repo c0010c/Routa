@@ -23,6 +23,7 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
 
 use crate::engine::Guard;
+use crate::localfile;
 use crate::reconcile::exe_key;
 
 const PROVIDER_KEY: GUID = GUID::from_u128(0x5f3b2c1e_7a44_4d2b_9c51_0b6f2a7e1d01);
@@ -185,9 +186,8 @@ struct AppId(*mut FWP_BYTE_BLOB);
 
 impl AppId {
     fn of(exe: &str) -> Result<AppId, String> {
-        if !Path::new(exe).is_file() {
-            return Err(format!("找不到程序文件：{exe}"));
-        }
+        // 只走本地磁盘、不跟随重解析点；取 app id 期间一直占住路径（见 localfile）。
+        let _held = localfile::hold(Path::new(exe), localfile::Expect::File)?;
         let w = wide(exe);
         let mut blob = null_mut();
         // SAFETY: w 以 0 结尾；成功时 blob 由 WFP 分配，交给 AppId 释放。

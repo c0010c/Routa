@@ -1093,7 +1093,7 @@ pub(crate) mod tests {
             ("dup id", |s| s.rules[1].id = "a".into(), "规则 id 重复"),
             (
                 "dup exe",
-                |s| s.rules[1].exe_path = "c:/APP/A.EXE".into(),
+                |s| s.rules[1].exe_path = r"c:\APP\A.EXE".into(),
                 "程序路径重复",
             ),
             (
@@ -1105,6 +1105,16 @@ pub(crate) mod tests {
                 "drive relative",
                 |s| s.rules[0].exe_path = r"C:a.exe".into(),
                 "绝对路径",
+            ),
+            (
+                "unc",
+                |s| s.rules[0].exe_path = r"\\srv\share\a.exe".into(),
+                "网络路径",
+            ),
+            (
+                "device path",
+                |s| s.rules[0].exe_path = r"\\?\C:\app\a.exe".into(),
+                "网络路径",
             ),
             (
                 "not exe",

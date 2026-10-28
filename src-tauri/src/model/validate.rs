@@ -409,8 +409,19 @@ mod tests {
     }
 
     #[test]
-    fn process_rule_rejects_relative_path() {
-        for p in ["a.exe", "sub\\a.exe", "C:a.exe", "C:\\a.txt", "", "C:\\a,b.exe", "C:\\a;b.exe"] {
+    fn process_rule_rejects_relative_or_network_path() {
+        for p in [
+            "a.exe",
+            "sub\\a.exe",
+            "C:a.exe",
+            "C:\\a.txt",
+            "",
+            "C:\\a,b.exe",
+            "C:\\a;b.exe",
+            r"\\srv\share\a.exe",
+            "//srv/share/a.exe",
+            r"\\?\C:\a.exe",
+        ] {
             let e = errs(&pmodel(|l| vec![prule(p, l)]));
             assert!(
                 e.iter().any(|x| matches!(x, ValidationError::InvalidExePath { .. })),
