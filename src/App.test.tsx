@@ -11,13 +11,13 @@ vi.mock("./bindings", () => ({
 }));
 
 describe("App", () => {
-  it("renders the five navigation items", () => {
+  it("renders the navigation items", () => {
     render(<App />);
     const nav = screen.getByRole("navigation", { name: "主导航" });
     const labels = within(nav)
       .getAllByRole("link")
       .map((l) => l.textContent);
-    expect(labels).toEqual(["概览", "监听器", "出口", "节点", "Tailscale", "设置"]);
+    expect(labels).toEqual(["概览", "监听器", "进程分流", "出口", "节点", "Tailscale", "设置"]);
   });
 });
 
