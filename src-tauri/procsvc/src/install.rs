@@ -1,9 +1,11 @@
 //! `--install` / `--uninstall` / `--cleanup`（spec 6.5、8）。均需管理员，均幂等。
 
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::windows::ffi::OsStringExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -21,8 +23,14 @@ use windows_sys::Win32::Foundation::{
     ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SERVICE_MARKED_FOR_DELETE, ERROR_SERVICE_NOT_ACTIVE,
     HANDLE,
 };
+use windows_sys::Win32::Security::Authorization::{SetSecurityInfo, SE_FILE_OBJECT};
 use windows_sys::Win32::Security::{
-    GetTokenInformation, TokenElevation, DACL_SECURITY_INFORMATION, TOKEN_ELEVATION, TOKEN_QUERY,
+    GetSecurityDescriptorDacl, GetTokenInformation, TokenElevation, ACL, DACL_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_ELEVATION, TOKEN_QUERY,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, WRITE_DAC,
 };
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::Services::{
@@ -32,6 +40,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
 
 use crate::engine::Guard;
+use crate::localfile::{self, Expect};
 use crate::paths::same_path;
 use crate::server::SecurityDescriptor;
 use crate::{pb_ffi, wfp};
@@ -43,6 +52,9 @@ const DISPLAY_NAME: &str = "Routa 进程分流";
 const DESCRIPTION: &str = "按进程把程序的网络连接转发到 Routa 的代理或阻断（Routa 进程分流组件）。";
 /// SCM 给新建服务的默认 DACL：SYSTEM 管理、Administrators 完全控制、交互/服务登录用户只读。
 const DEFAULT_SERVICE_DACL: &str = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)     (A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)";
+/// 安装目录的 DACL：受保护（不继承上级）；SYSTEM、Administrators 完全控制，Users 只读与执行
+/// （0x1200a9 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE）。对象与子目录都继承。
+pub const INSTALL_DIR_SDDL: &str = "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
 /// 授予组件所有者的服务权限。
 const OWNER_SERVICE_RIGHTS: u32 = SERVICE_START | SERVICE_STOP | SERVICE_QUERY_STATUS;
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -55,11 +67,12 @@ const POLL: Duration = Duration::from_millis(250);
 ///
 /// Program Files 取自已知文件夹（`FOLDERID_ProgramFiles`）而不是环境变量：安装命令和
 /// LocalSystem 服务必须得到同一个目录，且用户改环境变量不能把服务的二进制路径引到可写目录。
-pub fn install_dir() -> PathBuf {
-    program_files().join("Routa").join("ProcessRouting")
+/// 取不到时报错，不猜测位置（安装、卸载、服务启动都随之失败）。
+pub fn install_dir() -> Result<PathBuf, String> {
+    Ok(program_files()?.join("Routa").join("ProcessRouting"))
 }
 
-fn program_files() -> PathBuf {
+fn program_files() -> Result<PathBuf, String> {
     let mut p: PWSTR = std::ptr::null_mut();
     // SAFETY: 成功与否 p 都要用 CoTaskMemFree 释放（失败时为 null，释放 null 无害）；
     // 成功时 p 是以 NUL 结尾的宽字符串。
@@ -75,9 +88,59 @@ fn program_files() -> PathBuf {
             PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(p, len)))
         });
         CoTaskMemFree(p as *const _);
-        // 实际上不会失败；失败时退回系统默认位置（同样只有管理员能写）
-        path.unwrap_or_else(|| PathBuf::from(r"C:\Program Files"))
+        path.ok_or_else(|| format!("无法确定 Program Files 目录（HRESULT {hr:#010x}）"))
     }
+}
+
+/// 给安装目录设上 [`INSTALL_DIR_SDDL`]（目录已存在也重设）。路径上任何一层是重解析点
+/// （符号链接、目录联接、挂载点）都拒绝：否则文件可能被写到别处，或 DACL 设到别的目录上。
+fn protect_dir(dir: &Path) -> Result<(), String> {
+    // 检查各层并占住（不能被改名或删除），直到 DACL 设完。
+    let _held = localfile::hold(dir, Expect::Dir)?;
+    let f = OpenOptions::new()
+        .access_mode(READ_CONTROL | WRITE_DAC)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)
+        .map_err(|e| format!("打开 {} 失败：{e}", dir.display()))?;
+    let attrs = f
+        .metadata()
+        .map_err(|e| format!("读取 {} 的属性失败：{e}", dir.display()))?
+        .file_attributes();
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(format!("{} 是重解析点，出于安全原因拒绝", dir.display()));
+    }
+    set_dacl(&f, INSTALL_DIR_SDDL).map_err(|e| format!("设置 {} 的权限失败：{e}", dir.display()))
+}
+
+/// 把 `sddl` 里的 DACL 设为 `f` 的受保护 DACL（系统会把可继承的 ACE 传播到已有的子项）。
+fn set_dacl(f: &fs::File, sddl: &str) -> Result<(), String> {
+    let sd = SecurityDescriptor::from_sddl(sddl).map_err(|e| e.to_string())?;
+    let (mut present, mut defaulted) = (0, 0);
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    // SAFETY: sd 有效；dacl 指向 sd 内部，在 sd 存活期间使用。
+    if unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) } == 0
+        || present == 0
+        || dacl.is_null()
+    {
+        return Err("安全描述符里没有 DACL".into());
+    }
+    // SAFETY: f 是以 WRITE_DAC 打开的有效句柄；dacl 有效。
+    let err = unsafe {
+        SetSecurityInfo(
+            f.as_raw_handle() as _,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            dacl,
+            std::ptr::null(),
+        )
+    };
+    if err != 0 {
+        return Err(io::Error::from_raw_os_error(err as i32).to_string());
+    }
+    Ok(())
 }
 
 /// 复制到安装目录的文件。第一个（服务 exe）取自正在运行的 exe，其余取自 `--source`。
@@ -147,8 +210,9 @@ pub fn install(owner_sid: &str, source: &Path) -> Result<(), String> {
         stop_and_wait(&svc)?;
     }
 
-    let dir = install_dir();
+    let dir = install_dir()?;
     fs::create_dir_all(&dir).map_err(|e| format!("创建 {} 失败：{e}", dir.display()))?;
+    protect_dir(&dir)?;
     for (src, name) in copies {
         let dst = dir.join(name);
         // 用已安装的 exe 重新安装：就是同一个文件
@@ -233,12 +297,14 @@ pub fn uninstall() -> Result<(), String> {
     if let Err(e) = cleanup_filters() {
         errors.push(e);
     }
-    let dir = install_dir();
-    match retry(|| fs::remove_dir_all(&dir)) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => {
-            errors.push(format!("删除 {} 失败：{e}", dir.display()))
-        }
-        _ => {}
+    match install_dir() {
+        Ok(dir) => match retry(|| fs::remove_dir_all(&dir)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                errors.push(format!("删除 {} 失败：{e}", dir.display()))
+            }
+            _ => {}
+        },
+        Err(e) => errors.push(e),
     }
     if errors.is_empty() {
         Ok(())
@@ -382,7 +448,7 @@ mod tests {
         // 测试进程未改环境变量：已知文件夹与 ProgramFiles 一致
         let base = PathBuf::from(std::env::var_os("ProgramFiles").unwrap());
         assert!(base.is_absolute());
-        let dir = install_dir();
+        let dir = install_dir().unwrap();
         assert_eq!(dir, base.join(r"Routa\ProcessRouting"));
         assert!(dir.ends_with(r"Routa\ProcessRouting"));
         assert_eq!(
@@ -394,6 +460,113 @@ mod tests {
                 "WinDivert64.sys"
             ]
         );
+    }
+
+    /// 句柄上当前 DACL 的 SDDL（含 P/AI 标志）。
+    fn dacl_sddl_of(dir: &Path) -> String {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
+        };
+        let f = OpenOptions::new()
+            .access_mode(READ_CONTROL)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(dir)
+            .unwrap();
+        let mut sd = std::ptr::null_mut();
+        let mut s: PWSTR = std::ptr::null_mut();
+        let mut len = 0u32;
+        // SAFETY: 句柄有效；sd、s 由系统 LocalAlloc，用后释放。
+        unsafe {
+            let err = GetSecurityInfo(
+                f.as_raw_handle() as _,
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut sd,
+            );
+            assert_eq!(err, 0);
+            let ok = ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                sd,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut s,
+                &mut len,
+            );
+            assert_ne!(ok, 0);
+            let out = String::from_utf16_lossy(std::slice::from_raw_parts(s, len as usize));
+            LocalFree(s as _);
+            LocalFree(sd);
+            out.trim_end_matches('\0').to_string()
+        }
+    }
+
+    #[test]
+    fn install_dir_sddl_is_protected_and_parses() {
+        use windows_sys::Win32::Security::{GetSecurityDescriptorControl, SE_DACL_PROTECTED};
+        assert_eq!(
+            INSTALL_DIR_SDDL,
+            "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)"
+        );
+        let sd = SecurityDescriptor::from_sddl(INSTALL_DIR_SDDL).unwrap();
+        let (mut control, mut rev) = (0u16, 0u32);
+        // SAFETY: sd 有效。
+        assert_ne!(
+            unsafe { GetSecurityDescriptorControl(sd.0, &mut control, &mut rev) },
+            0
+        );
+        assert_ne!(control & SE_DACL_PROTECTED, 0);
+        assert!(set_dacl(
+            &fs::File::open(std::env::current_exe().unwrap()).unwrap(),
+            "not sddl"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn protect_dir_sets_dacl_and_refuses_reparse_points() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ProcessRouting");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("a.txt"), b"x").unwrap();
+        // 已存在的目录照样重设（本进程是目录所有者，非管理员也能改 DACL）
+        protect_dir(&dir).unwrap();
+        let got = dacl_sddl_of(&dir);
+        assert!(got.starts_with("D:PAI"), "{got}");
+        for ace in [
+            "(A;OICI;FA;;;SY)",
+            "(A;OICI;FA;;;BA)",
+            "(A;OICI;0x1200a9;;;BU)",
+        ] {
+            assert!(got.contains(ace), "{ace} missing in {got}");
+        }
+        assert_eq!(got.matches("(A;").count(), 3, "{got}");
+
+        // 目录联接（以及经过联接的路径）拒绝
+        let link = tmp.path().join("link");
+        fs::create_dir(tmp.path().join("other")).unwrap();
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(tmp.path().join("other"))
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "mklink /J failed");
+        let e = protect_dir(&link).unwrap_err();
+        assert!(e.contains("目录联接"), "{e}");
+
+        // 还原成本用户可删的权限，好让临时目录被清理
+        let f = OpenOptions::new()
+            .access_mode(READ_CONTROL | WRITE_DAC)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&dir)
+            .unwrap();
+        set_dacl(&f, "D:PAI(A;OICI;FA;;;WD)").unwrap();
     }
 
     #[test]

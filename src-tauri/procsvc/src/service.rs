@@ -37,6 +37,7 @@ const EXIT_PROXYBRIDGE: u32 = 3;
 const EXIT_WFP: u32 = 4;
 const EXIT_RUNTIME: u32 = 5;
 const EXIT_PIPE: u32 = 6;
+const EXIT_INSTALL_DIR: u32 = 7;
 
 const START_WAIT_HINT: Duration = Duration::from_secs(30);
 const STOP_WAIT_HINT: Duration = Duration::from_secs(10);
@@ -87,7 +88,9 @@ fn run_service(status: &ServiceStatusHandle, rx: UnboundedReceiver<Event>) -> Se
         wait_hint: START_WAIT_HINT,
         ..service_status(ServiceState::StartPending, ServiceExitCode::NO_ERROR)
     });
-    let dir = install_dir();
+    let Ok(dir) = install_dir() else {
+        return ServiceExitCode::ServiceSpecific(EXIT_INSTALL_DIR);
+    };
     let previous_stop_clean = persist::take_clean_stop(&dir);
     // 真实引擎含裸句柄、不是 Send：服务只在本线程（current_thread 运行时）上使用它，
     // Arc<Mutex> 只是 run_pipe 的接口形状，不跨线程。
