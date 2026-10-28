@@ -1,3 +1,4 @@
+import AppsOutlined from "@mui/icons-material/AppsOutlined";
 import AltRouteOutlined from "@mui/icons-material/AltRouteOutlined";
 import DashboardOutlined from "@mui/icons-material/DashboardOutlined";
 import HubOutlined from "@mui/icons-material/HubOutlined";
@@ -15,6 +16,7 @@ const DRAWER_WIDTH = 200;
 export const pages = [
   { path: "/", label: "概览", icon: <DashboardOutlined /> },
   { path: "/listeners", label: "监听器", icon: <InputOutlined /> },
+  { path: "/process-routing", label: "进程分流", icon: <AppsOutlined /> },
   { path: "/exits", label: "出口", icon: <AltRouteOutlined /> },
   { path: "/nodes", label: "节点", icon: <HubOutlined /> },
   { path: "/tailscale", label: "Tailscale", icon: <VpnLockOutlined /> },

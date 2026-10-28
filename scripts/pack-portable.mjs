@@ -1,5 +1,5 @@
 // Builds the app without installers and zips a portable folder:
-// routa.exe + mihomo.exe + `portable` marker + LICENSE.
+// routa.exe + mihomo.exe + routa-procsvc.exe + procsvc\ (process-routing files) + `portable` marker + LICENSE.
 // `--skip-build` reuses an existing release build.
 import { execFileSync, execSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const release = join(root, "src-tauri", "target", "release");
+const procsvcSrc = join(root, "src-tauri", "binaries", "procsvc");
 const { productName, version } = JSON.parse(
   readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"),
 );
@@ -26,11 +27,19 @@ const MARKER_NOTE =
 const files = [
   [join(release, `${productName}.exe`), `${productName}.exe`],
   [join(release, "mihomo.exe"), "mihomo.exe"],
+  [join(release, "routa-procsvc.exe"), "routa-procsvc.exe"],
+  ...["ProxyBridgeCore.dll", "WinDivert.dll", "WinDivert64.sys"].map((f) => [
+    join(procsvcSrc, f),
+    join("procsvc", f),
+  ]),
   [join(root, "LICENSE"), "LICENSE"],
 ];
 for (const [src] of files) {
   if (!existsSync(src)) {
-    console.error(`missing ${src}; run without --skip-build (and \`pnpm fetch-mihomo\` first)`);
+    console.error(
+      `missing ${src}; run without --skip-build (and \`pnpm fetch-mihomo\`, ` +
+        "`pnpm fetch-windivert`, `pnpm build-proxybridge` first)",
+    );
     process.exit(1);
   }
 }
@@ -40,7 +49,7 @@ const stage = join(outDir, productName);
 const zipPath = join(outDir, `${productName}_${version}_x64_portable.zip`);
 rmSync(stage, { recursive: true, force: true });
 rmSync(zipPath, { force: true });
-mkdirSync(stage, { recursive: true });
+mkdirSync(join(stage, "procsvc"), { recursive: true });
 for (const [src, name] of files) copyFileSync(src, join(stage, name));
 writeFileSync(join(stage, "portable"), MARKER_NOTE);
 

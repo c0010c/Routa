@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect } from "react";
-import type { RuntimeStatus, TrafficTick } from "../bindings";
+import type { Flow, ProcRouteStatus, RuntimeStatus, TrafficTick } from "../bindings";
+import { setFlows } from "./procroute";
 import { setTraffic } from "./trafficStore";
 
 /** Subscribes to Rust-side events. Call once, from App. */
@@ -23,6 +24,8 @@ export function useRuntimeEvents(): void {
       }),
     );
     reg(listen<TrafficTick>("traffic", (e) => setTraffic(e.payload)));
+    reg(listen<ProcRouteStatus>("procroute-status", (e) => qc.setQueryData(["procroute"], e.payload)));
+    reg(listen<Flow[]>("procroute-flows", (e) => setFlows(e.payload)));
 
     return () => {
       disposed = true;

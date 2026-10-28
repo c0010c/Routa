@@ -1,3 +1,6 @@
+[workspace]
+members = ["procsvc-proto", "procsvc"]
+
 [package]
 name = "routa"
 version = "0.2.0"
@@ -29,6 +32,7 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["process", "io-util", "time", "net", "macros", "rt-multi-thread", "sync"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "gzip", "native-tls"] }
 tokio-tungstenite = "0.26"
+routa-procsvc-proto = { path = "procsvc-proto", features = ["specta"] }
 anyhow = "1"
 getrandom = "0.3"
 
@@ -39,4 +43,4 @@ wiremock = "0.6"
 
 [target."cfg(windows)".dependencies]
 ipconfig = "0.3.4"
-windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Com", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_Services", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

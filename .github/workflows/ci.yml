@@ -70,8 +70,14 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Fetch and verify the pinned mihomo core
         run: pnpm fetch-mihomo
+      - name: Fetch WinDivert
+        run: pnpm fetch-windivert
+      - name: Build ProxyBridgeCore.dll
+        run: pnpm build-proxybridge
+      - name: Build the process-routing service
+        run: pnpm build-procsvc --locked
       - name: Rust tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
       - name: Real mihomo integration test
         timeout-minutes: 10
         env:
@@ -91,6 +97,10 @@ jobs:
           if (!(Test-Path $zip)) { throw "Missing portable archive: $zip" }
           $entries = & "$env:SystemRoot/System32/tar.exe" -tf $zip
           if ($LASTEXITCODE -ne 0) { throw "Cannot read portable archive" }
-          foreach ($file in @("$name.exe", 'mihomo.exe', 'portable', 'LICENSE')) {
+          $required = @(
+            "$name.exe", 'mihomo.exe', 'routa-procsvc.exe', 'procsvc/ProxyBridgeCore.dll',
+            'procsvc/WinDivert.dll', 'procsvc/WinDivert64.sys', 'portable', 'LICENSE'
+          )
+          foreach ($file in $required) {
             if ("$name/$file" -notin $entries) { throw "Missing archive entry: $name/$file" }
           }

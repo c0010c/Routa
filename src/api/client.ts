@@ -59,6 +59,7 @@ function useApiMutation<A extends unknown[], T>(
       if (typeof data === "object" && data !== null && isApplyOutcome(data)) apply.show(data);
       void qc.invalidateQueries({ queryKey: ["model"] });
       void qc.invalidateQueries({ queryKey: ["status"] });
+      void qc.invalidateQueries({ queryKey: ["procroute"] });
     },
   });
 }
@@ -81,7 +82,7 @@ function isApplyOutcome(d: object): d is ApplyOutcome {
 type Fn<A extends unknown[], T> = (...a: A) => Promise<Result<T, ValidationError[] | string | null>>;
 
 // Each hook's mutate takes a single argument (or an args tuple for multi-arg commands).
-function make<A extends unknown[], T>(get: () => Fn<A, T>) {
+export function make<A extends unknown[], T>(get: () => Fn<A, T>) {
   return () => {
     const m = useApiMutation<A, T>((...a) => get()(...a));
     const apply = useApplyResult();

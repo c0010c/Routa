@@ -47,6 +47,7 @@ const model: Model = {
     },
   ],
   node_groups: [{ id: "g1", name: "自建组1" }],
+  process_routing: { enabled: false, on_routa_exit: "Block", rules: [] },
 };
 const status: RuntimeStatus = {
   core: "Running",
@@ -62,6 +63,8 @@ const status: RuntimeStatus = {
   tailscale: {},
   tailscale_exit_errors: {},
   tailscale_exit_retrying: {},
+  core_stop_reason: null,
+  core_recovering: false,
 };
 
 function renderNodes(st: RuntimeStatus = status) {

@@ -1,3 +1,4 @@
+use super::normalize::normalize_exe_path;
 use super::types::*;
 
 #[derive(serde::Serialize, Clone, Debug, PartialEq, specta::Type)]
@@ -12,6 +13,64 @@ pub enum ValidationError {
     InvalidProxy { name: String, reason: String },
     /// The generated config was rejected by `mihomo -t`.
     CoreRejected { message: String },
+    DuplicateProcessRule { exe_path: String },
+    InvalidExePath { exe_path: String, reason: String },
+    ListenerTypeNotAllowed { listener: String },
+    TooManyProcessRules { max: u32 },
+}
+
+/// 已启用的进程分流规则数上限（与服务端一致）。
+pub const MAX_PROCESS_RULES: u32 = 32;
+
+fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
+    let pr = &model.process_routing;
+    let mut seen = std::collections::HashSet::new();
+    let mut reported = std::collections::HashSet::new();
+    for r in &pr.rules {
+        let path = normalize_exe_path(&r.exe_path);
+        if let Some(reason) = routa_procsvc_proto::exe_path_problem(&path) {
+            errors.push(ValidationError::InvalidExePath { exe_path: r.exe_path.clone(), reason });
+        } else {
+            let key = path.to_lowercase();
+            if !seen.insert(key.clone()) && reported.insert(key) {
+                errors.push(ValidationError::DuplicateProcessRule { exe_path: path });
+            }
+        }
+        match model.listeners.iter().find(|l| l.id == r.listener) {
+            None => errors.push(ValidationError::DanglingRef {
+                what: format!("process rule[{}].listener -> {}", r.exe_path, r.listener.0),
+            }),
+            Some(l) if l.listener_type == ListenerType::Http => {
+                errors.push(ValidationError::ListenerTypeNotAllowed { listener: l.name.clone() })
+            }
+            Some(_) => {}
+        }
+    }
+    if pr.rules.iter().filter(|r| r.user_enabled).count() > MAX_PROCESS_RULES as usize {
+        errors.push(ValidationError::TooManyProcessRules { max: MAX_PROCESS_RULES });
+    }
+}
+
+/// 规则的 exe 不得是 Routa 自身、内置 mihomo 或自定义内核（大小写不敏感）。
+pub fn validate_forbidden_exes(pr: &ProcessRouting, forbidden: &[std::path::PathBuf]) -> Result<(), Vec<ValidationError>> {
+    let keys: Vec<String> = forbidden
+        .iter()
+        .map(|p| normalize_exe_path(&p.to_string_lossy()).to_lowercase())
+        .collect();
+    let errors: Vec<ValidationError> = pr
+        .rules
+        .iter()
+        .filter(|r| keys.contains(&normalize_exe_path(&r.exe_path).to_lowercase()))
+        .map(|r| ValidationError::InvalidExePath {
+            exe_path: r.exe_path.clone(),
+            reason: "不能对 Routa 自身或 mihomo 内核做进程分流".to_string(),
+        })
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 /// An id safe to use as a single path component (e.g. `tailscale/<id>`): non-empty, `[A-Za-z0-9-]` only.
@@ -277,6 +336,7 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
     }
 
     validate_manual(model, &mut errors);
+    validate_process_routing(model, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -317,6 +377,81 @@ mod tests {
             .iter()
             .filter(|x| matches!(x, ValidationError::InvalidName { name: n, .. } if n == name))
             .count()
+    }
+
+    fn prule(path: &str, l: &Listener) -> ProcessRule {
+        ProcessRule { exe_path: path.into(), listener: l.id.clone(), ..ProcessRule::default() }
+    }
+    fn pmodel(rules: impl FnOnce(&Listener) -> Vec<ProcessRule>) -> Model {
+        let mut m = Model::default();
+        let l = Listener::new_default("l1".into(), 7891);
+        m.process_routing.rules = rules(&l);
+        m.listeners.push(l);
+        m
+    }
+
+    #[test]
+    fn process_rule_duplicate_path_case_insensitive() {
+        let m = pmodel(|l| vec![prule("C:\\测试\\Ä.exe", l), prule("c:/测试/ä.EXE", l)]);
+        let e = errs(&m);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(matches!(&e[0], ValidationError::DuplicateProcessRule { .. }));
+        assert_eq!(validate(&pmodel(|l| vec![prule(" C:/a/b.exe ", l)])), Ok(()));
+    }
+
+    #[test]
+    fn process_rule_rejects_http_listener() {
+        let mut m = pmodel(|l| vec![prule("C:\\a.exe", l)]);
+        m.listeners[0].listener_type = ListenerType::Http;
+        assert!(errs(&m).contains(&ValidationError::ListenerTypeNotAllowed { listener: "l1".into() }));
+        m.listeners[0].listener_type = ListenerType::Socks;
+        assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn process_rule_rejects_relative_or_network_path() {
+        for p in [
+            "a.exe",
+            "sub\\a.exe",
+            "C:a.exe",
+            "C:\\a.txt",
+            "",
+            "C:\\a,b.exe",
+            "C:\\a;b.exe",
+            r"\\srv\share\a.exe",
+            "//srv/share/a.exe",
+            r"\\?\C:\a.exe",
+        ] {
+            let e = errs(&pmodel(|l| vec![prule(p, l)]));
+            assert!(
+                e.iter().any(|x| matches!(x, ValidationError::InvalidExePath { .. })),
+                "{p:?} should be rejected: {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn process_rule_rejects_core_exe() {
+        let m = pmodel(|l| vec![prule("C:/Core/Mihomo.EXE", l)]);
+        let forbidden = vec![std::path::PathBuf::from("C:\\Other\\x.exe"), std::path::PathBuf::from("c:\\core\\mihomo.exe")];
+        let e = validate_forbidden_exes(&m.process_routing, &forbidden).unwrap_err();
+        assert!(matches!(&e[0], ValidationError::InvalidExePath { .. }));
+        assert_eq!(validate_forbidden_exes(&m.process_routing, &forbidden[..1]), Ok(()));
+    }
+
+    #[test]
+    fn process_rule_dangling_listener() {
+        let mut m = pmodel(|l| vec![prule("C:\\a.exe", l)]);
+        m.listeners.clear();
+        assert!(errs(&m).iter().any(|x| matches!(x, ValidationError::DanglingRef { .. })));
+    }
+
+    #[test]
+    fn process_rule_too_many_enabled() {
+        let m = pmodel(|l| (0..33).map(|i| prule(&format!("C:\\a{i}.exe"), l)).collect());
+        assert!(errs(&m).contains(&ValidationError::TooManyProcessRules { max: 32 }));
+        let m = pmodel(|l| (0..32).map(|i| prule(&format!("C:\\a{i}.exe"), l)).collect());
+        assert_eq!(validate(&m), Ok(()));
     }
 
     #[test]

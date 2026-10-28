@@ -24,6 +24,7 @@ const model: Model = {
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
   manual_nodes: [],
   node_groups: [],
+  process_routing: { enabled: false, on_routa_exit: "Block", rules: [] },
 };
 const status: RuntimeStatus = {
   core: "Running",
@@ -39,6 +40,8 @@ const status: RuntimeStatus = {
   tailscale: {},
   tailscale_exit_errors: {},
   tailscale_exit_retrying: {},
+  core_stop_reason: null,
+  core_recovering: false,
 };
 
 describe("Listeners", () => {

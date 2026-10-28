@@ -25,6 +25,9 @@ id_type!(ExitId);
 id_type!(ListenerId);
 id_type!(ManualNodeId);
 id_type!(NodeGroupId);
+id_type!(ProcessRuleId);
+
+pub use routa_procsvc_proto::{ExitPolicy, FaultPolicy};
 
 /// Windows 网卡标识（GUID）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
@@ -285,6 +288,46 @@ pub struct Model {
     pub settings: Settings,
     pub manual_nodes: Vec<ManualNode>,
     pub node_groups: Vec<NodeGroup>,
+    pub process_routing: ProcessRouting,
+}
+
+/// 按进程分流的一条规则：指定 exe 的流量走某个 Listener。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+#[serde(default)]
+pub struct ProcessRule {
+    pub id: ProcessRuleId,
+    pub exe_path: String,
+    pub listener: ListenerId,
+    pub on_fault: FaultPolicy,
+    pub reset_on_change: bool,
+    pub user_enabled: bool,
+}
+
+impl Default for ProcessRule {
+    fn default() -> Self {
+        Self {
+            id: ProcessRuleId::new(),
+            exe_path: String::new(),
+            listener: ListenerId(String::new()),
+            on_fault: FaultPolicy::Block,
+            reset_on_change: false,
+            user_enabled: true,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+#[serde(default)]
+pub struct ProcessRouting {
+    pub enabled: bool,
+    pub on_routa_exit: ExitPolicy,
+    pub rules: Vec<ProcessRule>,
+}
+
+impl Default for ProcessRouting {
+    fn default() -> Self {
+        Self { enabled: false, on_routa_exit: ExitPolicy::Block, rules: vec![] }
+    }
 }
 
 #[cfg(test)]
@@ -321,6 +364,18 @@ mod tests {
         // A missing top-level section is the default too.
         let m: Model = serde_json::from_str("{}").unwrap();
         assert_eq!(m, Model::default());
+    }
+
+    #[test]
+    fn old_state_json_without_process_routing_loads() {
+        let m: Model = serde_json::from_str(r#"{"subscriptions": [], "listeners": []}"#).unwrap();
+        assert_eq!(m.process_routing, ProcessRouting::default());
+        assert!(!m.process_routing.enabled);
+        assert_eq!(m.process_routing.on_routa_exit, ExitPolicy::Block);
+        assert!(m.process_routing.rules.is_empty());
+        // 规则缺字段取默认值
+        let r: ProcessRule = serde_json::from_str(r#"{"exe_path": "C:\\a.exe"}"#).unwrap();
+        assert_eq!((r.on_fault, r.reset_on_change, r.user_enabled), (FaultPolicy::Block, false, true));
     }
 
     #[test]
@@ -397,6 +452,16 @@ mod tests {
             settings: Settings::default(),
             manual_nodes: vec![proxy_node, ts_node],
             node_groups: vec![group],
+            process_routing: ProcessRouting {
+                enabled: true,
+                on_routa_exit: ExitPolicy::Direct,
+                rules: vec![ProcessRule {
+                    exe_path: r"C:\测试\a.exe".into(),
+                    on_fault: FaultPolicy::Direct,
+                    reset_on_change: true,
+                    ..ProcessRule::default()
+                }],
+            },
         };
         let json = serde_json::to_string(&m).unwrap();
         let back: Model = serde_json::from_str(&json).unwrap();

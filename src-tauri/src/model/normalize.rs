@@ -10,7 +10,16 @@ fn tailscale_interface(model: &Model, r: &NodeRef) -> Option<Option<InterfaceGui
     }
 }
 
+/// exe 路径规范化：去首尾空白、`/` → `\`。判重时再对结果取 `to_lowercase()`。
+pub fn normalize_exe_path(p: &str) -> String {
+    p.trim().replace('/', "\\")
+}
+
 pub fn normalize(model: &mut Model) {
+    for r in &mut model.process_routing.rules {
+        r.exe_path = normalize_exe_path(&r.exe_path);
+    }
+
     // Compute against the immutable model first, then apply.
     let mut ifaces: Vec<Option<Option<InterfaceGuid>>> = Vec::new();
     let mut selects: Vec<Option<Option<NodeRef>>> = Vec::new();

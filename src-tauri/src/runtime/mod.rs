@@ -10,7 +10,7 @@ mod tasks;
 
 use std::collections::HashMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -30,7 +30,8 @@ use crate::core::process::{wait_ready, CheckError, CoreHandleLike, CoreLauncher,
 use crate::model::health::{evaluate, ExitStatus, Health};
 use crate::model::normalize::normalize;
 use crate::model::{
-    validate, FetchResult, ListenerId, Model, Node, Settings, Subscription, SubscriptionId, ValidationError,
+    validate, validate::validate_forbidden_exes, FetchResult, ListenerId, Model, Node, ProcessRouting, Settings,
+    Subscription, SubscriptionId, ValidationError,
 };
 use crate::netif::{InterfaceSource, NetInterface};
 use crate::stats::delay::{test_many, DelayBook, DelayError, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
@@ -81,6 +82,21 @@ pub struct RuntimeStatus {
     /// Per Tailscale proxy name: the automatic retry (1..=EXIT_NODE_MAX_RETRIES)
     /// scheduled for its exit node failure. A failure without an entry here is final.
     pub tailscale_exit_retrying: HashMap<String, u32>,
+    /// Why Routa last stopped the core itself; `None` once a start succeeds
+    /// (and before any stop). `shutdown` leaves it as it was.
+    pub core_stop_reason: Option<CoreStopReason>,
+    /// The core exited unexpectedly and has not reached `Running` since: a
+    /// `Starting` in this state is a recovery, not a normal start. Not set by
+    /// a fail-closed stop (`core_stop_reason` says `FailClosed` instead).
+    pub core_recovering: bool,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
+pub enum CoreStopReason {
+    /// `stop_core`.
+    User,
+    /// An apply failed and even the empty config could not be loaded.
+    FailClosed,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
@@ -237,7 +253,7 @@ impl Inner {
     }
 
     fn set_core_state(&self, state: CoreState) {
-        self.status.lock().unwrap().core = state;
+        set_core(&mut self.status.lock().unwrap(), state);
         self.emit_status();
     }
 
@@ -290,6 +306,22 @@ impl Inner {
         self.save_model(&m);
         *self.model.lock().unwrap() = m.clone();
         eng.model = m;
+    }
+
+    /// Executables a process rule must not name: Routa itself, the bundled
+    /// mihomo, the custom core (`settings.core_path`) if one is set, and the
+    /// process routing service exe (bundled helper and installed copy).
+    fn forbidden_exes(&self, settings: &Settings) -> Vec<PathBuf> {
+        let bundled = Settings { core_path: None, ..settings.clone() };
+        let mut out = Vec::new();
+        match std::env::current_exe() {
+            Ok(p) => out.push(p),
+            Err(e) => eprintln!("runtime: cannot resolve Routa's own exe for process rule checks: {e}"),
+        }
+        out.extend((self.launcher_for)(&bundled).core_binary());
+        out.extend(settings.core_path.as_deref().filter(|p| !p.trim().is_empty()).map(PathBuf::from));
+        out.extend(crate::procroute::elevate::component_exes());
+        out
     }
 
     /// Writes `yaml` to a temp file inside the core workdir, runs `mihomo -t`
@@ -460,7 +492,8 @@ impl Inner {
             Ok(()) => {
                 {
                     let mut st = self.status.lock().unwrap();
-                    st.core = CoreState::Running;
+                    set_core(&mut st, CoreState::Running);
+                    st.core_stop_reason = None;
                     if st.startup_error.as_deref().is_some_and(|e| e.starts_with(CONTROLLER_BUSY_PREFIX)) {
                         st.startup_error = None;
                     }
@@ -588,7 +621,13 @@ impl Inner {
             // The applier already stopped it; the supervisor restarts it
             // (empty config first) with backoff.
             self.drop_core(eng).await;
-            self.status.lock().unwrap().core = CoreState::Crashed { exit_code: None };
+            let mut st = self.status.lock().unwrap();
+            set_core(&mut st, CoreState::Crashed { exit_code: None });
+            // Routa stopped it on purpose (fail closed), it did not crash:
+            // the reason, not a recovery, describes it until a start reaches
+            // Running, including the supervisor's Starting retries.
+            st.core_recovering = false;
+            st.core_stop_reason = Some(CoreStopReason::FailClosed);
         }
         {
             let mut st = self.status.lock().unwrap();
@@ -769,6 +808,17 @@ impl Inner {
     }
 }
 
+/// Sets the core state and tracks `core_recovering`: an unexpected stop
+/// (`Crashed`) starts a recovery, reaching `Running` or a stop ends it.
+fn set_core(st: &mut RuntimeStatus, state: CoreState) {
+    match state {
+        CoreState::Crashed { .. } => st.core_recovering = true,
+        CoreState::Running | CoreState::Stopped => st.core_recovering = false,
+        CoreState::Starting => {}
+    }
+    st.core = state;
+}
+
 fn sync_tailscale(ts: &TailscaleTrack, st: &mut RuntimeStatus) {
     st.tailscale = ts.tracker.states();
     st.tailscale_exit_errors = ts.tracker.exit_errors();
@@ -806,6 +856,8 @@ impl Runtime {
             tailscale: HashMap::new(),
             tailscale_exit_errors: HashMap::new(),
             tailscale_exit_retrying: HashMap::new(),
+            core_stop_reason: None,
+            core_recovering: false,
         };
         let inner = Inner {
             store,
@@ -917,6 +969,31 @@ impl Runtime {
         Ok((self.inner.apply(&mut eng).await, r))
     }
 
+    /// clone → f → normalize → validate (the rules must not name Routa or a
+    /// mihomo binary) → save → update the model → emit. Never reloads or
+    /// restarts mihomo: process routing is not part of its config. Validation
+    /// errors leave everything untouched. After `shutdown` nothing is saved
+    /// and `Ok(())` is returned (the app is exiting; there is nobody to tell).
+    pub async fn mutate_process_routing(&self, f: impl FnOnce(&mut ProcessRouting)) -> Result<(), Vec<ValidationError>> {
+        let mut eng = self.inner.engine.lock().await;
+        if self.inner.is_shut_down() {
+            return Ok(());
+        }
+        let mut m = eng.model.clone();
+        f(&mut m.process_routing);
+        normalize(&mut m);
+        let mut errors = validate_forbidden_exes(&m.process_routing, &self.inner.forbidden_exes(&m.settings))
+            .err()
+            .unwrap_or_default();
+        errors.extend(validate(&m).err().unwrap_or_default());
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        self.inner.commit_model(&mut eng, m);
+        self.inner.emit_status();
+        Ok(())
+    }
+
     /// Re-lists adapters; on any change re-evaluates and re-applies.
     pub async fn refresh_interfaces(&self) -> bool {
         self.inner.refresh_interfaces().await
@@ -929,6 +1006,13 @@ impl Runtime {
             return;
         }
         eng.supervise = true;
+        // Asked for by the user: not a recovery and no longer a stop,
+        // whatever happened before.
+        {
+            let mut st = self.inner.status.lock().unwrap();
+            st.core_recovering = false;
+            st.core_stop_reason = None;
+        }
         let _ = self.inner.start_core(&mut eng).await;
     }
 
@@ -937,7 +1021,11 @@ impl Runtime {
         let mut eng = self.inner.engine.lock().await;
         eng.supervise = false;
         self.inner.drop_core(&mut eng).await;
-        self.inner.status.lock().unwrap().failed_listeners.clear();
+        {
+            let mut st = self.inner.status.lock().unwrap();
+            st.failed_listeners.clear();
+            st.core_stop_reason = Some(CoreStopReason::User);
+        }
         self.inner.set_core_state(CoreState::Stopped);
     }
 

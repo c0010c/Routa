@@ -4,6 +4,7 @@ pub mod core;
 pub mod model;
 pub mod netif;
 pub mod portable;
+pub mod procroute;
 pub mod runtime;
 pub mod scheduler;
 pub mod stats;
@@ -119,7 +120,10 @@ fn build_runtime(
     tauri::async_runtime::spawn(async move {
         while let Some(ev) = rx.recv().await {
             let res = match ev {
-                RuntimeEvent::Status(s) => handle.emit("runtime-status", s),
+                RuntimeEvent::Status(s) => {
+                    procroute::client::runtime_changed();
+                    handle.emit("runtime-status", s)
+                }
                 RuntimeEvent::Traffic(t) => handle.emit("traffic", t),
             };
             if let Err(e) = res {
@@ -128,6 +132,63 @@ fn build_runtime(
         }
     });
     Ok(rt)
+}
+
+/// Commands and extra types exported to `src/bindings.ts`.
+fn specta_builder() -> Builder<tauri::Wry> {
+    Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            commands::get_model,
+            commands::get_status,
+            commands::save_listener,
+            commands::delete_listener,
+            commands::save_exit,
+            commands::delete_exit,
+            commands::save_subscription,
+            commands::delete_subscription,
+            commands::refresh_subscription,
+            commands::select_group_member,
+            commands::test_delays,
+            commands::save_settings,
+            commands::save_manual_node,
+            commands::delete_manual_node,
+            commands::save_node_group,
+            commands::delete_node_group,
+            commands::parse_proxy_yaml,
+            commands::group_now,
+            commands::reset_traffic,
+            commands::core_start,
+            commands::core_stop,
+            commands::core_restart,
+            commands::open_log_dir,
+            commands::tailnet_peers,
+            commands::open_login_url,
+            commands::retry_tailscale_exit_nodes,
+            commands::save_process_rule,
+            commands::delete_process_rule,
+            commands::save_process_routing_settings,
+            commands::procroute_status,
+            commands::procroute_install,
+            commands::procroute_uninstall,
+            commands::procroute_cleanup,
+            commands::list_running_processes,
+        ])
+        // Payload of the "procroute-flows" event (not returned by any command).
+        .typ::<routa_procsvc_proto::Flow>()
+}
+
+/// Writes `src/bindings.ts` (debug builds do this at every start).
+#[cfg(debug_assertions)]
+fn export_bindings(builder: &Builder<tauri::Wry>) {
+    builder
+        .export(
+            // i64/u64 values (timestamps, byte counters) stay far below 2^53.
+            specta_typescript::Typescript::default()
+                .bigint(specta_typescript::BigIntExportBehavior::Number)
+                .header("// @ts-nocheck"),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings.ts"),
+        )
+        .expect("failed to export typescript bindings");
 }
 
 pub fn run() {
@@ -141,45 +202,15 @@ pub fn run() {
         }
     };
 
-    let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
-        commands::get_model,
-        commands::get_status,
-        commands::save_listener,
-        commands::delete_listener,
-        commands::save_exit,
-        commands::delete_exit,
-        commands::save_subscription,
-        commands::delete_subscription,
-        commands::refresh_subscription,
-        commands::select_group_member,
-        commands::test_delays,
-        commands::save_settings,
-        commands::save_manual_node,
-        commands::delete_manual_node,
-        commands::save_node_group,
-        commands::delete_node_group,
-        commands::parse_proxy_yaml,
-        commands::group_now,
-        commands::reset_traffic,
-        commands::core_start,
-        commands::core_stop,
-        commands::core_restart,
-        commands::open_log_dir,
-        commands::tailnet_peers,
-        commands::open_login_url,
-        commands::retry_tailscale_exit_nodes,
-    ]);
-
+    let builder = specta_builder();
     #[cfg(debug_assertions)]
-    builder
-        .export(
-            // i64/u64 values (timestamps, byte counters) stay far below 2^53.
-            specta_typescript::Typescript::default()
-                .bigint(specta_typescript::BigIntExportBehavior::Number)
-                .header("// @ts-nocheck"),
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings.ts"),
-        )
-        .expect("failed to export typescript bindings");
+    {
+        export_bindings(&builder);
+        // `routa --export-bindings`: regenerate the bindings without starting the app.
+        if std::env::args().any(|a| a == "--export-bindings") {
+            return;
+        }
+    }
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -203,11 +234,16 @@ pub fn run() {
             let rt = build_runtime(app.handle(), data_dir)?;
             app.manage(rt.clone());
             tray::setup(app.handle())?;
+            let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 match rt.start().await {
                     Ok(()) => eprintln!("runtime: started"),
                     Err(e) => eprintln!("runtime: start failed: {e}"),
                 }
+                // Only now: before the first start the core reads as Stopped
+                // (no reason), which would push Block to every rule. Until
+                // then the service keeps its own "Routa absent" fallback.
+                procroute::client::spawn(rt, handle);
             });
             Ok(())
         })
@@ -238,6 +274,9 @@ pub fn run() {
             let app = app.clone();
             let state = state.clone();
             tauri::async_runtime::spawn(async move {
+                // Before the core stops: tells the service this is a normal
+                // exit (on_routa_exit applies). Bounded at 1s inside.
+                procroute::client::goodbye().await;
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     let rt = Arc::clone(&*rt);
                     // Spawned so a panic is caught; bounded so exit cannot hang.
@@ -254,6 +293,7 @@ pub fn run() {
         }
         RunEvent::Exit => {
             if state.swap(2, Ordering::SeqCst) == 0 {
+                tauri::async_runtime::block_on(procroute::client::goodbye());
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     tauri::async_runtime::block_on(rt.shutdown());
                 }

@@ -7,10 +7,13 @@ interface Props {
   text: string;
   onConfirm: () => Promise<unknown>;
   onClose: () => void;
+  /** Defaults to 确认删除 / 删除; other destructive actions pass their own wording. */
+  title?: string;
+  confirmLabel?: string;
 }
 
 /** Confirms a delete; validation failures (e.g. still referenced) are shown inside the dialog. */
-export function ConfirmDeleteDialog({ text, onConfirm, onClose }: Props) {
+export function ConfirmDeleteDialog({ text, onConfirm, onClose, title = "确认删除", confirmLabel = "删除" }: Props) {
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const confirm = async () => {
@@ -28,7 +31,7 @@ export function ConfirmDeleteDialog({ text, onConfirm, onClose }: Props) {
   };
   return (
     <Dialog open onClose={onClose}>
-      <DialogTitle>确认删除</DialogTitle>
+      <DialogTitle>{title}</DialogTitle>
       <DialogContent>
         {text}
         {errors.length > 0 && (
@@ -42,7 +45,7 @@ export function ConfirmDeleteDialog({ text, onConfirm, onClose }: Props) {
       <DialogActions>
         <Button onClick={onClose}>取消</Button>
         <Button color="error" variant="contained" disabled={busy} onClick={() => void confirm()}>
-          删除
+          {confirmLabel}
         </Button>
       </DialogActions>
     </Dialog>

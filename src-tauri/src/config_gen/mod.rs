@@ -512,6 +512,7 @@ mod tests {
             settings: Settings::default(),
             manual_nodes: vec![],
             node_groups: vec![],
+            process_routing: ProcessRouting::default(),
         }
     }
     fn gen_with(m: &Model, nics: &[NetInterface], fetch: &[(ExitId, u16)]) -> Generated {

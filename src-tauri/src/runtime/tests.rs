@@ -23,6 +23,8 @@ use crate::store::{Bytes, Store};
 const PID: u32 = 4242;
 const PORT: u16 = 7891;
 const NIC_GUID: &str = "{11111111-0000-0000-0000-000000000001}";
+/// What `FakeLauncher` reports as the binary it launches.
+const BUNDLED_CORE: &str = r"C:\Routa\mihomo.exe";
 
 type ExitCell = Arc<Mutex<Option<Option<i32>>>>;
 
@@ -91,6 +93,9 @@ impl CoreLauncher for FakeLauncher {
         let content = std::fs::read_to_string(config).unwrap_or_default();
         self.checks.lock().unwrap().push(content);
         self.check_results.lock().unwrap().pop_front().unwrap_or(Ok(()))
+    }
+    fn core_binary(&self) -> Option<PathBuf> {
+        Some(PathBuf::from(BUNDLED_CORE))
     }
 }
 
@@ -1108,4 +1113,192 @@ async fn exit_node_failure_reloads_up_to_the_limit() {
     assert!(h.rt.status().tailscale_exit_retrying.is_empty());
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert_eq!(reloads(), base + EXIT_NODE_MAX_RETRIES as usize + 1, "no reload without a core");
+}
+
+#[tokio::test(start_paused = true)]
+async fn crash_sets_recovering_until_running() {
+    let m = model_with_listener(false);
+    let mut h = harness(&m);
+    h.rt.start().await.unwrap();
+    assert!(!h.rt.status().core_recovering);
+    drain(&mut h.events);
+
+    h.launcher.crash(0, 3);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    let statuses: Vec<RuntimeStatus> = drain(&mut h.events)
+        .into_iter()
+        .filter_map(|e| match e {
+            RuntimeEvent::Status(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    let crashed = statuses.iter().find(|s| matches!(s.core, CoreState::Crashed { .. })).unwrap();
+    assert!(crashed.core_recovering);
+    let starting = statuses.iter().find(|s| s.core == CoreState::Starting).unwrap();
+    assert!(starting.core_recovering, "the restart after a crash is a recovery");
+    let st = h.rt.status();
+    assert_eq!(st.core, CoreState::Running);
+    assert!(!st.core_recovering);
+    assert_eq!(st.core_stop_reason, None);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_core_records_user_reason() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    assert_eq!(h.rt.status().core_stop_reason, None);
+    h.rt.restart_core().await;
+
+    h.rt.stop_core().await;
+
+    let st = h.rt.status();
+    assert_eq!(st.core, CoreState::Stopped);
+    assert_eq!(st.core_stop_reason, Some(CoreStopReason::User));
+    assert!(!st.core_recovering);
+    // shutdown keeps the reason.
+    h.rt.shutdown().await;
+    assert_eq!(h.rt.status().core_stop_reason, Some(CoreStopReason::User));
+}
+
+fn statuses(rx: &mut mpsc::Receiver<RuntimeEvent>) -> Vec<RuntimeStatus> {
+    drain(rx)
+        .into_iter()
+        .filter_map(|e| match e {
+            RuntimeEvent::Status(s) => Some(s),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn fail_closed_records_reason() {
+    let m = model_with_listener(false);
+    let mut h = harness(&m);
+    h.rt.start().await.unwrap();
+    let rejected = || crate::core::api::ApiError::Rejected { status: 400, message: "bad".into() };
+    // Renaming is restrictive; the empty config fails too: the core is stopped.
+    h.api.reload_results.lock().unwrap().extend([Err(rejected()), Err(rejected())]);
+
+    let out = h.rt.mutate(|m| m.listeners[0].name = "改名".into()).await.unwrap();
+
+    assert!(matches!(out, ApplyOutcome::FailedCoreStopped { .. }), "{out:?}");
+    let st = h.rt.status();
+    assert!(matches!(st.core, CoreState::Crashed { .. }), "{:?}", st.core);
+    assert_eq!(st.core_stop_reason, Some(CoreStopReason::FailClosed));
+    assert!(!st.core_recovering, "a fail-closed stop is not a crash recovery");
+    drain(&mut h.events);
+
+    // The supervisor's restart is still a fail-closed state until it is Running.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let all = statuses(&mut h.events);
+    let starting = all.iter().find(|s| s.core == CoreState::Starting).expect("supervisor restarted");
+    assert_eq!(starting.core_stop_reason, Some(CoreStopReason::FailClosed));
+    assert!(!starting.core_recovering);
+    let st = h.rt.status();
+    assert_eq!(st.core, CoreState::Running);
+    assert_eq!(st.core_stop_reason, None);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn restart_clears_reason() {
+    let m = model_with_listener(false);
+    let mut h = harness(&m);
+    h.rt.restart_core().await;
+    h.rt.stop_core().await;
+    assert_eq!(h.rt.status().core_stop_reason, Some(CoreStopReason::User));
+    drain(&mut h.events);
+
+    h.rt.restart_core().await;
+
+    // Cleared as soon as the user asks, not only once Running is reached.
+    let starting = statuses(&mut h.events).into_iter().find(|s| s.core == CoreState::Starting).unwrap();
+    assert_eq!(starting.core_stop_reason, None);
+    assert!(!starting.core_recovering);
+    let st = h.rt.status();
+    assert_eq!(st.core, CoreState::Running);
+    assert_eq!(st.core_stop_reason, None);
+    assert!(!st.core_recovering);
+}
+
+fn process_rule(exe: &str) -> ProcessRule {
+    ProcessRule { exe_path: exe.into(), listener: ListenerId("lis-1".into()), ..ProcessRule::default() }
+}
+
+#[tokio::test(start_paused = true)]
+async fn process_routing_change_does_not_reload_core() {
+    let m = model_with_listener(false);
+    let mut h = harness(&m);
+    h.rt.restart_core().await;
+    let reloads = h.api.reloads.lock().unwrap().len();
+    let checks = h.launcher.checks.lock().unwrap().len();
+    drain(&mut h.events);
+
+    h.rt
+        .mutate_process_routing(|pr| {
+            pr.enabled = true;
+            pr.rules.push(process_rule(r"C:\Apps\game.exe"));
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    assert_eq!(h.launcher.checks.lock().unwrap().len(), checks);
+    assert_eq!(h.launcher.count(), 1);
+    let saved = Store::open(h.data.clone()).unwrap().load_model().unwrap();
+    assert!(saved.process_routing.enabled);
+    assert_eq!(saved.process_routing.rules[0].exe_path, r"C:\Apps\game.exe");
+    assert_eq!(h.rt.model(), saved);
+    assert!(drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::Status(_))));
+    // The engine's copy changed too: a later mutation keeps the rule.
+    h.rt.mutate(|m| m.listeners[0].name = "改名".into()).await.unwrap();
+    assert_eq!(h.rt.model().process_routing.rules.len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn process_routing_rejects_forbidden_and_invalid_rules() {
+    let mut m = model_with_listener(false);
+    m.settings.core_path = Some(r"C:\Custom\mihomo-alpha.exe".into());
+    let h = harness(&m);
+    let before = std::fs::read_to_string(h.data.join("state.json")).unwrap();
+    let own = std::env::current_exe().unwrap().to_string_lossy().into_owned();
+    let helper = std::env::current_exe().unwrap().with_file_name("routa-procsvc.exe").to_string_lossy().into_owned();
+    let installed = Path::new(&std::env::var_os("ProgramFiles").unwrap())
+        .join(r"Routa\ProcessRouting\ROUTA-PROCSVC.EXE")
+        .to_string_lossy()
+        .into_owned();
+
+    for exe in [own.as_str(), BUNDLED_CORE, r"c:\custom\MIHOMO-ALPHA.exe", helper.as_str(), installed.as_str()] {
+        let errs = h
+            .rt
+            .mutate_process_routing(|pr| pr.rules.push(process_rule(exe)))
+            .await
+            .unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, ValidationError::InvalidExePath { .. })), "{exe}: {errs:?}");
+    }
+    // The full model validation runs too (the listener must exist).
+    let errs = h
+        .rt
+        .mutate_process_routing(|pr| {
+            let mut r = process_rule(r"C:\Apps\game.exe");
+            r.listener = ListenerId("gone".into());
+            pr.rules.push(r);
+        })
+        .await
+        .unwrap_err();
+    assert!(errs.iter().any(|e| matches!(e, ValidationError::DanglingRef { .. })), "{errs:?}");
+
+    assert_eq!(std::fs::read_to_string(h.data.join("state.json")).unwrap(), before);
+    assert_eq!(h.rt.model(), m);
+
+    // After shutdown nothing is saved.
+    h.rt.shutdown().await;
+    h.rt
+        .mutate_process_routing(|pr| pr.rules.push(process_rule(r"C:\Apps\game.exe")))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(h.data.join("state.json")).unwrap(), before);
+    assert_eq!(h.rt.model(), m);
 }

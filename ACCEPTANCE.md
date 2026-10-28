@@ -78,3 +78,56 @@ spike S2 仅通过代理验证了“网卡不存在时拨号失败且不回落�
 | 6 | 删除正被出口使用的“家里”组 | 删除被拒绝，并提示是哪个出口在用 | 待人工验收 |
 | 7 | 把旧版 `state.json` 拷进数据目录后启动 | 原有出口、监听器全部正常工作，无数据丢失 | 待人工验收 |
 | 8 | Tailscale 页新建实例（exit-node 填出口节点 IP），点“复制链接”，在浏览器完成授权后状态变为“已登录”；把监听器接到含它的出口，`curl -x http://127.0.0.1:<端口> https://www.gstatic.com/generate_204` 能通，出口 IP 为 exit node 的 IP | 授权后状态变为“已登录”；经监听器的请求出口 IP 为 exit node 的 IP | 待人工验收 |
+
+## 进程分流
+
+### 自动化验证（本次运行）
+
+| 项目 | 命令 | 结果 |
+| --- | --- | --- |
+| Rust 测试 | `cargo test --manifest-path src-tauri/Cargo.toml --workspace` | routa 286 passed / 5 ignored；routa-procsvc 77 passed / 6 ignored（需要管理员）；proto 4 passed；e2e 1 ignored |
+| 前端测试 | `pnpm test` | 25 个文件，240/240 通过 |
+| 类型检查 | `pnpm typecheck` | 通过，无输出 |
+| 安装包构建 | `pnpm fetch-mihomo && pnpm fetch-windivert && pnpm build-proxybridge && pnpm tauri build` | 生成 `routa_0.2.0_x64-setup.exe`（19.05 MiB）和 `routa_0.2.0_x64_en-US.msi`（27.04 MiB） |
+| 便携版 | `pnpm pack:portable --skip-build` | zip 内含 `routa-procsvc.exe` 和 `procsvc\` 下 3 个文件 |
+
+单元测试覆盖 spec 第 9 节的状态 → 实际动作映射、下发顺序、助手的全量同步 / 断开 / 重连 / 版本不一致，以及规则对话框的校验。
+
+### 打包与安装钩子
+
+- NSIS 安装包、MSI、便携版 zip 都包含 `routa-procsvc.exe` 和 `procsvc\`（`ProxyBridgeCore.dll`、`WinDivert.dll`、`WinDivert64.sys`）。
+- NSIS 安装包按当前用户安装、本身不提权：安装完成后单独弹一次 UAC，以管理员身份运行 `routa-procsvc.exe --install` 注册服务；卸载前同样弹一次 UAC 运行 `--uninstall`（服务和组件目录都不存在时跳过；安装程序覆盖安装时调用的卸载也跳过，见 `src-tauri/nsis/hooks.nsh`）。拒绝 UAC 或命令失败不影响安装 / 卸载，之后可在“进程分流”页面启用或卸载组件。静默安装（`/S`）且安装程序不在前台时，UAC 可能只在任务栏闪烁，安装会一直等到用户响应。
+- MSI 安装时不注册服务，和便携版一样在页面上点“启用进程分流”时弹 UAC。**卸载 MSI 前请先在页面上点“卸载组件”**，否则服务和防护规则会留在系统里（之后可用便携版或 `routa-procsvc.exe --uninstall` 清理）。
+
+### 准备
+
+- 需要管理员账号（UAC）。WinDivert 驱动可能被 Windows Defender 或其他杀毒软件报毒、隔离：如出现组件文件缺失、服务启动失败，请把安装目录（安装版为 `%LOCALAPPDATA%\routa`，组件目录为 `%ProgramFiles%\Routa\ProcessRouting`）加入排除项；开发时还要排除 `src-tauri\binaries\procsvc` 和 `third_party\windivert`。
+- 准备一个 Mixed 或 Socks Listener，记下它的出口 IP；用 `C:\Windows\System32\curl.exe` 作为被管程序。
+- 检查是否残留 Routa 的 WFP 过滤器：管理员命令行执行 `netsh wfp show filters file=wfp.xml`，在 `wfp.xml` 中搜索 `5f3b2c1e-7a44-4d2b-9c51-0b6f2a7e1d0`（Routa 的 provider / sublayer GUID 前缀）。
+
+### 手动验收清单（待人工验收）
+
+每项完成后在“结果”列填写 通过 / 失败 及备注。“Block 规则”“Direct 规则”指“组件故障时”分别设为阻断、直连的规则。
+
+| # | 步骤 | 预期 | 结果 |
+| --- | --- | --- | --- |
+| 1 | 安装 NSIS 安装包，在安装末尾弹出的 UAC 中点“是” | `sc query RoutaProcSvc` 为 RUNNING；进程分流页组件状态为“运行中” | 待人工验收 |
+| 2 | 新建规则：`curl.exe` → 该 Listener；执行 `curl.exe https://api.ipify.org` | 返回 Listener 出口的 IP；规则行防护状态为“已代理”，展开后能看到连接和速率 | 待人工验收 |
+| 3 | 修改规则的目标 Listener（“断开旧连接”分别为开 / 关），期间保持一个长连接（如 `curl.exe --limit-rate 50k -o NUL <大文件 URL>`） | 不重启组件，新连接立即走新 Listener；开关为“开”时旧的 IPv4 TCP 连接被断开，为“关”时保留 | 待人工验收 |
+| 4 | 在任务管理器中结束 `routa-procsvc.exe`（服务会按故障恢复自动重启，结束后立刻测试） | Block 规则的程序连不上外网，Direct 规则的程序能直连；服务恢复后重新走代理 | 待人工验收 |
+| 5 | 管理员命令行 `sc stop RoutaProcSvc`；之后重启电脑 | 两种情况下 Block 规则的程序都保持阻断 | 待人工验收 |
+| 6 | 让 Listener 被停用（停用该 Listener，或让它的出口节点失效 / 网卡断开） | 无论“组件故障时”设为什么，程序都被阻断，状态显示原因（如“Listener 未生效”） | 待人工验收 |
+| 7 | 在任务管理器中结束 Routa 启动的 mihomo 进程 | Direct 规则改走直连，Block 规则阻断；mihomo 自动恢复后切回代理 | 待人工验收 |
+| 8 | 分别：从托盘“退出” Routa；手动停止内核 | 按“Routa 不提供代理时”的设置直连或阻断 | 待人工验收 |
+| 9 | 让新配置无法生效导致内核被自动停止（例如占用某 Listener 的端口后修改配置） | 一律阻断 | 待人工验收 |
+| 10 | 用任务管理器结束 Routa | 按每条规则自己的“组件故障时”设置 | 待人工验收 |
+| 11 | 重启电脑，登录后不启动 Routa | 按“Routa 不提供代理时”的设置；开机到服务启动前的短暂时间内，Direct 规则的程序可能直连 | 待人工验收 |
+| 12 | 同时安装并运行官方 ProxyBridge | 两边都正常工作（中转端口不冲突）；组件状态卡提示可能冲突 | 待人工验收 |
+| 13 | 把 `curl.exe` 复制到中文路径（如 `C:\测试\curl.exe`）并为它建规则 | 规则能匹配，流量走指定 Listener | 待人工验收 |
+| 14 | 给 `curl.exe` 建 Block 规则并让它处于阻断状态（如停用 Listener）；在本机起一个 HTTP 服务（如 `python -m http.server 8000 --bind ::`），执行 `curl.exe http://127.0.0.1:8000/` 和 `curl.exe http://[::1]:8000/` | 两个请求都成功；访问外网仍被阻断 | 待人工验收 |
+| 15 | 关闭进程分流全局开关；再打开 | 关闭后程序按系统默认直连、不残留阻断；打开后恢复 | 待人工验收 |
+| 16 | 页面上点“清理残留阻断规则”、“卸载组件” | 清理后 WFP 中搜不到 Routa 的阻断过滤器；卸载后服务和 `%ProgramFiles%\Routa\ProcessRouting` 都不存在 | 待人工验收 |
+| 17 | 便携版：解压后首次点“启用进程分流” | 弹一次 UAC，服务注册并运行 | 待人工验收 |
+| 18 | 保持一条 Block 规则处于阻断状态（如停用其 Listener），持续执行 `curl.exe https://api.ipify.org`。用 NSIS 安装包覆盖安装：同版本时分别选“添加/重新安装”和“卸载”；（可临时改版本号构建一个更高版本）升级时分别选“先卸载再安装”和“不卸载”；每种情况下都分别在 UAC 中点“是”和“否”各试一次 | 整个过程中 curl 始终被阻断；卸载阶段不弹 UAC、不删除服务（详细日志显示“覆盖安装，保留服务和防护规则”）；安装末尾的 UAC 选“否”时服务和阻断仍在 | 待人工验收 |
+| 19 | Routa 运行时卸载 NSIS 安装版，在“Routa 正在运行”的提示中点“取消” | 卸载中止，服务和防护规则都还在（未弹 UAC） | 待人工验收 |
+| 20 | 卸载 NSIS 安装版，在 UAC 中点“是” | `sc query RoutaProcSvc` 报服务不存在；`%ProgramFiles%\Routa\ProcessRouting` 不存在；`netsh wfp show filters` 的输出中搜不到 Routa 的 GUID | 待人工验收 |
