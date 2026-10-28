@@ -224,6 +224,7 @@ extern SRWLOCK             g_dns_cache_lock;
 extern volatile LONG port_decided_bitmap[2048];  // 8 KB
 extern volatile LONG port_direct_bitmap[2048];  // 8 KB
 extern UINT16 g_local_relay_port;
+extern UINT16 g_local_udp_relay_port;   // Routa patch: set by ProxyBridge_SetRelayPorts (default LOCAL_UDP_RELAY_PORT)
 // Set by match_rule*_inner on the calling thread: the "localhost via proxy" flag of the rule that
 // produced the last verdict (FALSE when nothing matched). Read right after check_process_rule*().
 extern __declspec(thread) BOOL g_tl_rule_localhost;
@@ -313,6 +314,9 @@ BOOL match_domain_list(const char *domain_list, const char *domain);
 BOOL rule_has_domain_filter(const PROCESS_RULE *rule);
 BOOL match_domain_filter(const PROCESS_RULE *rule, const char *domain);
 BOOL is_broadcast_or_multicast(UINT32 ip);
+// Routa patch: loopback destinations (127.0.0.0/8; ::1 or ::ffff:127.x.x.x). ip is in network byte order.
+BOOL pb_is_loopback_v4(UINT32 ip);
+BOOL pb_is_loopback_v6(const UINT8 ip6[16]);
 RuleAction match_rule_inner(const char *process_name, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
 RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
 RuleAction match_rule_v6_inner(const char *process_name, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);

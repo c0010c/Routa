@@ -87,6 +87,9 @@ PROXYBRIDGE_API void ProxyBridge_SetLogCallback(LogCallback callback);
 PROXYBRIDGE_API void ProxyBridge_SetConnectionCallback(ConnectionCallback callback);
 PROXYBRIDGE_API void ProxyBridge_SetTrafficLoggingEnabled(BOOL enable);
 PROXYBRIDGE_API void ProxyBridge_ClearConnectionLogs(void);  // Clear connection history from memory
+// Routa patch: local relay ports (default 34010 TCP / 34011 UDP). Call before ProxyBridge_Start; both non-zero and
+// different, otherwise FALSE.
+PROXYBRIDGE_API BOOL ProxyBridge_SetRelayPorts(UINT16 tcp_port, UINT16 udp_port);
 PROXYBRIDGE_API BOOL ProxyBridge_Start(void);
 PROXYBRIDGE_API BOOL ProxyBridge_Stop(void);
 #ifdef __cplusplus

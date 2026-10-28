@@ -72,6 +72,7 @@ volatile LONG port_decided_bitmap[2048] = {0};  // 8 KB
 volatile LONG port_direct_bitmap[2048]  = {0};  // 8 KB
 
 UINT16 g_local_relay_port = LOCAL_PROXY_PORT;
+UINT16 g_local_udp_relay_port = LOCAL_UDP_RELAY_PORT;   // Routa patch
 LogCallback g_log_callback = NULL;
 ConnectionCallback g_connection_callback = NULL;
 
@@ -208,7 +209,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                     UINT16 dp = ntohs(udp_header->DstPort);
 
                     // relay response: restore orig src port/addr
-                    if (sp == LOCAL_UDP_RELAY_PORT)
+                    if (sp == g_local_udp_relay_port)
                     {
                         UINT16 client_sp = ntohs(udp_header->DstPort);
                         UINT8  orig_dst6[16]; UINT16 orig_dp = 0; UINT32 dummy = 0;
@@ -228,7 +229,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
 
                     if (udp_flow_validate(sp, TRUE, 0, (const UINT8*)ipv6_header->DstAddr, dp))
                     {
-                        udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+                        udp_header->DstPort = htons(g_local_udp_relay_port);
                         static const UINT8 _lb6u2[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
                         BOOL both_lb=(memcmp(ipv6_header->SrcAddr,_lb6u2,16)==0&&memcmp(ipv6_header->DstAddr,_lb6u2,16)==0);
                         if (!both_lb)
@@ -275,6 +276,9 @@ DWORD WINAPI packet_processor(LPVOID arg)
                         if (memcmp(d6,lb6,16)==0||(memcmp(d6,v4p,12)==0&&d6[12]==127))
                             action6u = RULE_ACTION_DIRECT;
                     }
+                    // Routa patch: BLOCK never drops loopback traffic (local services, e.g. our own proxy/controller) - send it direct.
+                    if (action6u == RULE_ACTION_BLOCK && pb_is_loopback_v6((const UINT8*)ipv6_header->DstAddr))
+                        action6u = RULE_ACTION_DIRECT;
 
                     // Override PROXY to DIRECT for DHCPv6 ports (546=client, 547=server)
                     if (action6u == RULE_ACTION_PROXY && (dp == 546 || dp == 547))
@@ -318,7 +322,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                         }
                         add_connection_v6(sp, TRUE, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, pcid6u, pid6u, g_tl_rule_id);
 
-                        udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+                        udp_header->DstPort = htons(g_local_udp_relay_port);
                         static const UINT8 _lb6up[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
                         BOOL both_lb=(memcmp(ipv6_header->SrcAddr,_lb6up,16)==0&&memcmp(ipv6_header->DstAddr,_lb6up,16)==0);
                         if (both_lb)
@@ -346,7 +350,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 }
                 else
                 {
-                    if (udp_header->DstPort != htons(LOCAL_UDP_RELAY_PORT))
+                    if (udp_header->DstPort != htons(g_local_udp_relay_port))
                     {
                         // Snoop IPv6 DNS responses (AAAA records) for the domain cache.
                         if (ntohs(udp_header->SrcPort) == 53)
@@ -476,6 +480,9 @@ DWORD WINAPI packet_processor(LPVOID arg)
                     if (is_lb6 || is_v4mapped_lb)
                         action6 = RULE_ACTION_DIRECT;
                 }
+                // Routa patch: BLOCK never drops loopback traffic (local services, e.g. our own proxy/controller) - send it direct.
+                if (action6 == RULE_ACTION_BLOCK && pb_is_loopback_v6((const UINT8*)ipv6_header->DstAddr))
+                    action6 = RULE_ACTION_DIRECT;
 
                 if (g_connection_callback != NULL && tcp_header->Syn && !tcp_header->Ack && pid6 > 0)
                 {
@@ -569,7 +576,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
         {
             if (addr.Outbound)
             {
-                if (udp_header->SrcPort == htons(LOCAL_UDP_RELAY_PORT))
+                if (udp_header->SrcPort == htons(g_local_udp_relay_port))
                 {
                     UINT16 dst_port = ntohs(udp_header->DstPort);
                     UINT32 orig_dest_ip;
@@ -610,7 +617,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 else if (udp_flow_validate(ntohs(udp_header->SrcPort), FALSE, ip_header->DstAddr, NULL, ntohs(udp_header->DstPort)))
                 {
                     UINT16 src_port = ntohs(udp_header->SrcPort);
-                    udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+                    udp_header->DstPort = htons(g_local_udp_relay_port);
 
                     BYTE src_first_octet = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
                     BOOL src_is_loopback = (src_first_octet == 127);
@@ -659,6 +666,9 @@ DWORD WINAPI packet_processor(LPVOID arg)
                     // override PROXY to DIRECT when the matched rule does not allow localhost and the destination is localhost
                     BYTE dest_first_octet = (dest_ip >> 0) & 0xFF;
                     if (action == RULE_ACTION_PROXY && !g_tl_rule_localhost && dest_first_octet == 127)
+                        action = RULE_ACTION_DIRECT;
+                    // Routa patch: BLOCK never drops loopback traffic (local services, e.g. our own proxy/controller) - send it direct.
+                    if (action == RULE_ACTION_BLOCK && pb_is_loopback_v4(dest_ip))
                         action = RULE_ACTION_DIRECT;
 
                     // Override PROXY to DIRECT for critical IPs and ports
@@ -724,7 +734,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                         add_connection(src_port, TRUE, src_ip, dest_ip, dest_port, proxy_config_id, pid, g_tl_rule_id);
 
                         // redirect to UDP relay server at 127.0.0.1:34011
-                        udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+                        udp_header->DstPort = htons(g_local_udp_relay_port);
 
                         // check if source is localhost
                         BYTE src_first_octet = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
@@ -756,7 +766,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
             }
             else
             {
-                if (udp_header->DstPort != htons(LOCAL_UDP_RELAY_PORT))
+                if (udp_header->DstPort != htons(g_local_udp_relay_port))
                 {
                     // Snoop DNS responses to build the IP→hostname cache used by
                     // socks5_connect_domain() so that SOCKS5 proxies receive the
@@ -916,6 +926,9 @@ DWORD WINAPI packet_processor(LPVOID arg)
 
                 BYTE orig_dest_first_octet = (orig_dest_ip >> 0) & 0xFF;
                 if (action == RULE_ACTION_PROXY && !g_tl_rule_localhost && orig_dest_first_octet == 127)
+                    action = RULE_ACTION_DIRECT;
+                // Routa patch: BLOCK never drops loopback traffic (local services, e.g. our own proxy/controller) - send it direct.
+                if (action == RULE_ACTION_BLOCK && pb_is_loopback_v4(orig_dest_ip))
                     action = RULE_ACTION_DIRECT;
 
                 // Override PROXY to DIRECT for criticl ips
@@ -1214,6 +1227,16 @@ static DWORD WINAPI fw_ensure_thread(LPVOID arg)
     return 0;
 }
 
+// Routa patch: relay ports are configurable (before ProxyBridge_Start only). TCP and UDP must differ - see LOCAL_UDP_RELAY_PORT.
+PROXYBRIDGE_API BOOL ProxyBridge_SetRelayPorts(UINT16 tcp_port, UINT16 udp_port)
+{
+    if (running || tcp_port == 0 || udp_port == 0 || tcp_port == udp_port)
+        return FALSE;
+    g_local_relay_port = tcp_port;
+    g_local_udp_relay_port = udp_port;
+    return TRUE;
+}
+
 PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
 {
     char filter[FILTER_BUFFER_SIZE];
@@ -1291,8 +1314,8 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
         "(ipv6 and tcp and (outbound or loopback or (tcp.DstPort == %d or tcp.SrcPort == %d))) or "
         "(ipv6 and udp and (outbound or loopback or (udp.DstPort == %d or udp.SrcPort == %d)) and "
             "udp.SrcPort != 546 and udp.DstPort != 546 and udp.SrcPort != 547 and udp.DstPort != 547))",
-        g_local_relay_port, g_local_relay_port, LOCAL_UDP_RELAY_PORT, LOCAL_UDP_RELAY_PORT,
-        g_local_relay_port, g_local_relay_port, LOCAL_UDP_RELAY_PORT, LOCAL_UDP_RELAY_PORT);
+        g_local_relay_port, g_local_relay_port, g_local_udp_relay_port, g_local_udp_relay_port,
+        g_local_relay_port, g_local_relay_port, g_local_udp_relay_port, g_local_udp_relay_port);
 
     // Note: Added 'loopback' to filter to capture localhost (127.x.x.x) traffic
     // This enables proxying local connections for MITM scenarios

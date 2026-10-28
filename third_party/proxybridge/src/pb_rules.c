@@ -355,7 +355,12 @@ BOOL match_process_pattern(const char *pattern, const char *process_full_path)
         return wildcard_match(pattern, match_target);
 
     // No wildcard, plain case-insensitive comparison
-    return _stricmp(pattern, match_target) == 0;
+    // Routa patch: compare as UTF-16 with full Unicode case folding (_stricmp only folds ASCII).
+    WCHAR wpattern[MAX_PROCESS_NAME], wtarget[MAX_PROCESS_NAME];
+    if (MultiByteToWideChar(CP_UTF8, 0, pattern, -1, wpattern, MAX_PROCESS_NAME) > 0 &&
+        MultiByteToWideChar(CP_UTF8, 0, match_target, -1, wtarget, MAX_PROCESS_NAME) > 0)
+        return CompareStringOrdinal(wpattern, -1, wtarget, -1, TRUE) == CSTR_EQUAL;
+    return _stricmp(pattern, match_target) == 0;   // longer than any process path: fall back to the ASCII compare
 }
 
 // Match process list: "chrome.exe;firefox.exe;*.bin"
@@ -548,6 +553,19 @@ static BOOL rule_host_match_v6(const PROCESS_RULE *rule, const UINT8 dest_ip6[16
     if (has_ip && match_ip_list_v6(rule->target_hosts, dest_ip6))
         return TRUE;
     return has_dom && dst_domain != NULL && dst_domain[0] != '\0' && match_domain_list(rule->target_domains, dst_domain);
+}
+
+// Routa patch: used to let BLOCK rules pass loopback traffic (it never leaves the machine).
+BOOL pb_is_loopback_v4(UINT32 ip)
+{
+    return ((ip >> 0) & 0xFF) == 127;
+}
+
+BOOL pb_is_loopback_v6(const UINT8 ip6[16])
+{
+    static const UINT8 loopback6[16] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,1};
+    static const UINT8 v4mapped_pfx[12] = {0,0,0,0, 0,0,0,0, 0,0,0xff,0xff};
+    return memcmp(ip6, loopback6, 16) == 0 || (memcmp(ip6, v4mapped_pfx, 12) == 0 && ip6[12] == 127);
 }
 
 BOOL is_broadcast_or_multicast(UINT32 ip)

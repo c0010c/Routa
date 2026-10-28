@@ -13,6 +13,7 @@
     "fetch-mihomo": "node scripts/fetch-mihomo.mjs",
     "fetch-windivert": "node scripts/fetch-windivert.mjs",
     "build-proxybridge": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-proxybridge.ps1",
+    "test-proxybridge": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-proxybridge.ps1",
     "pack:portable": "node scripts/pack-portable.mjs"
   },
   "dependencies": {

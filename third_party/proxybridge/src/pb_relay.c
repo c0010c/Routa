@@ -27,7 +27,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin_family = AF_INET;
     local_addr.sin_addr.s_addr = htonl(INADDR_ANY);  // must be any WinDivert swaps src/dst IPs for
-    local_addr.sin_port = htons(LOCAL_UDP_RELAY_PORT);// tracked connections so packets arrive at the
+    local_addr.sin_port = htons(g_local_udp_relay_port);// tracked connections so packets arrive at the
                                                       // machines real ip and not 127.0.0.1
 
     if (bind(udp_relay_socket, (struct sockaddr *)&local_addr, sizeof(local_addr)) == SOCKET_ERROR)
@@ -50,7 +50,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
         memset(&a6, 0, sizeof(a6));
         a6.sin6_family = AF_INET6;
         a6.sin6_addr = in6addr_any;   // same tracked packets arrive at machines real IPv6
-        a6.sin6_port = htons(LOCAL_UDP_RELAY_PORT);
+        a6.sin6_port = htons(g_local_udp_relay_port);
         if (bind(udp_relay_socket6, (struct sockaddr*)&a6, sizeof(a6)) == SOCKET_ERROR)
         {
             closesocket(udp_relay_socket6);
@@ -69,7 +69,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
         }
     }
 
-    log_message("UDP relay listening on port %d", LOCAL_UDP_RELAY_PORT);
+    log_message("UDP relay listening on port %d", g_local_udp_relay_port);
 
     while (running)
     {
