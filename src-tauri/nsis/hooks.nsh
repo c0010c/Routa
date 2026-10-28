@@ -1,8 +1,9 @@
 ﻿; Routa 安装程序钩子（由 Tauri 的 installer.nsi 引入）：安装后注册进程分流服务，卸载前删除它。
 ;
 ; 安装程序按 currentUser 模式运行、本身不提权，所以经 UAC 单独以管理员身份运行
-; routa-procsvc.exe。用户拒绝 UAC 或命令失败都不阻断安装 / 卸载，只写进详细日志：
-; 之后可以在“进程分流”页面里启用或卸载组件。
+; routa-procsvc.exe。用户拒绝 UAC 或命令失败都不阻断安装 / 卸载：安装时只写进详细日志，
+; 之后可以在“进程分流”页面里启用组件；卸载时弹窗说明残留并可重试（静默卸载写进日志），
+; 因为 Routa 卸载后就没有页面可以再删除服务和持久阻断了。
 ; 不在这里删除 Program Files 下的任何目录，由 routa-procsvc.exe --uninstall 负责。
 
 !define ROUTA_PROCSVC_EXE "routa-procsvc.exe"
@@ -10,9 +11,11 @@
 !define ROUTA_PROCSVC_DIR "$PROGRAMFILES64\Routa\ProcessRouting"
 
 ; 以管理员身份运行 $INSTDIR\routa-procsvc.exe，参数取自 $R9，等它退出并把结果写进日志。
-; 寄存器经 System::Store 保存和恢复。
+; 确认执行成功时 $R7 = 1，否则（拒绝 UAC、失败、无法得知结果）$R7 = 0。
+; 寄存器经 System::Store 保存和恢复（结果先算在 $8，经栈带出来）。
 !macro ROUTA_PROCSVC_RUN_ELEVATED
   System::Store S
+  StrCpy $8 0
   StrCpy $2 "$INSTDIR\${ROUTA_PROCSVC_EXE}"
   ; SHELLEXECUTEINFOW；fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC，nShow = SW_HIDE
   System::Call '*(&l4, i 0x140, p $HWNDPARENT, w "runas", w r2, w R9, p 0, i 0, p, p, p, p, i, p, p) p.r1'
@@ -32,14 +35,22 @@
       System::Call 'kernel32::CloseHandle(p r4)'
       ${If} $5 = 0
         DetailPrint "进程分流组件：${ROUTA_PROCSVC_EXE} 执行成功"
+        StrCpy $8 1
       ${Else}
         DetailPrint "进程分流组件：${ROUTA_PROCSVC_EXE} 执行失败（退出码 $5），已跳过"
       ${EndIf}
     ${EndIf}
   ${EndIf}
   System::Free $1
+  Push $8
   System::Store L
+  Pop $R7
 !macroend
+
+; 卸载时没能删除组件：说明残留了什么、怎样手动删除。
+!define ROUTA_PROCSVC_LEFTOVER "进程分流组件没有删除（未获得管理员权限或执行失败）：它的服务和防护规则仍留在系统里，被设为“阻断”的程序会继续无法联网。"
+!define ROUTA_PROCSVC_MANUAL "以后可以以管理员身份运行下面的命令删除服务和防护规则（它删不掉 routa-procsvc.exe 本身，之后手动删除 ProcessRouting 文件夹即可）："
+!define ROUTA_PROCSVC_MANUAL_CMD "$\"${ROUTA_PROCSVC_DIR}\${ROUTA_PROCSVC_EXE}$\" --uninstall"
 
 ; 当前（安装程序所属）用户的 SID 放入 $R8；取不到或格式不对时为空。
 ; System::Store L 会恢复全部寄存器，所以结果先算在 $8，经栈带出来。
@@ -90,6 +101,7 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  Push $R7
   Push $R8
   Push $R9
   !insertmacro ROUTA_CURRENT_USER_SID
@@ -102,6 +114,7 @@
   ${EndIf}
   Pop $R9
   Pop $R8
+  Pop $R7
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
@@ -119,6 +132,7 @@
     DetailPrint "进程分流组件：覆盖安装，保留服务和防护规则"
   ${Else}
     Push $0
+    Push $R7
     Push $R9
     ; 服务和组件目录都不存在（例如安装时拒绝了 UAC）就不必再弹 UAC
     nsExec::Exec '"$SYSDIR\sc.exe" query ${ROUTA_PROCSVC_SERVICE}'
@@ -132,10 +146,27 @@
       ; 否则取消卸载后组件已经没了
       !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
       DetailPrint "进程分流组件：删除服务和防护规则（需要管理员权限）"
-      StrCpy $R9 "--uninstall"
-      !insertmacro ROUTA_PROCSVC_RUN_ELEVATED
+      ; 没删掉时不能悄悄留下服务和持久阻断：提示用户（可重试），静默卸载时写进日志。
+      ; 取消则继续卸载 Routa。
+      ${Do}
+        StrCpy $R9 "--uninstall"
+        !insertmacro ROUTA_PROCSVC_RUN_ELEVATED
+        ${If} $R7 = 1
+          ${ExitDo}
+        ${EndIf}
+        ${If} ${Silent}
+          DetailPrint "${ROUTA_PROCSVC_LEFTOVER}"
+          DetailPrint "${ROUTA_PROCSVC_MANUAL}"
+          DetailPrint "${ROUTA_PROCSVC_MANUAL_CMD}"
+          ${ExitDo}
+        ${EndIf}
+        ${IfNot} ${Cmd} `MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL "${ROUTA_PROCSVC_LEFTOVER}$\r$\n$\r$\n${ROUTA_PROCSVC_MANUAL}$\r$\n$\r$\n${ROUTA_PROCSVC_MANUAL_CMD}$\r$\n$\r$\n点“重试”再次以管理员身份删除；点“取消”继续卸载 Routa。" /SD IDCANCEL IDRETRY`
+          ${ExitDo}
+        ${EndIf}
+      ${Loop}
     ${EndIf}
     Pop $R9
+    Pop $R7
     Pop $0
   ${EndIf}
 !macroend

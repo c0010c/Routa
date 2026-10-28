@@ -46,7 +46,7 @@
 
 **从 v0.1.0 升级**：v0.1.0 仍使用更名前的 `mihomo-mapper` 名称，数据保存在 `%APPDATA%\dev.mihomo-mapper\`。v0.2.0 **不会自动迁移**该目录，升级后不会沿用旧配置；旧版本可在 [v0.1.0 Release](https://github.com/c0010c/Routa/releases/tag/v0.1.0) 下载。
 
-**进程分流组件**：NSIS 安装版在安装末尾弹一次 UAC 注册服务，卸载时同样弹一次 UAC 删除服务和防护规则（拒绝 UAC 不影响安装，之后可在“进程分流”页面启用）；MSI 版和便携版在页面上首次点“启用进程分流”时弹 UAC。服务文件安装在 `%ProgramFiles%\Routa\ProcessRouting`。**卸载 MSI 版前请先在页面上点“卸载组件”**，否则服务和防护规则会留在系统里。进程分流的限制：
+**进程分流组件**：NSIS 安装版在安装末尾弹一次 UAC 注册服务，卸载时同样弹一次 UAC 删除服务和防护规则（拒绝 UAC 不影响安装，之后可在“进程分流”页面启用）；MSI 版和便携版在页面上首次点“启用进程分流”时弹 UAC。服务文件安装在 `%ProgramFiles%\Routa\ProcessRouting`。**卸载 MSI 版前请先在页面上点“卸载组件”**，否则服务和防护规则会留在系统里。NSIS 版卸载时若拒绝了 UAC 或删除失败，卸载程序会弹窗提示并可重试。服务和防护规则留在系统里时（被设为“阻断”的程序会继续无法联网），以管理员身份运行 `"%ProgramFiles%\Routa\ProcessRouting\routa-procsvc.exe" --uninstall` 即可删除它们；该命令删不掉正在运行的 `routa-procsvc.exe` 本身，之后手动删除 `ProcessRouting` 文件夹即可。进程分流的限制：
 
 - 被管程序的 DNS 查询由系统 DNS 客户端服务发出，不经过分流，会照常直连；
 - 规则按 exe 路径匹配，对本机所有 Windows 用户运行的该程序都生效；
@@ -133,7 +133,7 @@ SHA256 checksums are in `SHA256SUMS.txt` on the same release. The installers and
 
 **Upgrading from v0.1.0**: v0.1.0 still uses the previous `mihomo-mapper` name and stores data in `%APPDATA%\dev.mihomo-mapper\`. v0.2.0 does **not migrate** that directory automatically, so the old configuration is not reused after upgrading. The old version is still available on the [v0.1.0 release](https://github.com/c0010c/Routa/releases/tag/v0.1.0).
 
-**Process routing component**: the NSIS installer asks for UAC once at the end of setup to register the service, and once when uninstalling to remove the service and its filter rules (declining does not fail the installation; you can enable it later on the 进程分流 (Process Routing) page). The MSI and portable builds ask for UAC the first time you click 启用进程分流 (Enable process routing) on that page. The service files are installed in `%ProgramFiles%\Routa\ProcessRouting`. **Before uninstalling the MSI build, click 卸载组件 (Uninstall component) on that page**, otherwise the service and its filter rules stay on the system. Limitations of process routing:
+**Process routing component**: the NSIS installer asks for UAC once at the end of setup to register the service, and once when uninstalling to remove the service and its filter rules (declining does not fail the installation; you can enable it later on the 进程分流 (Process Routing) page). The MSI and portable builds ask for UAC the first time you click 启用进程分流 (Enable process routing) on that page. The service files are installed in `%ProgramFiles%\Routa\ProcessRouting`. **Before uninstalling the MSI build, click 卸载组件 (Uninstall component) on that page**, otherwise the service and its filter rules stay on the system. If UAC is declined or removal fails while uninstalling the NSIS build, the uninstaller shows a warning and lets you retry. If the service and its filter rules are left behind (programs set to block stay offline), run `"%ProgramFiles%\Routa\ProcessRouting\routa-procsvc.exe" --uninstall` as administrator to remove them; it cannot delete the running `routa-procsvc.exe` itself, so delete the `ProcessRouting` folder afterwards. Limitations of process routing:
 
 - DNS lookups of a routed program are made by the Windows DNS Client service, so they bypass routing and go direct;
 - Rules match by exe path and apply to that program for every Windows user on the PC;
