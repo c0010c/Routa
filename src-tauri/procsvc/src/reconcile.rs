@@ -1,9 +1,11 @@
 //! 把期望规则集变成有序操作（spec 5、6.1、6.2、6.4）。
-//! 顺序是"不泄露"的保证：先收紧、后放开。
+//! 顺序是"不泄露"的保证：先收紧、后放开。`Reconciler` 把这些操作落到引擎上。
 
 use routa_procsvc_proto::{Action, FaultPolicy, ProxyTarget, RuleSpec};
 
-use crate::engine::PbAction;
+use std::collections::{HashMap, HashSet};
+
+use crate::engine::{ConnKiller, Guard, Interceptor, PbAction};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
@@ -183,6 +185,293 @@ pub fn plan(old: &[RuleSpec], new: &[RuleSpec]) -> Vec<Op> {
         }
     }
     ops
+}
+
+/// Reconciler 所知的、已经落到引擎上的状态。exe 状态以 [`exe_key`] 为键，值为下发时的写法。
+#[derive(Debug, Default)]
+struct Installed {
+    /// 规则 id → (exe, 动作)。
+    rules: HashMap<String, (String, PbAction)>,
+    blocks: HashMap<String, String>,
+    permits: HashMap<String, String>,
+}
+
+/// 一次 `apply` 中失败的范围及错误。
+#[derive(Default)]
+struct Failures {
+    ids: HashSet<String>,
+    keys: HashSet<String>,
+    errors: Vec<String>,
+}
+
+/// 把期望规则集按 [`plan`] 的顺序落到三个引擎上。
+///
+/// 失败处理（失败时只会更紧、不会更松）：某个操作失败后，与它相关的规则 id 和 exe
+/// （经新旧规则集里的 id↔exe 关系传递闭包）都视为失败——其余放开类操作全部跳过，
+/// 只保留收紧操作（`EnsureBlock`、`Revoke`）；这些规则改为 ProxyBridge `Block`
+/// 并撤销其 exe 的放行，在 `current()` 里记为 `Block`。其它规则照常执行。
+/// 由于 `current()` 与期望不同，下次以同样的期望 `apply` 会重试。
+pub struct Reconciler<I: Interceptor, G: Guard, K: ConnKiller> {
+    interceptor: I,
+    guard: G,
+    killer: K,
+    current: Vec<RuleSpec>,
+    installed: Installed,
+}
+
+impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
+    pub fn new(interceptor: I, guard: G, killer: K) -> Self {
+        Reconciler {
+            interceptor,
+            guard,
+            killer,
+            current: Vec::new(),
+            installed: Installed::default(),
+        }
+    }
+
+    /// 已生效的规则集（失败的规则以 `Block` 记录）。
+    pub fn current(&self) -> &[RuleSpec] {
+        &self.current
+    }
+
+    pub fn interceptor(&mut self) -> &mut I {
+        &mut self.interceptor
+    }
+
+    /// 走到期望规则集，返回非致命错误（中文，可直接展示）。
+    pub fn apply(&mut self, desired: Vec<RuleSpec>) -> Vec<String> {
+        let old = std::mem::take(&mut self.current);
+        let mut fail = Failures::default();
+
+        // 上次没撤掉的放行先撤掉：它们不在 `old` 里，plan 不知道
+        let stray: Vec<(String, String)> = self
+            .installed
+            .permits
+            .iter()
+            .filter(|(k, _)| {
+                !old.iter()
+                    .any(|r| permitted(r) && exe_key(&r.exe_path) == **k)
+            })
+            .map(|(k, e)| (k.clone(), e.clone()))
+            .collect();
+        for (k, exe) in stray {
+            match self.guard.revoke(&exe) {
+                Ok(()) => {
+                    self.installed.permits.remove(&k);
+                }
+                Err(e) => {
+                    fail.errors.push(format!("撤销 {exe} 的放行失败：{e}"));
+                    self.fail(&mut fail, &old, &desired, None, Some(k));
+                }
+            }
+        }
+
+        for op in plan(&old, &desired) {
+            self.exec(&op, &mut fail, &old, &desired);
+        }
+
+        self.current = self.record(&old, &desired, &fail);
+
+        // 失败的规则被删掉后可能留下没有规则对应的永久阻断，这里补删
+        let stale: Vec<(String, String)> = self
+            .installed
+            .blocks
+            .iter()
+            .filter(|(k, _)| {
+                !self
+                    .current
+                    .iter()
+                    .any(|r| guarded(r) && exe_key(&r.exe_path) == **k)
+            })
+            .map(|(k, e)| (k.clone(), e.clone()))
+            .collect();
+        for (k, exe) in stale {
+            match self.guard.remove_block(&exe) {
+                Ok(()) => {
+                    self.installed.blocks.remove(&k);
+                }
+                Err(e) => fail.errors.push(format!("移除 {exe} 的永久阻断失败：{e}")),
+            }
+        }
+        fail.errors
+    }
+
+    fn exec(&mut self, op: &Op, fail: &mut Failures, old: &[RuleSpec], desired: &[RuleSpec]) {
+        let (id, key) = match op {
+            Op::SetProxy { rule, .. } | Op::RemoveRule { rule } => (Some(rule), None),
+            Op::SetRule { rule, exe, .. } => (Some(rule), Some(exe_key(exe))),
+            Op::EnsureBlock { exe }
+            | Op::RemoveBlock { exe }
+            | Op::Permit { exe }
+            | Op::Revoke { exe }
+            | Op::Reset { exe } => (None, Some(exe_key(exe))),
+        };
+        let tightening = matches!(op, Op::EnsureBlock { .. } | Op::Revoke { .. });
+        let failed = id.is_some_and(|i| fail.ids.contains(i))
+            || key.as_ref().is_some_and(|k| fail.keys.contains(k));
+        if failed && !tightening {
+            return;
+        }
+        let inst = &mut self.installed;
+        let result = match op {
+            Op::SetProxy { rule, target } => self.interceptor.set_proxy(rule, target),
+            Op::SetRule { rule, exe, action } => {
+                self.interceptor.set_rule(rule, exe, *action).map(|()| {
+                    inst.rules.insert(rule.clone(), (exe.clone(), *action));
+                })
+            }
+            Op::RemoveRule { rule } => self.interceptor.remove_rule(rule).map(|()| {
+                inst.rules.remove(rule);
+            }),
+            Op::EnsureBlock { exe } => self.guard.ensure_block(exe).map(|()| {
+                inst.blocks.insert(exe_key(exe), exe.clone());
+            }),
+            Op::RemoveBlock { exe } => self.guard.remove_block(exe).map(|()| {
+                inst.blocks.remove(&exe_key(exe));
+            }),
+            Op::Permit { exe } => self.guard.permit(exe).map(|()| {
+                inst.permits.insert(exe_key(exe), exe.clone());
+            }),
+            Op::Revoke { exe } => self.guard.revoke(exe).map(|()| {
+                inst.permits.remove(&exe_key(exe));
+            }),
+            Op::Reset { exe } => self.killer.reset_ipv4_tcp(exe).map(|_| ()),
+        };
+        if let Err(e) = result {
+            fail.errors.push(format!("{}失败：{e}", describe(op)));
+            self.fail(fail, old, desired, id.cloned(), key);
+        }
+    }
+
+    /// 把 `id` / `key` 及与之相关的规则和 exe 标为失败，并强制阻断。
+    fn fail(
+        &mut self,
+        fail: &mut Failures,
+        old: &[RuleSpec],
+        desired: &[RuleSpec],
+        id: Option<String>,
+        key: Option<String>,
+    ) {
+        let edges: Vec<(&str, String)> = old
+            .iter()
+            .chain(desired)
+            .map(|r| (r.id.as_str(), exe_key(&r.exe_path)))
+            .chain(
+                self.installed
+                    .rules
+                    .iter()
+                    .map(|(i, (e, _))| (i.as_str(), exe_key(e))),
+            )
+            .collect();
+        let mut new_ids: Vec<String> = id.into_iter().filter(|i| !fail.ids.contains(i)).collect();
+        let mut new_keys: Vec<String> =
+            key.into_iter().filter(|k| !fail.keys.contains(k)).collect();
+        fail.ids.extend(new_ids.iter().cloned());
+        fail.keys.extend(new_keys.iter().cloned());
+        loop {
+            let mut grew = false;
+            for (i, k) in &edges {
+                let (has_i, has_k) = (fail.ids.contains(*i), fail.keys.contains(k));
+                if has_i && !has_k {
+                    fail.keys.insert(k.clone());
+                    new_keys.push(k.clone());
+                    grew = true;
+                } else if has_k && !has_i {
+                    fail.ids.insert(i.to_string());
+                    new_ids.push(i.to_string());
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+
+        // 先把 ProxyBridge 规则改成 Block：期望里有的按期望 exe（尚未下发的也补上），
+        // 只在旧集合里的按已下发的 exe。换 exe 后旧 exe 也在失败范围内，放行会被撤掉。
+        for i in new_ids {
+            let exe = match desired.iter().find(|r| r.id == i) {
+                Some(r) => r.exe_path.clone(),
+                None => match self.installed.rules.get(&i) {
+                    Some((exe, _)) => exe.clone(),
+                    None => continue,
+                },
+            };
+            if let Err(e) = self.interceptor.set_rule(&i, &exe, PbAction::Block) {
+                fail.errors
+                    .push(format!("强制阻断规则 {i}（{exe}）失败：{e}"));
+            }
+            // 失败时状态未知，仍按 Block 记录
+            self.installed.rules.insert(i, (exe, PbAction::Block));
+        }
+        // 再撤放行
+        for k in new_keys {
+            let exe = self.installed.permits.get(&k).cloned().or_else(|| {
+                desired
+                    .iter()
+                    .chain(old)
+                    .find(|r| exe_key(&r.exe_path) == k)
+                    .map(|r| r.exe_path.clone())
+            });
+            let Some(exe) = exe else { continue };
+            match self.guard.revoke(&exe) {
+                Ok(()) => {
+                    self.installed.permits.remove(&k);
+                }
+                Err(e) => fail.errors.push(format!("撤销 {exe} 的放行失败：{e}")),
+            }
+        }
+    }
+
+    /// 本次 apply 之后的实际规则集：成功的规则即期望；失败的规则按已下发状态记为 Block，
+    /// `on_fault` 按永久阻断是否在位记录，使下次 plan 会补上缺的阻断。
+    fn record(&self, old: &[RuleSpec], desired: &[RuleSpec], fail: &Failures) -> Vec<RuleSpec> {
+        let mut out = Vec::new();
+        let olds = old.iter().filter(|o| !desired.iter().any(|n| n.id == o.id));
+        for r in desired.iter().chain(olds) {
+            if !fail.ids.contains(&r.id) {
+                if desired.iter().any(|n| n.id == r.id) {
+                    out.push(r.clone());
+                }
+                continue;
+            }
+            if let Some((exe, _)) = self.installed.rules.get(&r.id) {
+                out.push(RuleSpec {
+                    id: r.id.clone(),
+                    exe_path: exe.clone(),
+                    action: Action::Block,
+                    on_fault: if self.installed.blocks.contains_key(&exe_key(exe)) {
+                        FaultPolicy::Block
+                    } else {
+                        FaultPolicy::Direct
+                    },
+                    reset_on_change: r.reset_on_change,
+                });
+            }
+        }
+        out
+    }
+}
+
+fn describe(op: &Op) -> String {
+    match op {
+        Op::SetProxy { rule, .. } => format!("设置规则 {rule} 的代理"),
+        Op::SetRule { rule, exe, action } => {
+            let a = match action {
+                PbAction::Proxy => "代理",
+                PbAction::Direct => "直连",
+                PbAction::Block => "阻断",
+            };
+            format!("将规则 {rule}（{exe}）设为{a}")
+        }
+        Op::RemoveRule { rule } => format!("删除规则 {rule}"),
+        Op::EnsureBlock { exe } => format!("添加 {exe} 的永久阻断"),
+        Op::RemoveBlock { exe } => format!("移除 {exe} 的永久阻断"),
+        Op::Permit { exe } => format!("放行 {exe}"),
+        Op::Revoke { exe } => format!("撤销 {exe} 的放行"),
+        Op::Reset { exe } => format!("断开 {exe} 的旧连接"),
+    }
 }
 
 fn kind(a: &Action) -> PbAction {
@@ -868,5 +1157,441 @@ mod tests {
         let c = spec("c", r"C:\c.exe", Action::Block, FaultPolicy::Block, false);
         let a2 = spec("a", r"C:\a.exe", Action::Block, FaultPolicy::Block, false);
         check(&[a, b.clone()], &[b, a2, c]);
+    }
+
+    // ---------- Reconciler：用假实现驱动三个 trait ----------
+
+    mod apply {
+        use super::*;
+        use crate::engine::{ConnKiller, Guard, Interceptor};
+        use routa_procsvc_proto::Flow;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        /// 三个假实现共享的"系统"：调用日志 + 已安装状态（exe 状态以 exe_key 为键）。
+        #[derive(Debug, Default)]
+        struct World {
+            log: Vec<String>,
+            calls: usize,
+            /// 第 n 次（从 0 起）变更调用返回 Err。
+            fail_at: Option<usize>,
+            /// 这些方法每次都返回 Err。
+            fail_ops: HashSet<&'static str>,
+            rules: HashMap<String, (String, PbAction)>,
+            proxies: HashMap<String, ProxyTarget>,
+            blocks: HashMap<String, String>,
+            permits: HashSet<String>,
+        }
+
+        impl World {
+            fn call(&mut self, name: &'static str, line: String) -> Result<(), String> {
+                self.log.push(line);
+                let n = self.calls;
+                self.calls += 1;
+                if self.fail_at == Some(n) || self.fail_ops.contains(name) {
+                    Err(format!("{name} 注入失败"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        type Shared = Rc<RefCell<World>>;
+        struct FakeI(Shared);
+        struct FakeG(Shared);
+        struct FakeK(Shared);
+
+        /// 与 `Op` 一一对应的日志行，假实现按同样格式记录调用。
+        fn line(op: &Op) -> String {
+            match op {
+                Op::SetProxy { rule, target } => format!("set_proxy {rule} {}", target.port),
+                Op::SetRule { rule, exe, action } => format!("set_rule {rule} {exe} {action:?}"),
+                Op::RemoveRule { rule } => format!("remove_rule {rule}"),
+                Op::EnsureBlock { exe } => format!("ensure_block {exe}"),
+                Op::RemoveBlock { exe } => format!("remove_block {exe}"),
+                Op::Permit { exe } => format!("permit {exe}"),
+                Op::Revoke { exe } => format!("revoke {exe}"),
+                Op::Reset { exe } => format!("reset {exe}"),
+            }
+        }
+
+        impl Interceptor for FakeI {
+            fn set_proxy(&mut self, rule: &str, target: &ProxyTarget) -> Result<(), String> {
+                let mut w = self.0.borrow_mut();
+                let op = Op::SetProxy {
+                    rule: rule.into(),
+                    target: target.clone(),
+                };
+                w.call("set_proxy", line(&op))?;
+                w.proxies.insert(rule.into(), target.clone());
+                Ok(())
+            }
+            fn set_rule(&mut self, rule: &str, exe: &str, action: PbAction) -> Result<(), String> {
+                let mut w = self.0.borrow_mut();
+                let op = Op::SetRule {
+                    rule: rule.into(),
+                    exe: exe.into(),
+                    action,
+                };
+                w.call("set_rule", line(&op))?;
+                w.rules.insert(rule.into(), (exe.into(), action));
+                Ok(())
+            }
+            fn remove_rule(&mut self, rule: &str) -> Result<(), String> {
+                let mut w = self.0.borrow_mut();
+                w.call("remove_rule", line(&Op::RemoveRule { rule: rule.into() }))?;
+                w.proxies.remove(rule);
+                w.rules
+                    .remove(rule)
+                    .map(|_| ())
+                    .ok_or_else(|| format!("规则 {rule} 不存在"))
+            }
+            fn flows(&mut self) -> Vec<Flow> {
+                Vec::new()
+            }
+        }
+
+        impl Guard for FakeG {
+            fn ensure_block(&mut self, exe: &str) -> Result<(), String> {
+                let mut w = self.0.borrow_mut();
+                w.call("ensure_block", line(&Op::EnsureBlock { exe: exe.into() }))?;
+                w.blocks.entry(exe_key(exe)).or_insert_with(|| exe.into());
+                Ok(())
+            }
+            fn remove_block(&mut self, exe: &str) -> Result<(), String> {
+                let mut w = self.0.borrow_mut();
+                w.call("remove_block", line(&Op::RemoveBlock { exe: exe.into() }))?;
+                w.blocks.remove(&exe_key(exe));
+                Ok(())
+            }
+            fn permit(&mut self, exe: &str) -> Result<(), String> {
+                let mut w = self.0.borrow_mut();
+                w.call("permit", line(&Op::Permit { exe: exe.into() }))?;
+                w.permits.insert(exe_key(exe));
+                Ok(())
+            }
+            fn revoke(&mut self, exe: &str) -> Result<(), String> {
+                let mut w = self.0.borrow_mut();
+                w.call("revoke", line(&Op::Revoke { exe: exe.into() }))?;
+                w.permits.remove(&exe_key(exe));
+                Ok(())
+            }
+            fn cleanup_all(&mut self) -> Result<(), String> {
+                let mut w = self.0.borrow_mut();
+                w.call("cleanup_all", "cleanup_all".into())?;
+                w.blocks.clear();
+                w.permits.clear();
+                Ok(())
+            }
+            fn blocked_exes(&mut self) -> Result<Vec<String>, String> {
+                Ok(self.0.borrow().blocks.values().cloned().collect())
+            }
+        }
+
+        impl ConnKiller for FakeK {
+            fn reset_ipv4_tcp(&mut self, exe: &str) -> Result<u32, String> {
+                let mut w = self.0.borrow_mut();
+                w.call("reset", line(&Op::Reset { exe: exe.into() }))?;
+                Ok(0)
+            }
+        }
+
+        type Rec = Reconciler<FakeI, FakeG, FakeK>;
+
+        fn rig() -> (Rec, Shared) {
+            let w = Shared::default();
+            let rec = Reconciler::new(FakeI(w.clone()), FakeG(w.clone()), FakeK(w.clone()));
+            (rec, w)
+        }
+
+        fn take_log(w: &Shared) -> Vec<String> {
+            std::mem::take(&mut w.borrow_mut().log)
+        }
+
+        fn lines(ops: &[Op]) -> Vec<String> {
+            ops.iter().map(line).collect()
+        }
+
+        fn proxy_guarded(id: &str, exe: &str) -> RuleSpec {
+            spec(id, exe, Action::Proxy(target(1)), FaultPolicy::Block, true)
+        }
+
+        /// 假实现里的状态与 `rules` 完全对应（这正是 Reconciler 下次 plan 的前提）。
+        fn assert_world_is(w: &Shared, rules: &[RuleSpec], ctx: &str) {
+            let w = w.borrow();
+            let want = Sim::built(rules);
+            assert_eq!(w.rules, want.rules, "{ctx}");
+            let blocks: HashSet<String> = w.blocks.keys().cloned().collect();
+            assert_eq!(blocks, want.blocks, "{ctx}");
+            assert_eq!(w.permits, want.permits, "{ctx}");
+            for n in rules {
+                if let Action::Proxy(t) = &n.action {
+                    assert_eq!(w.proxies.get(&n.id), Some(t), "{ctx}");
+                }
+            }
+        }
+
+        #[test]
+        fn apply_executes_plan_in_order() {
+            let (mut rec, w) = rig();
+            let v1 = vec![
+                proxy_guarded("a", r"C:\a.exe"),
+                spec("b", r"C:\b.exe", Action::Direct, FaultPolicy::Direct, true),
+                spec("c", r"C:\c.exe", Action::Block, FaultPolicy::Block, false),
+            ];
+            assert!(rec.apply(v1.clone()).is_empty());
+            assert_eq!(take_log(&w), lines(&plan(&[], &v1)));
+            assert_eq!(rec.current(), &v1[..]);
+            assert_world_is(&w, &v1, "v1");
+
+            let v2 = vec![
+                spec("a", r"C:\a.exe", Action::Block, FaultPolicy::Block, true),
+                spec(
+                    "b",
+                    r"C:\b.exe",
+                    Action::Proxy(target(2)),
+                    FaultPolicy::Block,
+                    true,
+                ),
+                spec("d", r"C:\c.exe", Action::Direct, FaultPolicy::Block, false),
+            ];
+            assert!(rec.apply(v2.clone()).is_empty());
+            assert_eq!(take_log(&w), lines(&plan(&v1, &v2)));
+            assert_eq!(rec.current(), &v2[..]);
+            assert_world_is(&w, &v2, "v2");
+        }
+
+        #[test]
+        fn failed_permit_leaves_rule_blocked() {
+            let (mut rec, w) = rig();
+            w.borrow_mut().fail_ops.insert("permit");
+            let errors = rec.apply(vec![proxy_guarded("r", EXE)]);
+            assert_eq!(errors.len(), 1, "{errors:?}");
+
+            assert_eq!(rec.current().len(), 1);
+            assert_eq!(rec.current()[0].action, Action::Block);
+            let log = take_log(&w);
+            let permit = log.iter().position(|l| l.starts_with("permit")).unwrap();
+            let forced = format!("set_rule r {EXE} Block");
+            assert!(log[permit..].contains(&forced), "{log:?}");
+            // 放开类操作（Reset）不再执行
+            assert!(!log.iter().any(|l| l.starts_with("reset")), "{log:?}");
+            let world = w.borrow();
+            assert_eq!(world.rules["r"], (EXE.to_string(), PbAction::Block));
+            assert!(world.blocks.contains_key(&exe_key(EXE)));
+            assert!(world.permits.is_empty());
+        }
+
+        #[test]
+        fn reapply_same_state_is_noop() {
+            let (mut rec, w) = rig();
+            let rules = vec![
+                proxy_guarded("a", r"C:\a.exe"),
+                spec("b", r"C:\b.exe", Action::Block, FaultPolicy::Direct, true),
+            ];
+            assert!(rec.apply(rules.clone()).is_empty());
+            take_log(&w);
+            assert!(rec.apply(rules.clone()).is_empty());
+            assert!(take_log(&w).is_empty());
+            assert_eq!(rec.current(), &rules[..]);
+        }
+
+        #[test]
+        fn reapply_after_failure_retries() {
+            let (mut rec, w) = rig();
+            let rules = vec![proxy_guarded("r", EXE)];
+            w.borrow_mut().fail_ops.insert("permit");
+            assert!(!rec.apply(rules.clone()).is_empty());
+            assert_ne!(rec.current(), &rules[..]);
+            take_log(&w);
+
+            w.borrow_mut().fail_ops.clear();
+            assert!(rec.apply(rules.clone()).is_empty());
+            assert!(take_log(&w).contains(&format!("permit {EXE}")));
+            assert_eq!(rec.current(), &rules[..]);
+            assert_world_is(&w, &rules, "retry");
+
+            assert!(rec.apply(rules.clone()).is_empty());
+            assert!(take_log(&w).is_empty());
+        }
+
+        #[test]
+        fn failure_does_not_stop_other_rules() {
+            let (mut rec, w) = rig();
+            let a = proxy_guarded("a", EXE);
+            let b = proxy_guarded("b", OTHER_EXE);
+            let ops = plan(&[], &[a.clone(), b.clone()]);
+            let n = ops
+                .iter()
+                .position(|o| *o == Op::Permit { exe: EXE.into() })
+                .unwrap();
+            w.borrow_mut().fail_at = Some(n);
+            let errors = rec.apply(vec![a.clone(), b.clone()]);
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            let current = rec.current();
+            assert_eq!(current[0].action, Action::Block);
+            assert_eq!(current[1], b);
+            let world = w.borrow();
+            assert!(world.permits.contains(&exe_key(OTHER_EXE)));
+            assert!(!world.permits.contains(&exe_key(EXE)));
+            assert_eq!(world.rules["b"].1, PbAction::Proxy);
+            assert!(world.log.contains(&format!("reset {OTHER_EXE}")));
+            assert!(!world.log.contains(&format!("reset {EXE}")));
+        }
+
+        #[test]
+        fn failed_revoke_on_removal_keeps_rule_blocked() {
+            let (mut rec, w) = rig();
+            assert!(rec.apply(vec![proxy_guarded("r", EXE)]).is_empty());
+            take_log(&w);
+
+            w.borrow_mut().fail_ops.insert("revoke");
+            assert!(!rec.apply(vec![]).is_empty());
+            {
+                let world = w.borrow();
+                // 放行撤不掉：ProxyBridge 规则不能删，改成 Block 兜住
+                assert_eq!(world.rules["r"], (EXE.to_string(), PbAction::Block));
+                assert!(
+                    !world.log.iter().any(|l| l.starts_with("remove_")),
+                    "{:?}",
+                    world.log
+                );
+            }
+            assert_eq!(rec.current().len(), 1);
+            assert_eq!(rec.current()[0].action, Action::Block);
+
+            w.borrow_mut().fail_ops.clear();
+            take_log(&w);
+            assert!(rec.apply(vec![]).is_empty());
+            assert!(rec.current().is_empty());
+            assert_world_is(&w, &[], "cleaned");
+        }
+
+        #[test]
+        fn failed_ensure_block_retries_next_apply() {
+            let (mut rec, w) = rig();
+            let rules = vec![proxy_guarded("r", EXE)];
+            w.borrow_mut().fail_ops.insert("ensure_block");
+            assert!(!rec.apply(rules.clone()).is_empty());
+            {
+                let world = w.borrow();
+                // 没有永久阻断时绝不放行，规则落成 Block
+                assert!(world.permits.is_empty());
+                assert_eq!(world.rules["r"].1, PbAction::Block);
+            }
+            w.borrow_mut().fail_ops.clear();
+            assert!(rec.apply(rules.clone()).is_empty());
+            assert_eq!(rec.current(), &rules[..]);
+            assert_world_is(&w, &rules, "retry");
+        }
+
+        /// 对 old → new 的每一个操作位置注入一次失败，检查：失败只会更紧、
+        /// 记录的 current 与假实现状态一致、下次 apply 同样的 new 能恢复且之后为空操作。
+        fn check_single_failures(old: &[RuleSpec], new: &[RuleSpec]) {
+            for n in 0..plan(old, new).len() {
+                let ctx = format!("{old:?} -> {new:?}, fail #{n}");
+                let (mut rec, w) = rig();
+                assert!(rec.apply(old.to_vec()).is_empty(), "{ctx}");
+                {
+                    let mut world = w.borrow_mut();
+                    world.fail_at = Some(world.calls + n);
+                }
+                assert!(!rec.apply(new.to_vec()).is_empty(), "{ctx}");
+
+                let current = rec.current().to_vec();
+                let ctx = format!("{ctx}: recorded {current:?}");
+                // 未完成的规则只会落成 Block
+                for c in &current {
+                    assert!(
+                        c.action == Action::Block || new.contains(c),
+                        "{ctx}: loosened {c:?}"
+                    );
+                }
+                assert_world_is(&w, &current, &ctx);
+                // 期望受保护的 exe：要么已按期望就位，要么被阻断
+                {
+                    let world = w.borrow();
+                    for k in guarded_keys(new) {
+                        let mine: Vec<&RuleSpec> = current
+                            .iter()
+                            .filter(|c| exe_key(&c.exe_path) == k)
+                            .collect();
+                        let settled = mine.iter().all(|c| new.contains(c));
+                        let pb_blocks = mine.iter().all(|c| c.action == Action::Block);
+                        let wfp_blocks =
+                            world.blocks.contains_key(&k) && !world.permits.contains(&k);
+                        assert!(
+                            !mine.is_empty() && (settled || pb_blocks || wfp_blocks),
+                            "{ctx}: {k} not held"
+                        );
+                    }
+                }
+
+                w.borrow_mut().fail_at = None;
+                assert_eq!(rec.apply(new.to_vec()), Vec::<String>::new(), "{ctx}");
+                assert_eq!(rec.current(), new, "{ctx}");
+                assert_world_is(&w, new, &ctx);
+                take_log(&w);
+                assert!(rec.apply(new.to_vec()).is_empty(), "{ctx}");
+                assert!(take_log(&w).is_empty(), "{ctx}");
+            }
+        }
+
+        /// 两条规则的所有集合（同一集合内 exe 不重复）。b 槽不含大小写变体以控制用时，
+        /// 大小写变化已由 a 槽覆盖。
+        fn two_rule_sets() -> Vec<Vec<RuleSpec>> {
+            let slot = |id: &str, exes: &[&str]| {
+                let mut v: Vec<Option<RuleSpec>> = vec![None];
+                for exe in exes {
+                    for a in [Action::Proxy(target(1)), Action::Direct, Action::Block] {
+                        for f in [FaultPolicy::Direct, FaultPolicy::Block] {
+                            v.push(Some(spec(id, exe, a.clone(), f, true)));
+                        }
+                    }
+                }
+                v
+            };
+            let mut sets = Vec::new();
+            for a in slot("a", &[EXE, EXE_OTHER_CASE, OTHER_EXE]) {
+                for b in slot("b", &[EXE, OTHER_EXE]) {
+                    let set: Vec<RuleSpec> = a.iter().chain(b.iter()).cloned().collect();
+                    if set.len() == 2 && exe_key(&set[0].exe_path) == exe_key(&set[1].exe_path) {
+                        continue;
+                    }
+                    sets.push(set);
+                }
+            }
+            sets
+        }
+
+        /// 按 old 的下标分片，让测试并行跑。
+        fn single_failures_shard(shard: usize) {
+            let sets = two_rule_sets();
+            for old in sets.iter().skip(shard).step_by(4) {
+                for new in &sets {
+                    check_single_failures(old, new);
+                }
+            }
+        }
+
+        #[test]
+        fn single_failure_fails_closed_and_recovers_0() {
+            single_failures_shard(0);
+        }
+
+        #[test]
+        fn single_failure_fails_closed_and_recovers_1() {
+            single_failures_shard(1);
+        }
+
+        #[test]
+        fn single_failure_fails_closed_and_recovers_2() {
+            single_failures_shard(2);
+        }
+
+        #[test]
+        fn single_failure_fails_closed_and_recovers_3() {
+            single_failures_shard(3);
+        }
     }
 }
