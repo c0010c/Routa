@@ -4,6 +4,8 @@
 
 mod engine;
 mod fallback;
+mod paths;
+mod pb_ffi;
 mod reconcile;
 
 fn main() {}

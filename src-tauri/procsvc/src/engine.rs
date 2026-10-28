@@ -13,7 +13,8 @@ pub enum PbAction {
 
 /// ProxyBridge（WinDivert）拦截器。
 ///
-/// 规则按 id 唯一：`set_rule` 对已存在的 id 是覆盖（含换 exe）。
+/// 规则按 id 唯一：`set_rule` 对已存在的 id 是覆盖（含换 exe）；`remove_rule` 对不存在的 id 返回 Ok（幂等）。
+/// `set_rule(Proxy)` 之前必须先对同一 id `set_proxy`。
 /// 实现必须按 [`crate::reconcile::exe_key`] 不区分大小写地对待 exe 路径。
 pub trait Interceptor {
     fn set_proxy(&mut self, rule: &str, target: &ProxyTarget) -> Result<(), String>;
