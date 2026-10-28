@@ -72,6 +72,11 @@ pub fn install_dir() -> Result<PathBuf, String> {
     Ok(program_files()?.join("Routa").join("ProcessRouting"))
 }
 
+/// 安装后的服务 exe：`<安装目录>\routa-procsvc.exe`。
+pub fn installed_exe() -> Result<PathBuf, String> {
+    Ok(install_dir()?.join(EXE_NAME))
+}
+
 fn program_files() -> Result<PathBuf, String> {
     let mut p: PWSTR = std::ptr::null_mut();
     // SAFETY: 成功与否 p 都要用 CoTaskMemFree 释放（失败时为 null，释放 null 无害）；

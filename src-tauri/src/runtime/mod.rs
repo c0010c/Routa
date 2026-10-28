@@ -309,7 +309,8 @@ impl Inner {
     }
 
     /// Executables a process rule must not name: Routa itself, the bundled
-    /// mihomo and the custom core (`settings.core_path`) if one is set.
+    /// mihomo, the custom core (`settings.core_path`) if one is set, and the
+    /// process routing service exe (bundled helper and installed copy).
     fn forbidden_exes(&self, settings: &Settings) -> Vec<PathBuf> {
         let bundled = Settings { core_path: None, ..settings.clone() };
         let mut out = Vec::new();
@@ -319,6 +320,7 @@ impl Inner {
         }
         out.extend((self.launcher_for)(&bundled).core_binary());
         out.extend(settings.core_path.as_deref().filter(|p| !p.trim().is_empty()).map(PathBuf::from));
+        out.extend(crate::procroute::elevate::component_exes());
         out
     }
 

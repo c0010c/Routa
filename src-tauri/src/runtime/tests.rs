@@ -1264,8 +1264,13 @@ async fn process_routing_rejects_forbidden_and_invalid_rules() {
     let h = harness(&m);
     let before = std::fs::read_to_string(h.data.join("state.json")).unwrap();
     let own = std::env::current_exe().unwrap().to_string_lossy().into_owned();
+    let helper = std::env::current_exe().unwrap().with_file_name("routa-procsvc.exe").to_string_lossy().into_owned();
+    let installed = Path::new(&std::env::var_os("ProgramFiles").unwrap())
+        .join(r"Routa\ProcessRouting\ROUTA-PROCSVC.EXE")
+        .to_string_lossy()
+        .into_owned();
 
-    for exe in [own.as_str(), BUNDLED_CORE, r"c:\custom\MIHOMO-ALPHA.exe"] {
+    for exe in [own.as_str(), BUNDLED_CORE, r"c:\custom\MIHOMO-ALPHA.exe", helper.as_str(), installed.as_str()] {
         let errs = h
             .rt
             .mutate_process_routing(|pr| pr.rules.push(process_rule(exe)))

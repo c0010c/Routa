@@ -318,8 +318,20 @@ fn guarded_keys(rules: &[RuleSpec]) -> HashSet<String> {
         .collect()
 }
 
-/// 服务端对 Apply 的校验（spec 6.5、ruling R15）。
+/// 不能作为规则目标的 exe（spec 4）：服务自身（安装后的路径与正在运行的路径）。
+fn own_exes() -> Vec<String> {
+    let installed = crate::install::installed_exe().ok();
+    let running = std::env::current_exe().ok();
+    installed
+        .into_iter()
+        .chain(running)
+        .map(|p: PathBuf| exe_key(&p.to_string_lossy()))
+        .collect()
+}
+
+/// 服务端对 Apply 的校验（spec 4、6.5、ruling R15）。
 fn validate(state: &DesiredState) -> Result<(), String> {
+    let own = own_exes();
     let mut ids = HashSet::new();
     let mut exes = HashSet::new();
     let mut proxies = 0;
@@ -330,6 +342,9 @@ fn validate(state: &DesiredState) -> Result<(), String> {
         let exe = &r.exe_path;
         if let Some(reason) = routa_procsvc_proto::exe_path_problem(exe) {
             return Err(format!("程序路径无效（{reason}）：{exe}"));
+        }
+        if own.contains(&exe_key(exe)) {
+            return Err(format!("不能对进程分流组件自身设置规则：{exe}"));
         }
         if !exes.insert(exe_key(exe)) {
             return Err(format!("程序路径重复：{exe}"));
@@ -1153,6 +1168,22 @@ pub(crate) mod tests {
                 "32",
             ),
             ("dead routa", |s| s.routa_pid = 0, "Routa 进程"),
+            (
+                "installed service exe",
+                |s| {
+                    let p = crate::install::installed_exe().unwrap();
+                    s.rules[0].exe_path = p.to_string_lossy().to_uppercase();
+                },
+                "组件自身",
+            ),
+            (
+                "running service exe",
+                |s| {
+                    let p = std::env::current_exe().unwrap();
+                    s.rules[1].exe_path = p.to_string_lossy().into_owned();
+                },
+                "组件自身",
+            ),
         ];
         for (name, edit, want) in cases {
             let dir = tempfile::tempdir().unwrap();

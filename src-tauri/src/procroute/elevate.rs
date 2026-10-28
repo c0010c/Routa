@@ -1,9 +1,10 @@
 //! 以管理员身份运行一次性的组件命令（`routa-procsvc.exe --install / --uninstall / --cleanup`），
 //! 经 UAC 提权，等待其退出码。
 
+use std::ffi::OsString;
 use std::io;
 use std::iter::repeat_n;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, ERROR_CANCELLED, HANDLE};
@@ -12,14 +13,19 @@ use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, 
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject, INFINITE,
 };
+use windows_sys::core::PWSTR;
+use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::UI::Shell::{
-    ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    FOLDERID_ProgramFiles, SHGetKnownFolderPath, ShellExecuteExW, KF_FLAG_DEFAULT, SEE_MASK_NOASYNC,
+    SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
 const HELPER: &str = "routa-procsvc.exe";
 /// 组件的其余文件（ProxyBridgeCore.dll、WinDivert）所在目录名。
 const SOURCE_DIR: &str = "procsvc";
+/// 组件安装目录（相对 Program Files），与 routa-procsvc 的 `install_dir` 一致。
+const INSTALLED_DIR: &str = r"Routa\ProcessRouting";
 
 pub enum ElevatedCmd {
     Install,
@@ -51,6 +57,44 @@ pub async fn run_elevated(cmd: ElevatedCmd) -> Result<(), String> {
         .await
         .map_err(|e| format!("组件命令没有完成：{e}"))??;
     exit_status(code)
+}
+
+/// 进程规则不能指向的组件 exe（spec 4）：Routa 旁边的 `routa-procsvc.exe`（debug 构建另含源码树里
+/// 实际会用到的那个）以及安装后的副本 `<Program Files>\Routa\ProcessRouting\routa-procsvc.exe`。
+pub fn component_exes() -> Vec<PathBuf> {
+    let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
+    let program_files = program_files();
+    if program_files.is_none() {
+        eprintln!("procroute: cannot resolve Program Files for process rule checks");
+    }
+    component_exes_in(exe_dir.as_deref(), dev_manifest_dir(), program_files.as_deref())
+}
+
+fn component_exes_in(exe_dir: Option<&Path>, manifest: Option<&Path>, program_files: Option<&Path>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = exe_dir.map(|d| d.join(HELPER)).into_iter().collect();
+    if let Ok(p) = locate_helper(exe_dir, manifest) {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out.extend(program_files.map(|p| p.join(INSTALLED_DIR).join(HELPER)));
+    out
+}
+
+/// `FOLDERID_ProgramFiles`（与服务取安装目录的方式相同）。
+fn program_files() -> Option<PathBuf> {
+    let mut p: PWSTR = std::ptr::null_mut();
+    // SAFETY: 成功与否 p 都要用 CoTaskMemFree 释放（失败时为 null，释放 null 无害）；
+    // 成功时 p 是以 NUL 结尾的宽字符串。
+    unsafe {
+        let hr = SHGetKnownFolderPath(&FOLDERID_ProgramFiles, KF_FLAG_DEFAULT as u32, std::ptr::null_mut(), &mut p);
+        let path = (hr >= 0 && !p.is_null()).then(|| {
+            let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+            PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(p, len)))
+        });
+        CoTaskMemFree(p as *const _);
+        path
+    }
 }
 
 /// 组件命令的退出码（见 routa-procsvc 的用法说明）。
@@ -239,6 +283,27 @@ mod tests {
         for c in [1, 2, 3, 7] {
             assert!(exit_status(c).is_err());
         }
+    }
+
+    #[test]
+    fn component_exes_cover_bundled_dev_and_installed_copies() {
+        let td = tempfile::tempdir().unwrap();
+        let (app, manifest) = (td.path().join("app"), td.path().join("src-tauri"));
+        let pf = Path::new(r"C:\Program Files");
+        let installed = PathBuf::from(r"C:\Program Files\Routa\ProcessRouting\routa-procsvc.exe");
+        // 旁边的副本即使还不存在也要禁止；源码树里没有构建产物
+        assert_eq!(component_exes_in(Some(&app), Some(&manifest), Some(pf)), [app.join(HELPER), installed.clone()]);
+        // debug 构建实际会用的源码树产物也禁止
+        let debug = manifest.join("target/debug");
+        fs::create_dir_all(&debug).unwrap();
+        fs::write(debug.join(HELPER), b"").unwrap();
+        assert_eq!(
+            component_exes_in(Some(&app), Some(&manifest), Some(pf)),
+            [app.join(HELPER), debug.join(HELPER), installed.clone()]
+        );
+        assert_eq!(component_exes_in(None, None, None), Vec::<PathBuf>::new());
+        let real = component_exes();
+        assert!(real.iter().any(|p| p.ends_with(r"Routa\ProcessRouting\routa-procsvc.exe")), "{real:?}");
     }
 
     #[test]
