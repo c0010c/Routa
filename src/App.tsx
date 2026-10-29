@@ -1,5 +1,6 @@
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 import { HashRouter, Route, Routes } from "react-router-dom";
 import { useRuntimeEvents } from "./api/events";
 import { ApplyResultProvider } from "./components/ApplyResultSnackbar";
@@ -13,14 +14,15 @@ import { Settings } from "./pages/Settings";
 import { Tailscale } from "./pages/Tailscale";
 import { theme } from "./theme";
 
-const queryClient = new QueryClient();
-
 function Events() {
   useRuntimeEvents();
   return null;
 }
 
 export default function App() {
+  // Keep the client with its query observers when Fast Refresh re-evaluates this module.
+  const [queryClient] = useState(() => new QueryClient());
+
   return (
     <ThemeProvider theme={theme}>
       <QueryClientProvider client={queryClient}>

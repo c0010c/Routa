@@ -109,3 +109,47 @@ describe("Listeners", () => {
     expect(screen.getByRole("menuitem", { name: "删除 下载" })).toBeInTheDocument();
   });
 });
+
+it("updates the switch and runtime status after saving without remounting the page", async () => {
+  let currentModel: Model = {
+    ...model,
+    exits: [{ id: "e1", name: "直连", kind: "Direct", interface: null }],
+    listeners: [{ ...model.listeners[0], exit: "e1" }],
+  };
+  let currentStatus = status;
+  vi.mocked(commands.getModel).mockImplementation(async () => structuredClone(currentModel));
+  vi.mocked(commands.getStatus).mockImplementation(async () => structuredClone(currentStatus));
+  vi.mocked(commands.saveListener).mockImplementation(async (saved) => {
+    currentModel = { ...currentModel, listeners: [saved] };
+    currentStatus = {
+      ...currentStatus,
+      health: {
+        ...currentStatus.health,
+        listeners: { l1: saved.user_enabled ? "Active" : "DisabledByUser" },
+      },
+      effective_listeners: saved.user_enabled ? ["l1"] : [],
+    };
+    return { status: "ok", data: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } };
+  });
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <ApplyResultProvider>
+        <MemoryRouter><Listeners /></MemoryRouter>
+      </ApplyResultProvider>
+    </QueryClientProvider>,
+  );
+  const toggle = await screen.findByRole("switch", { name: "启用 下载" });
+  expect(toggle).not.toBeChecked();
+  fireEvent.click(toggle);
+  await waitFor(() => expect(commands.saveListener).toHaveBeenLastCalledWith(
+    expect.objectContaining({ id: "l1", user_enabled: true }),
+  ));
+  await waitFor(() => expect(toggle).toBeChecked());
+  expect(await screen.findByText("运行中")).toBeInTheDocument();
+  fireEvent.click(toggle);
+  await waitFor(() => expect(commands.saveListener).toHaveBeenLastCalledWith(
+    expect.objectContaining({ id: "l1", user_enabled: false }),
+  ));
+  await waitFor(() => expect(toggle).not.toBeChecked());
+  expect(await screen.findByText("已停用")).toBeInTheDocument();
+});
