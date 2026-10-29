@@ -24,6 +24,8 @@ pub struct FakeApi {
     /// Connection ids whose `close_connection` answers 404 (already gone).
     pub close_gone: Mutex<HashSet<String>>,
     pub selects: Mutex<Vec<(String, String)>>,
+    /// Select results consumed in call order; defaults to success when exhausted.
+    pub select_results: Mutex<VecDeque<Result<(), ApiError>>>,
     /// (proxy, url, timeout_ms) per delay call.
     pub delay_calls: Mutex<Vec<(String, String, u32)>>,
     /// Per-proxy delay result; unknown proxies are `Unreachable`.
@@ -137,7 +139,7 @@ impl MihomoApi for FakeApi {
             .lock()
             .unwrap()
             .push((group.to_string(), member.to_string()));
-        Ok(())
+        self.select_results.lock().unwrap().pop_front().unwrap_or(Ok(()))
     }
 
     async fn proxy_now(&self, name: &str) -> Result<Option<String>, ApiError> {

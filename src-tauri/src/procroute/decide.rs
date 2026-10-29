@@ -1,12 +1,12 @@
 //! 每条规则的实际动作（spec 第 5 节）。纯函数，不做任何 IO。
 
 use std::collections::HashMap;
-use std::net::IpAddr;
 
 use routa_procsvc_proto::{Action, DesiredState, ExitPolicy, FaultPolicy, ProxyKind, ProxyTarget, RuleSpec};
 
 use crate::core::process::CoreState;
 use crate::model::health::ListenerStatus;
+use crate::model::validate::process_proxy_host;
 use crate::model::{Listener, ListenerType, Model, ProcessRule, ProcessRuleId};
 use crate::runtime::{CoreStopReason, RuntimeStatus};
 
@@ -60,7 +60,7 @@ fn rule_action(model: &Model, status: &RuntimeStatus, rule: &ProcessRule) -> (Ac
             Some(l) if !listener_in_effect(status, l) => (Action::Block, Some("Listener 未生效")),
             Some(l) => match proxy_target(l) {
                 Some(t) => (Action::Proxy(t), None),
-                None => (Action::Block, Some("Listener 的监听地址不是 IP")),
+                None => (Action::Block, Some("进程分流仅支持 IPv4 入口，请修改 Listener 的监听地址")),
             },
         },
     }
@@ -72,21 +72,10 @@ fn listener_in_effect(status: &RuntimeStatus, l: &Listener) -> bool {
         && !status.failed_listeners.iter().any(|f| f.id == l.id)
 }
 
-/// 监听所有地址或回环时连 127.0.0.1，只监听某个局域网 IP 时连那个 IP。
-/// 助手只接受 IP，监听地址不是 IP 字面量时返回 None。
-fn proxy_host(listen: &str) -> Option<String> {
-    let t = listen.trim();
-    let t = t.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(t);
-    if t.eq_ignore_ascii_case("localhost") || matches!(t, "" | "0.0.0.0" | "::" | "::1" | "127.0.0.1") {
-        return Some("127.0.0.1".into());
-    }
-    t.parse::<IpAddr>().ok().map(|ip| ip.to_string())
-}
-
 fn proxy_target(l: &Listener) -> Option<ProxyTarget> {
     Some(ProxyTarget {
         kind: ProxyKind::Socks5,
-        host: proxy_host(&l.listen)?,
+        host: process_proxy_host(&l.listen)?,
         port: l.port,
         username: l.auth.as_ref().map(|a| a.username.clone()),
         password: l.auth.as_ref().map(|a| a.password.clone()),
@@ -330,20 +319,22 @@ mod tests {
     fn proxy_host_for_lan_listen_address() {
         let d = decide(&model_with("192.168.1.5", FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
         assert_eq!(only_action(&d), proxy("192.168.1.5"));
-        for listen in ["0.0.0.0", "::", "127.0.0.1", "", "localhost"] {
+        for listen in ["0.0.0.0", "127.0.0.1", "", "localhost", "LocalHost", "[0.0.0.0]"] {
             let d = decide(&model_with(listen, FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
             assert_eq!(only_action(&d), proxy("127.0.0.1"), "listen {listen:?}");
         }
     }
 
     #[test]
-    fn ipv6_bracketed_any_maps_to_loopback() {
-        for listen in ["[::]", " [::1] ", "LocalHost", "[0.0.0.0]"] {
-            let d = decide(&model_with(listen, FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
-            assert_eq!(only_action(&d), proxy("127.0.0.1"), "listen {listen:?}");
+    fn ipv6_listener_blocks_even_when_fault_policy_is_direct() {
+        for listen in ["::", "::1", "[::]", " [::1] ", "[fe80::1]", "2001:db8::1", "::ffff:127.0.0.1"] {
+            let m = model_with(listen, FaultPolicy::Direct, ExitPolicy::Direct);
+            assert_eq!(only_action(&decide(&m, &running(), PID)), Action::Block, "listen {listen:?}");
+            assert_eq!(
+                reasons(&m, &running())[&ProcessRuleId("r1".into())].as_deref(),
+                Some("进程分流仅支持 IPv4 入口，请修改 Listener 的监听地址")
+            );
         }
-        let d = decide(&model_with("[fe80::1]", FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
-        assert_eq!(only_action(&d), proxy("fe80::1"));
     }
 
     #[test]
@@ -353,7 +344,7 @@ mod tests {
             let d = decide(&m, &running(), PID);
             assert_eq!(only_action(&d), Action::Block, "listen {listen:?}");
             let why = reasons(&m, &running());
-            assert_eq!(why[&ProcessRuleId("r1".into())].as_deref(), Some("Listener 的监听地址不是 IP"));
+            assert_eq!(why[&ProcessRuleId("r1".into())].as_deref(), Some("进程分流仅支持 IPv4 入口，请修改 Listener 的监听地址"));
         }
     }
 

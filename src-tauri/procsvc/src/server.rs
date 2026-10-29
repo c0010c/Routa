@@ -156,7 +156,21 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
                 }
                 .into(),
             ),
+            Request::Attach { routa_pid } => match Process::open(routa_pid) {
+                Ok(process) => {
+                    self.routa = Some(Routa {
+                        session: session.id,
+                        process,
+                        windows_session: windows_session_of(routa_pid),
+                        said_goodbye: false,
+                    });
+                    session.said_goodbye = false;
+                    Response::Ok
+                }
+                Err(e) => Response::Error(e),
+            },
             Request::Apply(state) => self.apply(state, session),
+            Request::RetryApply(state) => self.apply_inner(state, session, true),
             Request::Goodbye => {
                 session.said_goodbye = true;
                 if let Some(r) = self.routa.as_mut().filter(|r| r.session == session.id) {
@@ -175,6 +189,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
                 last_interruption: self.last_interruption.clone(),
                 truncated_flows: self.truncated_flows,
                 conflicts: conflicts(),
+                rules: self.reconciler.status(),
             }),
             Request::CleanupFilters => {
                 let keep = guarded_keys(self.reconciler.current());
@@ -190,6 +205,10 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
     /// 回 `Error`（保存不了就不落地：否则服务重启后会按旧状态回落）。
     /// 落地时引擎的非致命错误以 `Applied` 返回（失败的规则已按 Block 处理）。
     fn apply(&mut self, state: DesiredState, session: &mut Session) -> Response {
+        self.apply_inner(state, session, false)
+    }
+
+    fn apply_inner(&mut self, state: DesiredState, session: &mut Session, retry: bool) -> Response {
         if let Err(e) = validate(&state) {
             return Response::Error(e);
         }
@@ -200,7 +219,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
         if let Err(e) = persist::save(&self.state_path, &state) {
             return Response::Error(format!("保存状态失败：{e}"));
         }
-        let errors = self.reconciler.apply(state.rules.clone());
+        let errors = if retry { self.reconciler.retry(state.rules.clone()) } else { self.reconciler.apply(state.rules.clone()) };
         let state_pid = state.routa_pid;
         self.last = Some(state);
         self.routa = Some(Routa {
@@ -993,6 +1012,47 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn reconnect_registration_keeps_fallback_until_goodbye_without_reapplying() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut srv, world) = boot(dir.path(), &[], true);
+        let mut s = hello(&mut srv);
+        w(&world).fail_rules.insert("a".into());
+        assert!(matches!(srv.handle(Request::Apply(state(ExitPolicy::Block)), &mut s), Response::Applied { .. }));
+        w(&world).fail_rules.clear();
+        srv.end_session(&s);
+        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
+        let saved = persist::load(&dir.path().join(persist::STATE_FILE));
+        for restart in [false, true] {
+            if restart {
+                srv = boot(dir.path(), &[], false).0;
+            }
+            let before = srv.reconciler.current().to_vec();
+            let mut reconnected = hello(&mut srv);
+            assert_eq!(srv.handle(Request::Attach { routa_pid: std::process::id() }, &mut reconnected), Response::Ok);
+            assert_eq!(srv.reconciler.current(), before);
+            assert_eq!(persist::load(&dir.path().join(persist::STATE_FILE)), saved);
+            assert_eq!(srv.handle(Request::Goodbye, &mut reconnected), Response::Ok);
+            srv.end_session(&reconnected);
+            assert!(srv.reconciler.current().iter().all(|r| r.action == Action::Block));
+        }
+    }
+
+    #[test]
+    fn registration_rejects_dead_process_and_disconnect_still_uses_fault_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut srv, world) = boot(dir.path(), &[], true);
+        let mut s = hello(&mut srv);
+        applied(&mut srv, &mut s, state(ExitPolicy::Block));
+        srv.end_session(&s);
+        let mut s = hello(&mut srv);
+        assert!(matches!(srv.handle(Request::Attach { routa_pid: 0 }, &mut s), Response::Error(_)));
+        assert!(srv.routa.is_none());
+        assert_eq!(srv.handle(Request::Attach { routa_pid: std::process::id() }, &mut s), Response::Ok);
+        srv.end_session(&s);
+        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
+    }
+
+    #[test]
     fn disconnect_after_goodbye_applies_exit_policy() {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
@@ -1256,6 +1316,12 @@ pub(crate) mod tests {
         assert_eq!(action(&world, "a"), Some(PbAction::Block));
         assert_eq!(action(&world, "b"), Some(PbAction::Proxy));
         assert!(dir.path().join(persist::STATE_FILE).exists());
+        let report = status(&mut srv, &mut s);
+        assert_eq!(report.rules.iter().find(|r| r.id == "a").unwrap().action.as_deref(), Some("Block"));
+        assert_eq!(report.rules.iter().find(|r| r.id == "b").unwrap().action.as_deref(), Some("Proxy"));
+        w(&world).fail_rules.clear();
+        assert_eq!(srv.handle(Request::RetryApply(state(ExitPolicy::Direct)), &mut s), Response::Ok);
+        assert!(status(&mut srv, &mut s).rules.iter().all(|r| r.action.as_deref() == Some("Proxy")));
     }
 
     #[test]

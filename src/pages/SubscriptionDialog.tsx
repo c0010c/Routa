@@ -12,7 +12,7 @@ import {
   Stack,
   TextField,
 } from "@mui/material";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { isValidationError, useModel, useSaveSubscription } from "../api/client";
 import type { Subscription } from "../bindings";
 import { IntervalInput } from "../components/IntervalInput";
@@ -32,7 +32,11 @@ export function newSubscription(): Subscription {
   };
 }
 
-export function SubscriptionDialog({ subscription, onClose }: { subscription: Subscription; onClose: () => void }) {
+export function SubscriptionDialog({ subscription, onClose, focusFallback = false }: {
+  subscription: Subscription;
+  onClose: () => void;
+  focusFallback?: boolean;
+}) {
   const model = useModel();
   const save = useSaveSubscription();
   const [name, setName] = useState(subscription.name);
@@ -41,6 +45,7 @@ export function SubscriptionDialog({ subscription, onClose }: { subscription: Su
   const [fallback, setFallback] = useState(subscription.fallback_exit);
   const [intervalValid, setIntervalValid] = useState(true);
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
+  const fallbackRef = useRef<HTMLInputElement | null>(null);
 
   const submit = async () => {
     setErrs({ form: [] });
@@ -61,7 +66,12 @@ export function SubscriptionDialog({ subscription, onClose }: { subscription: Su
   const exits = model.data?.exits ?? [];
   const isEdit = model.data?.subscriptions.some((s) => s.id === subscription.id);
   return (
-    <FormDialog onClose={onClose} fullWidth maxWidth="sm">
+    <FormDialog
+      onClose={onClose}
+      fullWidth
+      maxWidth="sm"
+      slotProps={{ transition: { onEntered: () => { if (focusFallback) fallbackRef.current?.focus(); } } }}
+    >
       <DialogTitle>{isEdit ? "编辑订阅" : "新建订阅"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
@@ -90,6 +100,7 @@ export function SubscriptionDialog({ subscription, onClose }: { subscription: Su
             <Select
               labelId="s-fallback"
               label="备用出口"
+              inputRef={fallbackRef}
               value={fallback ?? ""}
               onChange={(e) => setFallback(e.target.value === "" ? null : e.target.value)}
             >

@@ -24,6 +24,7 @@ export function useRuntimeEvents(): void {
       }),
     );
     reg(listen<TrafficTick>("traffic", (e) => setTraffic(e.payload)));
+    reg(listen<TrafficTick>("traffic-snapshot", (e) => setTraffic(e.payload, false)));
     reg(listen<ProcRouteStatus>("procroute-status", (e) => qc.setQueryData(["procroute"], e.payload)));
     reg(listen<Flow[]>("procroute-flows", (e) => setFlows(e.payload)));
 

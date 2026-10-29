@@ -70,24 +70,28 @@ export function listenerStatusLabel(s: ListenerStatus, isPortFailed: boolean, no
 
 /** User-facing lines for an apply outcome; empty means nothing to report. */
 export function applyOutcomeMessages(o: ApplyOutcome): string[] {
-  const uncutLine = "部分旧连接未能断开，正在重启 mihomo";
+  const uncutLine = "部分连接未能关闭，请检查内核运行状态";
   if ("Reloaded" in o) {
     const lines = o.Reloaded.failed_listeners.map(
-      (f) => `端口 ${f.port} 已被其他程序占用，监听器「${f.name}」未启动`,
+      (f) => `监听器「${f.name}」端口被占用，请更换端口`,
     );
     if (o.Reloaded.uncut > 0) lines.push(uncutLine);
     return lines;
   }
   if ("FailedKeptPrevious" in o) {
-    return [`已保存，但未生效：${o.FailedKeptPrevious.error}`];
+    return ["已保存，但未生效，目前仍使用原配置"];
   }
   if ("FailedClosed" in o) {
-    const lines = [`已保存，但未能生效，为防止泄露已关闭所有端口：${o.FailedClosed.error}`];
+    const lines = ["已保存，但未生效，代理端口已关闭，请检查配置后手动重试"];
     if (o.FailedClosed.uncut > 0) lines.push(uncutLine);
     return lines;
   }
-  if ("NotRunning" in o) return [`已保存，但未生效：${o.NotRunning.error}`];
-  return [`已保存，但未能生效，mihomo 已停止：${o.FailedCoreStopped.error}`];
+  if ("NotRunning" in o) {
+    return [o.NotRunning?.error === "mihomo 未运行，配置将在内核启动后生效"
+      ? "已保存，启动内核后生效"
+      : "已保存，但内核未能启动，请检查设置后手动重试"];
+  }
+  return ["已保存，但未生效，内核已停止，请检查配置后手动重试"];
 }
 
 /** Colour band for a delay result: < 200 ms good, 200–500 ms slow, worse or timed out bad. */

@@ -42,7 +42,7 @@ RuleAction checked_proxy_action(RuleAction action, UINT32 config_id, BOOL is_udp
     return RULE_ACTION_PROXY;
 }
 
-// Helper: check if any proxy config is SOCKS5 (needed to decide whether to start UDP relay)
+// Config introspection; UDP relay startup no longer depends on SOCKS5 configs being present.
 BOOL any_socks5_config(void)
 {
     for (int i = 0; i < g_proxy_config_count; i++)

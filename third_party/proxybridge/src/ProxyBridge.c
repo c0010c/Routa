@@ -113,16 +113,7 @@ static BOOL is_proxy_server_endpoint(UINT32 dst_ip, UINT16 dst_port)
 // relay's own packets back into the relay and breaks all proxied UDP until restart.
 static BOOL is_proxy_udp_endpoint(UINT32 ip, UINT16 port_host)
 {
-    int n = g_proxy_config_count;
-    if (n > MAX_PROXY_CONFIGS) n = MAX_PROXY_CONFIGS;
-    for (int i = 0; i < n; i++)
-    {
-        const PROXY_CONFIG *c = &g_proxy_configs[i];
-        if (c->config_id != 0 && c->udp_connected &&
-            c->udp_relay_addr.sin_addr.s_addr == ip && ntohs(c->udp_relay_addr.sin_port) == port_host)
-            return TRUE;
-    }
-    return FALSE;
+    return udp_is_proxy_endpoint(ip, port_host);
 }
 
 static void reset_stale_tcp_state(UINT16 sp, BOOL is_ipv6)
@@ -1261,12 +1252,16 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
 
     relay_pool_start();   // optional: connections fall back to blocking relay threads without it
 
+    // Bind both UDP listeners even when startup rules are Block/Direct.
+    if (!udp_relay_start()) { running = FALSE; relay_pool_stop(); return FALSE; }
+
     g_fw_thread = CreateThread(NULL, 0, fw_ensure_thread, NULL, 0, NULL);
 
     proxy_thread = CreateThread(NULL, 1, local_proxy_server, NULL, 0, NULL);
     if (proxy_thread == NULL)
     {
         running = FALSE;
+        udp_relay_stop();
         return FALSE;
     }
 
@@ -1275,26 +1270,11 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     if (cleanup_thread == NULL)
     {
         running = FALSE;
+        udp_relay_stop();
         WaitForSingleObject(proxy_thread, INFINITE);
         CloseHandle(proxy_thread);
         proxy_thread = NULL;
         return FALSE;
-    }
-
-    if (any_socks5_config())
-    {
-        udp_relay_thread = CreateThread(NULL, 1, udp_relay_server, NULL, 0, NULL);
-        if (udp_relay_thread == NULL)
-        {
-            running = FALSE;
-            WaitForSingleObject(cleanup_thread, INFINITE);
-            CloseHandle(cleanup_thread);
-            cleanup_thread = NULL;
-            WaitForSingleObject(proxy_thread, INFINITE);
-            CloseHandle(proxy_thread);
-            proxy_thread = NULL;
-            return FALSE;
-        }
     }
 
     Sleep(500);
@@ -1348,6 +1328,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
                 break;
         }
         running = FALSE;
+        udp_relay_stop();
         WaitForSingleObject(proxy_thread, INFINITE);
         CloseHandle(proxy_thread);
         proxy_thread = NULL;
@@ -1378,6 +1359,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
         if (packet_thread[i] == NULL)
         {
             running = FALSE;
+            udp_relay_stop();
             for (int j = 0; j < i; j++)
             {
                 if (packet_thread[j] != NULL)
@@ -1468,12 +1450,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Stop(void)
         cleanup_thread = NULL;
     }
 
-    if (udp_relay_thread != NULL)
-    {
-        WaitForSingleObject(udp_relay_thread, 8000);  // generous: a thread outliving Stop would run code from an unloaded DLL
-        CloseHandle(udp_relay_thread);
-        udp_relay_thread = NULL;
-    }
+    udp_relay_stop();
 
     // Handshake threads (connect to the proxy + SOCKS/HTTP negotiation) can still be mid-flight.
     for (int i = 0; i < 700 && g_handler_threads > 0; i++) Sleep(50);    // up to 35 s

@@ -1,10 +1,11 @@
 import { Alert, Box, Button, Card, Divider, Stack, Switch, TextField, Typography } from "@mui/material";
 import { Fragment, useState, type ReactNode } from "react";
 import { isValidationError, useModel, useOpenLogDir, useSaveSettings } from "../api/client";
-import type { Settings as SettingsModel } from "../bindings";
+import type { ApplyOutcome, Listener, Settings as SettingsModel } from "../bindings";
 import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { IntervalInput } from "../components/IntervalInput";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
+import { applyOutcomeMessages } from "../lib/format";
 
 /** One Win11-style settings row: label and explanation on the left, control on the right. */
 function Row({ label, description, children }: { label: string; description?: string; children: ReactNode }) {
@@ -41,8 +42,8 @@ function Section({ title, children }: { title: string; children: ReactNode[] }) 
   );
 }
 
-function SettingsForm({ initial }: { initial: SettingsModel }) {
-  const save = useSaveSettings();
+function SettingsForm({ initial, listeners }: { initial: SettingsModel; listeners: Listener[] }) {
+  const save = useSaveSettings({ errorFeedback: "local" });
   const openLogDir = useOpenLogDir();
   const apply = useApplyResult();
   const [saved, setSaved] = useState(initial);
@@ -53,7 +54,8 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
   const [url, setUrl] = useState(initial.delay_test_url);
   const [intervalValid, setIntervalValid] = useState(true);
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
-  const [portError, setPortError] = useState<string>();
+  const [portLocal, setPortLocal] = useState<string>();
+  const portError = portLocal ?? errs.port;
 
   const dirty =
     autostart !== saved.autostart ||
@@ -65,10 +67,10 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
   const submit = async () => {
     const p = Number(port);
     if (!Number.isInteger(p) || p < 1 || p > 65535) {
-      setPortError("端口必须在 1–65535 之间");
+      setPortLocal("端口必须在 1–65535 之间");
       return;
     }
-    setPortError(undefined);
+    setPortLocal(undefined);
     setErrs({ form: [] });
     const next: SettingsModel = {
       autostart,
@@ -77,16 +79,35 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
       delay_test_interval_mins: interval,
       delay_test_url: url,
     };
+    let outcome: ApplyOutcome;
     try {
-      await save.mutateAsync(next);
+      outcome = await save.mutateAsync(next);
     } catch (e) {
-      if (isValidationError(e)) setErrs(fieldErrors(e.errors));
+      if (isValidationError(e)) {
+        const fields = fieldErrors(e.errors.filter((error) => !("CoreRejected" in error)));
+        if (e.errors.some((error) => "CoreRejected" in error)) {
+          fields.form.push("设置无法使用，请检查后重新保存");
+        }
+        const conflict = e.errors.find((error) => "PortConflict" in error);
+        if (conflict && "PortConflict" in conflict) {
+          const { port: conflictPort } = conflict.PortConflict;
+          const listener = listeners.find((l) => l.port === conflictPort);
+          fields.port = listener
+            ? `控制端口 ${conflictPort} 与 Listener「${listener.name}」冲突，请使用其他端口`
+            : `控制端口 ${conflictPort} 与已有 Listener 冲突，请使用其他端口`;
+        }
+        setErrs(fields);
+      } else {
+        apply.showError("设置未能保存，请稍后手动重试");
+      }
+      console.error("Saving settings failed", e);
       return;
     }
-    // The backend restarts mihomo itself when these change.
-    const restarted = next.controller_port !== saved.controller_port || next.core_path !== saved.core_path;
     setSaved(next);
-    apply.showMessage(restarted ? "设置已保存，mihomo 正在重启" : "设置已保存", "success");
+    // The shared mutation hook already reports apply failures and warnings.
+    if ("Reloaded" in outcome && applyOutcomeMessages(outcome).length === 0) {
+      apply.showMessage("设置已保存并生效", "success");
+    }
   };
 
   return (
@@ -126,7 +147,11 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
               <TextField
                 type="number"
                 value={port}
-                onChange={(e) => setPort(e.target.value)}
+                onChange={(e) => {
+                  setPort(e.target.value);
+                  setPortLocal(undefined);
+                  setErrs((x) => ({ ...x, port: undefined }));
+                }}
                 error={!!portError}
                 helperText={portError}
                 slotProps={{ htmlInput: { "aria-label": "控制端口" } }}
@@ -171,5 +196,5 @@ function SettingsForm({ initial }: { initial: SettingsModel }) {
 export function Settings() {
   const model = useModel();
   if (!model.data) return <Typography>加载中…</Typography>;
-  return <SettingsForm initial={model.data.settings} />;
+  return <SettingsForm initial={model.data.settings} listeners={model.data.listeners} />;
 }

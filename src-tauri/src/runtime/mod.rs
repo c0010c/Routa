@@ -3,8 +3,8 @@
 //!
 //! Locking: every model mutation, Store save, apply and core (re)start runs
 //! under the one async `engine` mutex. `status`, the model mirror and the
-//! live api/plan are std mutexes that are only held for copies, never across
-//! an await.
+//! live api/plan are std mutexes, never held across an await. Traffic updates
+//! take `live` before `traffic`/`status` so samples and corrections stay ordered.
 
 mod tasks;
 
@@ -23,7 +23,7 @@ use tokio::time::Instant;
 use crate::config_gen::{
     emitted_tailscale_names, empty_config, generate, node_proxy_name, nodes_check_config, GenInput,
 };
-use crate::core::api::MihomoApi;
+use crate::core::api::{ConnectionsSnapshot, MihomoApi};
 use crate::core::apply::{ApplyOutcome, Applier, FailedListener};
 use crate::core::ports::PortOwners;
 use crate::core::process::{wait_ready, CheckError, CoreHandleLike, CoreLauncher, CoreState};
@@ -103,6 +103,8 @@ pub enum CoreStopReason {
 pub enum RuntimeEvent {
     Status(RuntimeStatus),
     Traffic(TrafficTick),
+    /// A stop/reset correction, not a new rate sample for the history chart.
+    TrafficSnapshot(TrafficTick),
 }
 
 /// One running mihomo instance.
@@ -152,6 +154,8 @@ struct Engine {
 #[derive(Default)]
 struct Live {
     api: Option<Arc<dyn MihomoApi>>,
+    /// Invalidates requests started before a core change or totals reset.
+    traffic_generation: u64,
     name_to_id: HashMap<String, ListenerId>,
     stream_rate: Option<Rate>,
     last_delay_run: Option<i64>,
@@ -245,6 +249,30 @@ fn core_not_running() -> ApplyOutcome {
 }
 
 impl Inner {
+    /// Called with `live` held: corrections and samples must be published in
+    /// the same order in which they update the traffic state.
+    fn publish_traffic(&self, tick: TrafficTick, sampled: bool) {
+        self.status.lock().unwrap().traffic = Some(tick.clone());
+        let event = if sampled {
+            RuntimeEvent::Traffic(tick)
+        } else {
+            RuntimeEvent::TrafficSnapshot(tick)
+        };
+        let _ = self.events.try_send(event);
+    }
+
+    fn record_traffic_sample(&self, generation: u64, snap: &ConnectionsSnapshot, elapsed: Duration) {
+        let live = self.live.lock().unwrap();
+        if live.api.is_none() || live.traffic_generation != generation {
+            return;
+        }
+        let mut tick = self.traffic.lock().unwrap().ingest(snap, &live.name_to_id, elapsed);
+        if let Some(rate) = &live.stream_rate {
+            tick.total_rate = rate.clone();
+        }
+        self.publish_traffic(tick, true);
+    }
+
     fn emit_status(&self) {
         let s = self.status.lock().unwrap().clone();
         // Status events are full snapshots: dropping one when the consumer
@@ -389,8 +417,11 @@ impl Inner {
         {
             let mut live = self.live.lock().unwrap();
             live.api = None;
+            live.traffic_generation += 1;
             live.name_to_id.clear();
             live.stream_rate = None;
+            let totals = self.traffic.lock().unwrap().totals.clone();
+            self.publish_traffic(TrafficTick { totals, ..TrafficTick::default() }, false);
         }
         {
             // A new process logs every login state afresh.
@@ -591,6 +622,9 @@ impl Inner {
                         }
                     })
                     .await;
+                if !matches!(out, ApplyOutcome::Reloaded { .. }) {
+                    eprintln!("runtime: applying configuration failed: {out:?}");
+                }
                 self.status.lock().unwrap().effective_listeners = applier.effective_listeners();
                 // Keep login states only for nodes in the config mihomo now holds.
                 match &out {
@@ -1093,15 +1127,19 @@ impl Runtime {
 
     /// Zeroes the cumulative traffic totals and persists that.
     pub async fn reset_traffic(&self) {
-        let totals = {
-            let mut t = self.inner.traffic.lock().unwrap();
-            t.reset();
-            t.totals.clone()
-        };
-        self.inner.save_totals();
-        if let Some(tick) = self.inner.status.lock().unwrap().traffic.as_mut() {
+        {
+            let mut live = self.inner.live.lock().unwrap();
+            live.traffic_generation += 1;
+            let totals = {
+                let mut t = self.inner.traffic.lock().unwrap();
+                t.reset();
+                t.totals.clone()
+            };
+            let mut tick = self.inner.status.lock().unwrap().traffic.clone().unwrap_or_default();
             tick.totals = totals;
+            self.inner.publish_traffic(tick, false);
         }
+        self.inner.save_totals();
         self.inner.emit_status();
     }
 }

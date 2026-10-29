@@ -15,9 +15,10 @@ let latest: TrafficTick | null = null;
 let history: TrafficHistory = EMPTY;
 const subs = new Set<() => void>();
 
-export function setTraffic(t: TrafficTick | null): void {
+/** Corrections update the cards without inventing a sample in the chart. */
+export function setTraffic(t: TrafficTick | null, recordHistory = true): void {
   latest = t;
-  if (t !== null) {
+  if (t !== null && recordHistory) {
     history = {
       up: [...history.up, t.total_rate.up].slice(-HISTORY_LEN),
       down: [...history.down, t.total_rate.down].slice(-HISTORY_LEN),

@@ -24,8 +24,9 @@ import {
 } from "@mui/material";
 import { SparkLineChart } from "@mui/x-charts/SparkLineChart";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import {
+  errorMessage,
   useCoreControl,
   useDeleteListener,
   useGroupNow,
@@ -37,7 +38,7 @@ import {
   useTraffic,
   useTrafficHistory,
 } from "../api/client";
-import type { ApplyOutcome, CoreState, Exit, Listener, Model, RuntimeStatus } from "../bindings";
+import type { CoreState, Exit, Listener, Model, RuntimeStatus } from "../bindings";
 import { expandMembers, nodeKey, nodeLabel } from "../lib/refs";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { DelayText } from "../components/DelayText";
@@ -47,7 +48,7 @@ import { GettingStarted, needsGettingStarted } from "../components/GettingStarte
 import { ListenerStatusChip } from "../components/StatusChips";
 import { ExitDialog, newExit } from "./ExitDialog";
 import { ListenerDialog, newListener } from "./ListenerDialog";
-import { exitStatusLabel, formatBytes, formatRate, listenerNotEffective } from "../lib/format";
+import { applyOutcomeMessages, exitStatusLabel, formatBytes, formatRate, listenerNotEffective } from "../lib/format";
 
 
 const TYPE_TEXT = { Mixed: "混合", Http: "HTTP", Socks: "SOCKS" } as const;
@@ -59,18 +60,11 @@ function coreText(c: CoreState): string {
   return `已崩溃（退出码 ${c.Crashed.exit_code ?? "未知"}）`;
 }
 
-function applyError(a: Exclude<ApplyOutcome, { Reloaded: unknown }>): string {
-  if ("FailedKeptPrevious" in a) return a.FailedKeptPrevious.error;
-  if ("FailedClosed" in a) return a.FailedClosed.error;
-  if ("FailedCoreStopped" in a) return a.FailedCoreStopped.error;
-  return a.NotRunning.error;
-}
-
 export function collectProblems(model: Model, status: RuntimeStatus): string[] {
   const out: string[] = [];
   if (status.core === "Stopped" || typeof status.core === "object") out.push(`mihomo ${coreText(status.core)}`);
   const a = status.last_apply;
-  if (a !== null && !("Reloaded" in a)) out.push(`配置未生效：${applyError(a)}`);
+  if (a !== null && !("Reloaded" in a)) out.push(...applyOutcomeMessages(a));
   for (const [id, h] of Object.entries(status.health.exits)) {
     if (!h || h.status === "Ok") continue;
     const name = model.exits.find((e) => e.id === id)?.name ?? id;
@@ -208,6 +202,7 @@ export function Overview() {
   const delListener = useDeleteListener();
   const [params] = useSearchParams();
   const paramHighlight = params.get("highlight");
+  const resolveExit = params.get("resolveExit");
   const [highlight, setHighlight] = useState<string | null>(null);
   const [creating, setCreating] = useState<Listener | null>(null);
   const [editing, setEditing] = useState<Listener | null>(null);
@@ -216,29 +211,45 @@ export function Overview() {
   const [newExitFor, setNewExitFor] = useState<Listener | null>(null);
   const [creatingExit, setCreatingExit] = useState<Exit | null>(null);
   const highlightRef = useRef<HTMLTableRowElement | null>(null);
+  const exitSelectRef = useRef<HTMLInputElement | null>(null);
   const groupNames = (model.data?.exits ?? [])
     .filter((e) => typeof e.kind === "object" && "Group" in e.kind)
     .map((e) => e.name);
   const groupNow = useGroupNow(groupNames);
   const loaded = !!model.data && !!status.data;
+  const highlightExists = !!model.data?.listeners.some((l) => l.id === paramHighlight);
 
   useEffect(() => {
-    if (!paramHighlight) return;
+    if (!paramHighlight || !loaded || !highlightExists) return;
     setHighlight(paramHighlight);
     const t = setTimeout(() => setHighlight(null), 3000);
     return () => clearTimeout(t);
-  }, [paramHighlight]);
+  }, [paramHighlight, loaded, highlightExists]);
 
   useEffect(() => {
-    if (highlight && loaded) highlightRef.current?.scrollIntoView?.({ block: "center" });
-  }, [highlight, loaded]);
+    if (highlight && loaded) {
+      highlightRef.current?.scrollIntoView?.({ block: "center" });
+      if (resolveExit) exitSelectRef.current?.focus();
+    }
+  }, [highlight, loaded, resolveExit]);
 
-  if (!model.data || !status.data) return <Typography>加载中…</Typography>;
+  if (!model.data || !status.data) {
+    const error = model.error || status.error;
+    if (error) return (
+      <Alert severity="error" action={
+        <Button onClick={() => { void model.refetch(); void status.refetch(); }}>重新加载</Button>
+      }>
+        {errorMessage(error)}
+      </Alert>
+    );
+    return <Typography>加载中…</Typography>;
+  }
   const m = model.data;
   const s = status.data;
   const tick = liveTick ?? s.traffic;
   const problems = collectProblems(m, s);
   const failedIds = new Set(s.failed_listeners.map((f) => f.id));
+  const resolvingExit = m.exits.find((e) => e.id === resolveExit);
   const working = m.listeners.filter(
     (l) => s.health.listeners[l.id] === "Active" && !failedIds.has(l.id) && !listenerNotEffective(s, l.id),
   ).length;
@@ -246,6 +257,22 @@ export function Overview() {
   return (
     <Stack spacing={2}>
       <Typography variant="h5">概览</Typography>
+      {resolveExit && (
+        <Alert severity="info" action={
+          <>
+            {model.isError && <Button onClick={() => void model.refetch()}>重新加载</Button>}
+            <Button component={RouterLink} to={`/exits?${new URLSearchParams({ delete: resolveExit })}`} disabled={saveListener.isPending}>
+              返回删除检查
+            </Button>
+          </>
+        }>
+          {model.isError ? `未能读取最新配置：${errorMessage(model.error)}` : !highlightExists
+            ? "该监听器已不存在，请返回重新检查。"
+            : resolvingExit
+              ? `正在处理出口「${resolvingExit.name}」的引用。修改出口会按现有规则保存并应用。`
+              : "正在处理的出口已不存在，请返回重新检查。"}
+        </Alert>
+      )}
       {problems.length > 0 && (
         <Alert severity="error" role="alert">
           {problems.map((p) => (
@@ -341,6 +368,7 @@ export function Overview() {
                           size="small"
                           displayEmpty
                           value={exit ? exit.id : ""}
+                          inputRef={l.id === paramHighlight ? exitSelectRef : undefined}
                           onChange={(e) => {
                             const v = e.target.value;
                             if (v === NEW_EXIT) setNewExitFor(l);

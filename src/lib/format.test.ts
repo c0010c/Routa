@@ -77,19 +77,20 @@ describe("applyOutcomeMessages", () => {
         },
       }),
     ).toEqual([
-      "端口 7890 已被其他程序占用，监听器「办公」未启动",
-      "端口 7891 已被其他程序占用，监听器「下载」未启动",
-      "部分旧连接未能断开，正在重启 mihomo",
+      "监听器「办公」端口被占用，请更换端口",
+      "监听器「下载」端口被占用，请更换端口",
+      "部分连接未能关闭，请检查内核运行状态",
     ]));
   it("failure variants", () => {
-    expect(applyOutcomeMessages({ FailedKeptPrevious: { error: "x" } })).toEqual(["已保存，但未生效：x"]);
-    expect(applyOutcomeMessages({ NotRunning: { error: "x" } })).toEqual(["已保存，但未生效：x"]);
+    expect(applyOutcomeMessages({ FailedKeptPrevious: { error: "x" } })).toEqual(["已保存，但未生效，目前仍使用原配置"]);
+    expect(applyOutcomeMessages({ NotRunning: { error: "x" } })).toEqual(["已保存，但内核未能启动，请检查设置后手动重试"]);
+    expect(applyOutcomeMessages({ NotRunning: { error: "mihomo 未运行，配置将在内核启动后生效" } })).toEqual(["已保存，启动内核后生效"]);
     expect(applyOutcomeMessages({ FailedClosed: { error: "x", uncut: 1 } })).toEqual([
-      "已保存，但未能生效，为防止泄露已关闭所有端口：x",
-      "部分旧连接未能断开，正在重启 mihomo",
+      "已保存，但未生效，代理端口已关闭，请检查配置后手动重试",
+      "部分连接未能关闭，请检查内核运行状态",
     ]);
     expect(applyOutcomeMessages({ FailedCoreStopped: { error: "x" } })).toEqual([
-      "已保存，但未能生效，mihomo 已停止：x",
+      "已保存，但未生效，内核已停止，请检查配置后手动重试",
     ]);
   });
 });

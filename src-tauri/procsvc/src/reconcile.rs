@@ -1,7 +1,7 @@
 //! 把期望规则集变成有序操作（spec 5、6.1、6.2、6.4）。
 //! 顺序是"不泄露"的保证：先收紧、后放开。`Reconciler` 把这些操作落到引擎上。
 
-use routa_procsvc_proto::{Action, FaultPolicy, ProxyTarget, RuleSpec};
+use routa_procsvc_proto::{Action, FaultPolicy, ProxyTarget, RuleSpec, RuleStatus};
 
 use std::collections::{HashMap, HashSet};
 
@@ -217,6 +217,10 @@ pub struct Reconciler<I: Interceptor, G: Guard, K: ConnKiller> {
     killer: K,
     current: Vec<RuleSpec>,
     installed: Installed,
+    status: Vec<RuleStatus>,
+    pending_resets: HashMap<String, String>,
+    unknown_ids: HashSet<String>,
+    unknown_keys: HashSet<String>,
 }
 
 impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
@@ -227,12 +231,24 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
             killer,
             current: Vec::new(),
             installed: Installed::default(),
+            status: Vec::new(),
+            pending_resets: HashMap::new(),
+            unknown_ids: HashSet::new(),
+            unknown_keys: HashSet::new(),
         }
     }
 
     /// 已生效的规则集（失败的规则以 `Block` 记录）。
     pub fn current(&self) -> &[RuleSpec] {
         &self.current
+    }
+
+    pub fn status(&self) -> Vec<RuleStatus> {
+        self.status.clone()
+    }
+
+    pub fn retry(&mut self, desired: Vec<RuleSpec>) -> Vec<String> {
+        self.apply_inner(desired, true)
     }
 
     pub fn interceptor(&mut self) -> &mut I {
@@ -246,7 +262,15 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
 
     /// 走到期望规则集，返回非致命错误（中文，可直接展示）。
     pub fn apply(&mut self, desired: Vec<RuleSpec>) -> Vec<String> {
+        self.apply_inner(desired, false)
+    }
+
+    fn apply_inner(&mut self, desired: Vec<RuleSpec>, retry_resets: bool) -> Vec<String> {
         let old = std::mem::take(&mut self.current);
+        self.pending_resets.retain(|k, _| desired.iter().any(|r| {
+            r.reset_on_change && exe_key(&r.exe_path) == *k
+                && old.iter().any(|o| o.id == r.id && o.exe_path == r.exe_path && o.action == r.action)
+        }));
         let mut fail = Failures::default();
 
         // 上次没撤掉的放行先撤掉：它们不在 `old` 里，plan 不知道
@@ -264,6 +288,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
             match self.guard.revoke(&exe) {
                 Ok(()) => {
                     self.installed.permits.remove(&k);
+                    self.unknown_keys.remove(&k);
                 }
                 Err(e) => {
                     fail.errors.push(format!("撤销 {exe} 的放行失败：{e}"));
@@ -272,7 +297,29 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
             }
         }
 
-        for op in plan(&old, &desired) {
+        let mut ops = plan(&old, &desired);
+        if retry_resets {
+            for r in &desired {
+                if self.unknown_keys.contains(&exe_key(&r.exe_path))
+                    && !ops.iter().any(|op| matches!(op, Op::Revoke { exe } if exe_key(exe) == exe_key(&r.exe_path))) {
+                    ops.insert(0, Op::Revoke { exe: r.exe_path.clone() });
+                }
+            }
+            // 失败时 current 按 Block 保守记录，不能把它当作执行成功的证明。
+            for r in &desired {
+                if r.action == Action::Block && self.status.iter().any(|s| s.id == r.id && s.action.is_none())
+                    && !ops.iter().any(|op| matches!(op, Op::SetRule { rule, .. } if rule == &r.id)) {
+                    ops.insert(0, Op::SetRule { rule: r.id.clone(), exe: r.exe_path.clone(), action: PbAction::Block });
+                }
+            }
+            for r in &desired {
+                if self.pending_resets.contains_key(&exe_key(&r.exe_path))
+                    && !ops.iter().any(|op| matches!(op, Op::Reset { exe } if exe_key(exe) == exe_key(&r.exe_path))) {
+                    ops.push(Op::Reset { exe: r.exe_path.clone() });
+                }
+            }
+        }
+        for op in ops {
             self.exec(&op, &mut fail, &old, &desired);
         }
 
@@ -309,6 +356,30 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
                 fail.errors.push(format!("停止 ProxyBridge 失败：{e}"));
             }
         }
+        self.status = desired.iter().map(|r| {
+            let k = exe_key(&r.exe_path);
+            let failed = fail.ids.contains(&r.id) || fail.keys.contains(&k);
+            let unknown = self.unknown_ids.contains(&r.id) || self.unknown_keys.contains(&k)
+                || (!guarded(r) && self.installed.blocks.contains_key(&k));
+            let (action, reason) = if unknown {
+                (None, Some("应用失败，无法确认防护状态".into()))
+            } else if failed {
+                (Some("Block".into()), Some("应用失败，已阻断；请手动重试".into()))
+            } else {
+                let action = match r.action { Action::Proxy(_) => "Proxy", Action::Direct => "Direct", Action::Block => "Block" };
+                (Some(action.into()), self.pending_resets.get(&k).cloned())
+            };
+            RuleStatus { id: r.id.clone(), action, reason }
+        }).collect();
+        for rule in &self.status {
+            if rule.action.is_none() {
+                fail.errors.push(format!("规则 {} 的执行结果未知，请手动重试", rule.id));
+            }
+        }
+        // 普通配置同步不会重试断连，相关提示一直保留到用户主动重试或改变该规则。
+        for warning in self.pending_resets.values() {
+            if !fail.errors.contains(warning) { fail.errors.push(warning.clone()); }
+        }
         fail.errors
     }
 
@@ -334,10 +405,12 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
             Op::SetRule { rule, exe, action } => {
                 self.interceptor.set_rule(rule, exe, *action).map(|()| {
                     inst.rules.insert(rule.clone(), (exe.clone(), *action));
+                    self.unknown_ids.remove(rule);
                 })
             }
             Op::RemoveRule { rule } => self.interceptor.remove_rule(rule).map(|()| {
                 inst.rules.remove(rule);
+                self.unknown_ids.remove(rule);
             }),
             Op::EnsureBlock { exe } => self.guard.ensure_block(exe).map(|()| {
                 inst.blocks.insert(exe_key(exe), exe.clone());
@@ -350,13 +423,19 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
             }),
             Op::Revoke { exe } => self.guard.revoke(exe).map(|()| {
                 inst.permits.remove(&exe_key(exe));
+                self.unknown_keys.remove(&exe_key(exe));
             }),
-            Op::Reset { exe } => self.killer.reset_ipv4_tcp(exe).map(|_| ()),
+            Op::Reset { exe } => self.killer.reset_ipv4_tcp(exe).map(|_| {
+                self.pending_resets.remove(&exe_key(exe));
+            }),
         };
         if let Err(e) = result {
             fail.errors.push(format!("{}失败：{e}", describe(op)));
             // 断开旧连接只是收尾，失败不影响分流与防护状态，仅报错
             if matches!(op, Op::Reset { .. }) {
+                if let Op::Reset { exe } = op {
+                    self.pending_resets.insert(exe_key(exe), format!("断开 {exe} 的旧连接失败：{e}"));
+                }
                 return;
             }
             self.fail(fail, old, desired, id.cloned(), key);
@@ -418,8 +497,11 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
                 },
             };
             if let Err(e) = self.interceptor.set_rule(&i, &exe, PbAction::Block) {
+                self.unknown_ids.insert(i.clone());
                 fail.errors
                     .push(format!("强制阻断规则 {i}（{exe}）失败：{e}"));
+            } else {
+                self.unknown_ids.remove(&i);
             }
             // 失败时状态未知，仍按 Block 记录
             self.installed.rules.insert(i, (exe, PbAction::Block));
@@ -437,8 +519,12 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
             match self.guard.revoke(&exe) {
                 Ok(()) => {
                     self.installed.permits.remove(&k);
+                    self.unknown_keys.remove(&k);
                 }
-                Err(e) => fail.errors.push(format!("撤销 {exe} 的放行失败：{e}")),
+                Err(e) => {
+                    self.unknown_keys.insert(k);
+                    fail.errors.push(format!("撤销 {exe} 的放行失败：{e}"));
+                }
             }
         }
     }
@@ -1424,6 +1510,59 @@ mod tests {
         }
 
         #[test]
+        fn status_distinguishes_confirmed_block_unknown_and_successful_rules() {
+            let (mut rec, w) = rig();
+            let rules = vec![proxy_guarded("a", EXE), spec("b", OTHER_EXE, Action::Direct, FaultPolicy::Direct, false)];
+            w.borrow_mut().fail_ops.insert("set_proxy");
+            assert!(!rec.apply(rules.clone()).is_empty());
+            let status = rec.status();
+            assert_eq!(status[0].action.as_deref(), Some("Block"));
+            assert!(status[0].reason.as_ref().unwrap().contains("应用失败"));
+            assert_eq!(status[1].action.as_deref(), Some("Direct"));
+            w.borrow_mut().fail_ops.insert("set_rule");
+            assert!(!rec.retry(rules.clone()).is_empty());
+            assert_eq!(rec.status()[0].action, None);
+            w.borrow_mut().fail_ops.clear();
+            assert!(rec.retry(rules).is_empty());
+            assert_eq!(rec.status()[0].action.as_deref(), Some("Proxy"));
+            assert_eq!(rec.status()[0].reason, None);
+        }
+
+        #[test]
+        fn unknown_block_stays_unknown_until_explicit_success() {
+            let (mut rec, w) = rig();
+            let rules = vec![r(Action::Block, FaultPolicy::Direct)];
+            w.borrow_mut().fail_ops.insert("set_rule");
+            assert!(!rec.apply(rules.clone()).is_empty());
+            assert_eq!(rec.status()[0].action, None);
+            w.borrow_mut().fail_ops.clear();
+            rec.apply(rules.clone()); // no-op current must not become proof of success
+            assert_eq!(rec.status()[0].action, None);
+            assert!(rec.retry(rules).is_empty());
+            assert_eq!(rec.status()[0].action.as_deref(), Some("Block"));
+        }
+
+        #[test]
+        fn only_manual_retry_repeats_failed_reset() {
+            let (mut rec, w) = rig();
+            let rules = vec![proxy_guarded("r", EXE)];
+            w.borrow_mut().fail_ops.insert("reset");
+            assert_eq!(rec.apply(rules.clone()).len(), 1);
+            assert_eq!(rec.status()[0].action.as_deref(), Some("Proxy"));
+            assert!(rec.status()[0].reason.as_ref().unwrap().contains("断开"));
+            take_log(&w);
+            assert_eq!(rec.apply(rules.clone()).len(), 1);
+            assert!(take_log(&w).is_empty());
+            assert_eq!(rec.retry(rules.clone()).len(), 1); // still fails, exactly one attempt
+            assert_eq!(take_log(&w), vec![format!("reset {EXE}")]);
+            w.borrow_mut().fail_ops.clear();
+            assert!(rec.retry(rules.clone()).is_empty());
+            assert_eq!(take_log(&w), vec![format!("reset {EXE}")]);
+            assert!(rec.retry(rules).is_empty());
+            assert!(take_log(&w).is_empty());
+        }
+
+        #[test]
         fn failed_key_keeps_block_until_next_apply() {
             let (mut rec, w) = rig();
             assert!(rec.apply(vec![proxy_guarded("r", EXE)]).is_empty());
@@ -1639,7 +1778,7 @@ mod tests {
                 }
 
                 w.borrow_mut().fail_at = None;
-                assert_eq!(rec.apply(new.to_vec()), Vec::<String>::new(), "{ctx}");
+                assert_eq!(rec.retry(new.to_vec()), Vec::<String>::new(), "{ctx}");
                 assert_eq!(rec.current(), new, "{ctx}");
                 assert_world_is(&w, new, &ctx);
                 take_log(&w);

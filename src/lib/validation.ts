@@ -30,6 +30,9 @@ export function fieldErrors(errors: ValidationError[]): FieldErrors {
       out.form.push(`程序路径「${e.InvalidExePath.exe_path}」无效：${e.InvalidExePath.reason}`);
     } else if ("ListenerTypeNotAllowed" in e) {
       out.form.push(`Listener「${e.ListenerTypeNotAllowed.listener}」是 HTTP 类型，不能用于进程分流`);
+    } else if ("ListenerAddressNotAllowed" in e) {
+      const { listener, listen } = e.ListenerAddressNotAllowed;
+      out.form.push(`Listener「${listener}」的监听地址「${listen}」不能用于进程分流：仅支持 IPv4 入口，请修改监听地址或选择其他 Listener`);
     } else if ("TooManyProcessRules" in e) {
       out.form.push(`启用的分流规则最多 ${e.TooManyProcessRules.max} 条`);
     } else {

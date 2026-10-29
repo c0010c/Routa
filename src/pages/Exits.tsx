@@ -1,5 +1,6 @@
 import AltRouteOutlined from "@mui/icons-material/AltRouteOutlined";
 import {
+  Alert,
   Button,
   Link,
   Paper,
@@ -12,17 +13,17 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
-import { Link as RouterLink } from "react-router-dom";
-import { useDeleteExit, useModel, useStatus, useTestDelays } from "../api/client";
+import { useEffect, useState } from "react";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
+import { errorMessage, useModel, useStatus, useTestDelays } from "../api/client";
 import type { Exit, Model } from "../bindings";
 import { isGroupMember, nodeLabel } from "../lib/refs";
-import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { DelayText } from "../components/DelayText";
 import { EmptyState } from "../components/EmptyState";
 import { RowActions } from "../components/RowActions";
 import { ExitStatusChip } from "../components/StatusChips";
 import { ExitDialog, newExit } from "./ExitDialog";
+import { ExitDeleteDialog } from "./ExitDeleteDialog";
 
 function kindText(e: Exit): string {
   if (e.kind === "Direct") return "直连";
@@ -49,12 +50,33 @@ function nodeOrMembers(e: Exit, model: Model): string {
 export function Exits() {
   const model = useModel();
   const status = useStatus();
-  const del = useDeleteExit();
   const test = useTestDelays();
   const [editing, setEditing] = useState<Exit | null>(null);
-  const [deleting, setDeleting] = useState<Exit | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
+  const requestedDelete = params.get("delete");
 
-  if (!model.data || !status.data) return <Typography>加载中…</Typography>;
+  useEffect(() => {
+    if (!requestedDelete || !model.data) return;
+    setDeleting(requestedDelete);
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("delete");
+      return next;
+    }, { replace: true });
+  }, [requestedDelete, model.data, setParams]);
+
+  if (!model.data || !status.data) {
+    const error = model.error || status.error;
+    if (error) return (
+      <Alert severity="error" action={
+        <Button onClick={() => { void model.refetch(); void status.refetch(); }}>重新加载</Button>
+      }>
+        {errorMessage(error)}
+      </Alert>
+    );
+    return <Typography>加载中…</Typography>;
+  }
   const m = model.data;
   const s = status.data;
 
@@ -114,7 +136,7 @@ export function Exits() {
                           items={[
                             { label: "测速", onClick: () => test.mutate([e.name]), disabled: test.isPending },
                             { label: "编辑", onClick: () => setEditing(e) },
-                            { label: "删除", onClick: () => setDeleting(e), danger: true },
+                            { label: "删除", onClick: () => setDeleting(e.id), danger: true },
                           ]}
                         />
                       </TableCell>
@@ -127,9 +149,9 @@ export function Exits() {
       )}
       {editing && <ExitDialog key={editing.id} exit={editing} onClose={() => setEditing(null)} />}
       {deleting && (
-        <ConfirmDeleteDialog
-          text={`确定删除出口「${deleting.name}」吗？`}
-          onConfirm={() => del.mutateAsync(deleting.id)}
+        <ExitDeleteDialog
+          key={deleting}
+          exitId={deleting}
           onClose={() => setDeleting(null)}
         />
       )}

@@ -125,6 +125,7 @@ fn build_runtime(
                     handle.emit("runtime-status", s)
                 }
                 RuntimeEvent::Traffic(t) => handle.emit("traffic", t),
+                RuntimeEvent::TrafficSnapshot(t) => handle.emit("traffic-snapshot", t),
             };
             if let Err(e) = res {
                 eprintln!("emit event failed: {e}");
@@ -168,6 +169,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::delete_process_rule,
             commands::save_process_routing_settings,
             commands::procroute_status,
+            commands::procroute_retry,
             commands::procroute_install,
             commands::procroute_uninstall,
             commands::procroute_cleanup,

@@ -480,6 +480,12 @@ pub fn procroute_status() -> ProcRouteStatus {
     procroute::client::status()
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn procroute_retry() -> Result<(), String> {
+    crate::procroute::client::retry().await
+}
+
 /// Registers the service (one UAC prompt), then connects right away.
 #[tauri::command]
 #[specta::specta]

@@ -10,7 +10,7 @@ $OutputDLL = Join-Path $OutDir 'ProxyBridgeCore.dll'
 $Arch = 'x64'
 
 # 与上游一致的源文件列表（见 pb_internal.h）
-$SourceNames = 'ProxyBridge.c pb_util.c pb_process.c pb_rules.c pb_proxy.c pb_dns.c pb_socks5.c pb_http.c pb_conntrack.c pb_relay.c pb_sockmap.c'.Split(' ')
+$SourceNames = 'ProxyBridge.c pb_util.c pb_process.c pb_rules.c pb_proxy.c pb_dns.c pb_socks5.c pb_http.c pb_conntrack.c pb_udp.c pb_relay.c pb_sockmap.c'.Split(' ')
 
 if (-not (Test-Path (Join-Path $WinDivertPath 'include\windivert.h'))) {
     Write-Error "WinDivert not found at: $WinDivertPath (run: pnpm fetch-windivert)"

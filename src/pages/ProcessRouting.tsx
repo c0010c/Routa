@@ -35,6 +35,7 @@ import {
   useProcRouteCleanup,
   useProcRouteInstall,
   useProcRouteStatus,
+  useProcRouteRetry,
   useProcRouteUninstall,
   useSaveProcessRoutingSettings,
   useSaveProcessRule,
@@ -52,6 +53,7 @@ export const EXIT_POLICY_HINT =
 export const TRUNCATED_HINT = "仅显示最近 400 条";
 
 const POLICY_TEXT = { Direct: "直连", Block: "阻断" } as const;
+const DISMISSED_INTERRUPTION_KEY = "routa.dismissed-process-routing-interruption";
 
 function componentLabel(c: ComponentState): Label {
   if (typeof c === "object") return { text: `错误：${c.Error.message}`, color: "error" };
@@ -81,6 +83,12 @@ function actionLabel(v: RuleView): Label {
       return { text: "已直连", color: "warning" };
     case "Block":
       return { text: "已阻断", color: "error" };
+    case "Pending":
+      return { text: "应用中", color: "default" };
+    case "Failed":
+      return { text: "应用失败", color: "error" };
+    case "Unknown":
+      return { text: "状态未知", color: "warning" };
     default:
       return { text: v.action, color: "default" };
   }
@@ -109,13 +117,19 @@ function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; e
   const install = useProcRouteInstall();
   const uninstall = useProcRouteUninstall();
   const cleanup = useProcRouteCleanup();
+  const retry = useProcRouteRetry();
   const settings = useSaveProcessRoutingSettings();
   const [menu, setMenu] = useState<HTMLElement | null>(null);
   const [confirm, setConfirm] = useState<Pending>(null);
+  const [dismissedInterruption, setDismissedInterruption] = useState<string | null>(() =>
+    localStorage.getItem(DISMISSED_INTERRUPTION_KEY),
+  );
+  const interruption = status.last_interruption;
+  const interruptionKey = interruption ? JSON.stringify([interruption.at_unix, interruption.reason]) : null;
   const c = status.component;
   const label = componentLabel(c);
   const installText = c === "NotInstalled" ? "启用进程分流" : c === "NeedsUpdate" ? "更新组件" : null;
-  const busy = install.isPending || uninstall.isPending || cleanup.isPending;
+  const busy = install.isPending || uninstall.isPending || cleanup.isPending || retry.isPending;
 
   return (
     <Paper sx={{ p: 2 }}>
@@ -152,9 +166,16 @@ function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; e
             </MenuItem>
           </Menu>
         </Stack>
-        {status.last_interruption && (
-          <Alert severity="warning">
-            {`最近一次中断：${formatTime(status.last_interruption.at_unix)}，${status.last_interruption.reason}`}
+        {interruption && interruptionKey && interruptionKey !== dismissedInterruption && (
+          <Alert
+            severity="warning"
+            closeText="关闭中断提示"
+            onClose={() => {
+              setDismissedInterruption(interruptionKey);
+              localStorage.setItem(DISMISSED_INTERRUPTION_KEY, interruptionKey);
+            }}
+          >
+            {`最近一次中断：${formatTime(interruption.at_unix)}，${interruption.reason}`}
           </Alert>
         )}
         {status.conflicts.length > 0 && (
@@ -165,22 +186,26 @@ function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; e
           </Alert>
         )}
         {status.apply_errors.length > 0 && (
-          <Alert severity="warning">
+          <Alert severity="warning" action={
+            <Button color="inherit" loading={retry.isPending} disabled={busy || c === "NeedsUpdate" || c === "NotInstalled" || c === "OwnedByOtherUser"} onClick={() => retry.mutate()}>
+              重试
+            </Button>
+          }>
             {status.apply_errors.map((m) => (
               <div key={m}>{m}</div>
             ))}
           </Alert>
         )}
-        <FormControlLabel
-          control={
-            <Switch
-              checked={enabled}
-              disabled={settings.isPending}
-              onChange={(e) => settings.mutate(e.target.checked, onExit)}
-            />
-          }
-          label="启用进程分流规则"
-        />
+        <Stack direction="row" sx={{ alignItems: "center", alignSelf: "flex-start" }}>
+          <Switch
+            checked={enabled}
+            disabled={settings.isPending}
+            onChange={(e) => settings.mutate(e.target.checked, onExit)}
+            slotProps={{ input: { "aria-labelledby": "pr-enabled-label" } }}
+            sx={{ ml: "-11px" }}
+          />
+          <Typography component="span" id="pr-enabled-label">启用进程分流规则</Typography>
+        </Stack>
         <Box>
           <FormLabel id="pr-exit">{EXIT_POLICY_LABEL}</FormLabel>
           <RadioGroup
@@ -219,7 +244,7 @@ function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; e
 
 function GuardChips({ view, active }: { view: RuleView | undefined; active: boolean }) {
   if (!active) return <Chip size="small" label="未启用" />;
-  if (!view) return <>—</>;
+  if (!view) return <Chip size="small" label="状态未知" color="warning" />;
   const l = actionLabel(view);
   return (
     <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap" }}>

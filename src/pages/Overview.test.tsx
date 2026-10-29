@@ -180,7 +180,8 @@ describe("Overview", () => {
     renderOverview();
     const rows = await screen.findAllByRole("row");
     expect(within(rows[1]).getByText("未生效")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("配置未生效：bad config");
+    expect(screen.getByRole("alert")).toHaveTextContent("已保存，但未生效，代理端口已关闭");
+    expect(screen.queryByText(/bad config/)).not.toBeInTheDocument();
   });
 
   it("marks listeners not in effect when mihomo holds a config without them", async () => {
@@ -321,9 +322,9 @@ describe("collectProblems", () => {
   });
   it("reports every non-Reloaded last apply", () => {
     const of = (last_apply: RuntimeStatus["last_apply"]) => collectProblems(model, { ...healthy, last_apply });
-    expect(of({ FailedKeptPrevious: { error: "a" } })).toEqual(["配置未生效：a"]);
-    expect(of({ FailedClosed: { error: "b", uncut: 0 } })).toEqual(["配置未生效：b"]);
-    expect(of({ FailedCoreStopped: { error: "c" } })).toEqual(["配置未生效：c"]);
-    expect(of({ NotRunning: { error: "d" } })).toEqual(["配置未生效：d"]);
+    expect(of({ FailedKeptPrevious: { error: "a" } })).toEqual(["已保存，但未生效，目前仍使用原配置"]);
+    expect(of({ FailedClosed: { error: "b", uncut: 0 } })).toEqual(["已保存，但未生效，代理端口已关闭，请检查配置后手动重试"]);
+    expect(of({ FailedCoreStopped: { error: "c" } })).toEqual(["已保存，但未生效，内核已停止，请检查配置后手动重试"]);
+    expect(of({ NotRunning: { error: "d" } })).toEqual(["已保存，但内核未能启动，请检查设置后手动重试"]);
   });
 });

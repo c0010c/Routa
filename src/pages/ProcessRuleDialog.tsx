@@ -32,7 +32,7 @@ import { FormDialog } from "../components/FormDialog";
 import { fieldErrors } from "../lib/validation";
 
 export const FAULT_POLICY_HINT = "只在 mihomo 或分流组件意外故障时生效；Listener 因节点失效、网卡断开被停用时，始终阻断";
-export const RESET_HINT = "仅对 IPv4 TCP 连接有效";
+export const RESET_HINT = "仅对 IPv4 TCP 连接有效；更换代理目标不触发断开";
 
 const TYPE_TEXT = { Mixed: "混合", Http: "HTTP", Socks: "SOCKS" } as const;
 
@@ -49,7 +49,7 @@ function ruleErrors(errors: ValidationError[]): RuleErrors {
     const text = fieldErrors([e]);
     const msg = [...(text.name ? [text.name] : []), ...(text.port ? [text.port] : []), ...text.form].join("\n");
     if ("DuplicateProcessRule" in e || "InvalidExePath" in e) out.path ??= msg;
-    else if ("ListenerTypeNotAllowed" in e) out.listener ??= msg;
+    else if ("ListenerTypeNotAllowed" in e || "ListenerAddressNotAllowed" in e) out.listener ??= msg;
     else out.form.push(msg);
   }
   return out;

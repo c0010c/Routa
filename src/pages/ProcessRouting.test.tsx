@@ -11,6 +11,7 @@ vi.mock("../bindings", () => ({
     procrouteInstall: vi.fn(),
     procrouteUninstall: vi.fn(),
     procrouteCleanup: vi.fn(),
+    procrouteRetry: vi.fn(),
     saveProcessRule: vi.fn(),
     deleteProcessRule: vi.fn(),
     saveProcessRoutingSettings: vi.fn(),
@@ -54,7 +55,7 @@ function renderPage(status: ProcRouteStatus, m: Model = model) {
   vi.mocked(commands.getModel).mockResolvedValue(m);
   vi.mocked(commands.procrouteStatus).mockResolvedValue(status);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <ApplyResultProvider>
         <MemoryRouter>
@@ -63,9 +64,11 @@ function renderPage(status: ProcRouteStatus, m: Model = model) {
       </ApplyResultProvider>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
 
 describe("ProcessRoutingPage", () => {
+  beforeEach(() => localStorage.clear());
   afterEach(() => resetFlowsStore());
 
   it("not installed shows enable button", async () => {
@@ -89,6 +92,35 @@ describe("ProcessRoutingPage", () => {
     expect(screen.getByText("规则 curl.exe 下发失败")).toBeInTheDocument();
   });
 
+  it("keeps a dismissed interruption hidden after status updates and remounting", async () => {
+    const status = { ...base, last_interruption: { at_unix: 1793247873, reason: "Routa 意外退出" } };
+    const { qc, unmount } = renderPage(status);
+    expect(await screen.findByText(/最近一次中断：/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭中断提示" }));
+    expect(screen.queryByText(/最近一次中断：/)).not.toBeInTheDocument();
+
+    act(() => qc.setQueryData(["procroute"], { ...status, conflicts: ["组件冲突"] }));
+    expect(await screen.findByText("组件冲突")).toBeInTheDocument();
+    expect(screen.queryByText(/最近一次中断：/)).not.toBeInTheDocument();
+
+    unmount();
+    renderPage(status);
+    await screen.findByText("分流组件");
+    expect(screen.queryByText(/最近一次中断：/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { at_unix: 1793247874, reason: "Routa 意外退出" },
+    { at_unix: 1793247873, reason: "分流服务意外退出后已重启" },
+  ])("shows a new interruption after dismissing the previous one: %j", async (interruption) => {
+    const { qc } = renderPage({ ...base, last_interruption: { at_unix: 1793247873, reason: "Routa 意外退出" } });
+    fireEvent.click(await screen.findByRole("button", { name: "关闭中断提示" }));
+
+    act(() => qc.setQueryData(["procroute"], { ...base, last_interruption: interruption }));
+    expect(await screen.findByText(/最近一次中断：/)).toHaveTextContent(interruption.reason);
+    expect(screen.getByRole("button", { name: "关闭中断提示" })).toBeInTheDocument();
+  });
+
   it("blocked rule shows reason chip", async () => {
     renderPage({
       ...base,
@@ -97,6 +129,41 @@ describe("ProcessRoutingPage", () => {
     expect(await screen.findByText("已阻断")).toBeInTheDocument();
     expect(screen.getByText("Listener 已停用")).toBeInTheDocument();
     expect(screen.getByText("curl.exe")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["Unknown", "状态未知"], ["Pending", "应用中"], ["Failed", "应用失败"],
+  ])("shows unconfirmed state %s without claiming success", async (action, label) => {
+    renderPage({ ...base, actions: { r1: { action, reason: null, up_bps: 0, down_bps: 0 } } });
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.queryByText("已代理")).not.toBeInTheDocument();
+    expect(screen.queryByText("已阻断")).not.toBeInTheDocument();
+  });
+
+  it("missing service confirmation shows unknown", async () => {
+    renderPage({ ...base, component: "NotInstalled" });
+    expect(await screen.findByText("状态未知")).toBeInTheDocument();
+    expect(screen.queryByText("已阻断")).not.toBeInTheDocument();
+  });
+
+  it("only retries after clicking and preserves failures until confirmed success", async () => {
+    vi.mocked(commands.procrouteRetry).mockClear();
+    vi.mocked(commands.procrouteRetry).mockResolvedValue({ status: "error", error: "仍然失败" });
+    const failed = { ...base, apply_errors: ["代理应用失败"] };
+    const { qc } = renderPage(failed);
+    const button = await screen.findByRole("button", { name: "重试" });
+    act(() => qc.setQueryData(["procroute"], { ...failed, conflicts: ["状态刷新"] }));
+    expect(commands.procrouteRetry).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    expect(await screen.findByText("仍然失败")).toBeInTheDocument();
+    expect(screen.getByText("代理应用失败")).toBeInTheDocument();
+    expect(commands.procrouteRetry).toHaveBeenCalledTimes(1);
+    vi.mocked(commands.procrouteRetry).mockResolvedValue({ status: "ok", data: null });
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(commands.procrouteRetry).toHaveBeenCalledTimes(2));
+    act(() => qc.setQueryData(["procroute"], { ...base, actions: { r1: { action: "Proxy", reason: null, up_bps: 0, down_bps: 0 } } }));
+    expect(await screen.findByText("已代理")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
   });
 
   it("drawer shows truncation hint", async () => {

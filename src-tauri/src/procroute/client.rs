@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use routa_procsvc_proto::{
-    decode, decode_len, encode, Action, DesiredState, Flow, Request, Response, SvcStatus, PIPE_NAME,
+    decode, decode_len, encode, DesiredState, Flow, Request, Response, SvcStatus, PIPE_NAME,
     PROTO_VERSION, SERVICE_NAME,
 };
 use serde::Serialize;
@@ -45,8 +45,6 @@ const TICK: Duration = Duration::from_secs(1);
 const RECONNECT: Duration = Duration::from_secs(2);
 /// 单次请求（写请求 + 读回复）的上限；超时视为连接出错。
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
-/// 被服务拒绝的同一状态，至少隔这么久、且只在定时同步时才重发。
-const REJECTED_RETRY: Duration = Duration::from_secs(2);
 /// 退出时等 Goodbye 送达的上限。
 const GOODBYE_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -65,11 +63,11 @@ pub enum ComponentState {
 #[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
 pub struct ProcRouteStatus {
     pub component: ComponentState,
-    /// 下发给服务的规则（全局开关打开时用户启用的规则）的实际动作。
+    /// 当前启用规则的服务确认结果；未确认时为 Pending / Failed / Unknown。
     pub actions: HashMap<ProcessRuleId, RuleView>,
     pub last_interruption: Option<InterruptionView>,
     pub conflicts: Vec<String>,
-    /// 最近一次下发时服务报告的错误：部分规则失败（状态已生效），或整个状态被拒绝（未生效，会重试）。
+    /// 最近一次应用错误；由用户主动重试。
     pub apply_errors: Vec<String>,
     /// 连接列表达到服务的上限、被截断了（界面标明"仅显示最近 400 条"）。
     pub truncated_flows: bool,
@@ -77,9 +75,9 @@ pub struct ProcRouteStatus {
 
 #[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
 pub struct RuleView {
-    /// "Proxy" | "Direct" | "Block"
+    /// "Proxy" | "Direct" | "Block" | "Pending" | "Failed" | "Unknown"
     pub action: String,
-    /// 不是代理时的原因（中文）。
+    /// 回落、执行失败或无法确认状态的原因（中文）。
     pub reason: Option<String>,
     pub up_bps: u64,
     pub down_bps: u64,
@@ -259,59 +257,55 @@ fn start_service() -> Result<(), String> {
 
 // ---------------------------------------------------------------- 下发
 
-/// 记住上次成功下发的状态，相同的状态不重复下发。
+/// 相同配置每次只尝试一次；失败由用户主动重试。
 #[derive(Default)]
 pub struct Syncer {
-    /// 服务回 `Ok` / `Applied` 的最后一个状态（`Error` 和连接出错时不更新）。
+    /// 服务接受的配置；部分失败也有确认结果，须结合 SvcStatus 展示。
     last_sent: Option<DesiredState>,
-    /// 最近被服务拒绝（`Error`）的状态及拒绝时刻。
-    rejected: Option<(DesiredState, Instant)>,
+    attempted: Option<DesiredState>,
+    manual_retry: bool,
     errors: Vec<String>,
 }
 
 impl Syncer {
-    /// 与上次成功下发的状态相同则不发，返回 `Ok(false)`；否则下发并返回 `Ok(true)`。
-    /// 服务拒绝（`Error`）时状态没有生效，之后会重发，但同一状态距上次被拒至少 2 秒才重发；
-    /// `Applied` 的部分规则错误不会触发重发。两种错误都记在 [`errors`](Self::errors)。
-    /// `Err` 只表示连接出了问题，调用方应断开重连。
     pub async fn push(&mut self, conn: &mut dyn SvcConn, s: DesiredState) -> Result<bool, String> {
-        self.push_with(conn, s, true).await
-    }
-
-    /// 同 [`push`](Self::push)；`retry_rejected` 为 false 时（运行状态变化触发的同步）
-    /// 不重发被拒绝过的同一状态，留给定时同步。
-    async fn push_with(&mut self, conn: &mut dyn SvcConn, s: DesiredState, retry_rejected: bool) -> Result<bool, String> {
-        if self.last_sent.as_ref() == Some(&s) {
+        if self.attempted.as_ref() == Some(&s) && !self.manual_retry {
             return Ok(false);
         }
-        if let Some((rejected, at)) = &self.rejected {
-            if *rejected == s && (!retry_rejected || at.elapsed() < REJECTED_RETRY) {
-                return Ok(false);
+        let retry = std::mem::take(&mut self.manual_retry);
+        self.attempted = Some(s.clone());
+        let req = if retry { Request::RetryApply(s.clone()) } else { Request::Apply(s.clone()) };
+        let response = match conn.call(req).await {
+            Ok(r) => r,
+            Err(e) => {
+                self.last_sent = None;
+                self.errors = vec![format!("规则应用结果未知：{e}；请手动重试")];
+                return Err(e);
             }
-        }
-        match conn.call(Request::Apply(s.clone())).await? {
+        };
+        match response {
             Response::Ok => {
                 self.errors.clear();
-                self.rejected = None;
                 self.last_sent = Some(s);
             }
             Response::Applied { errors } => {
                 self.errors = errors;
-                self.rejected = None;
                 self.last_sent = Some(s);
             }
             Response::Error(e) => {
                 self.errors = vec![e];
-                self.rejected = Some((s, Instant::now()));
+                self.last_sent = None;
             }
-            other => return Err(format!("Apply 的回复不合协议：{other:?}")),
+            other => {
+                self.last_sent = None;
+                self.errors = vec!["服务回复异常，无法确认规则是否生效；请手动重试".into()];
+                return Err(format!("Apply 的回复不合协议：{other:?}"));
+            }
         }
         Ok(true)
     }
 
-    pub fn errors(&self) -> &[String] {
-        &self.errors
-    }
+    pub fn errors(&self) -> &[String] { &self.errors }
 }
 
 // ---------------------------------------------------------------- 速率
@@ -365,6 +359,7 @@ impl Rates {
 /// 同步任务里与服务相关的全部状态（不含定时和 Tauri）。
 struct Link {
     conn: Option<Box<dyn SvcConn>>,
+    registered: bool,
     syncer: Syncer,
     rates: Rates,
     component: ComponentState,
@@ -379,6 +374,7 @@ impl Default for Link {
     fn default() -> Self {
         Self {
             conn: None,
+            registered: false,
             syncer: Syncer::default(),
             rates: Rates::default(),
             component: ProcRouteStatus::initial().component,
@@ -390,21 +386,21 @@ impl Default for Link {
     }
 }
 
-/// 一轮同步：下发期望状态；`poll`（定时同步）时再取连接列表和服务状态，并可重发被拒绝的状态。
+/// 一轮同步：仅发送变化的配置；应用后立即取服务确认，定时只查询连接和状态。
 async fn round(
     conn: &mut dyn SvcConn,
     syncer: &mut Syncer,
     desired: DesiredState,
     poll: bool,
 ) -> Result<Option<(Vec<Flow>, SvcStatus)>, String> {
-    syncer.push_with(conn, desired, poll).await?;
-    if !poll {
+    let pushed = syncer.push(conn, desired).await?;
+    if !poll && !pushed {
         return Ok(None);
     }
-    let flows = match conn.call(Request::GetFlows).await? {
+    let flows = if poll { match conn.call(Request::GetFlows).await? {
         Response::Flows(f) => f,
         other => return Err(format!("GetFlows 的回复不合协议：{other:?}")),
-    };
+    }} else { Vec::new() };
     let status = match conn.call(Request::GetStatus).await? {
         Response::Status(s) => s,
         other => return Err(format!("GetStatus 的回复不合协议：{other:?}")),
@@ -422,7 +418,10 @@ impl Link {
         match res {
             Ok(conn) => {
                 self.conn = Some(conn);
-                self.syncer = Syncer::default();
+                self.registered = false;
+                // 已失败的配置在重新连接后也不自动重发。
+                if self.syncer.errors.is_empty() { self.syncer = Syncer::default(); }
+                self.svc = None;
                 self.rates = Rates::default();
                 self.component = ComponentState::Running;
             }
@@ -432,7 +431,9 @@ impl Link {
 
     fn disconnect(&mut self, state: ComponentState) {
         self.conn = None;
+        self.registered = false;
         self.component = state;
+        self.svc = None;
         self.bps.clear();
         self.flows.clear();
     }
@@ -447,10 +448,21 @@ impl Link {
             return;
         }
         let Some(conn) = self.conn.as_deref_mut() else { return };
+        if !self.registered {
+            match conn.call(Request::Attach { routa_pid: desired.routa_pid }).await {
+                Ok(Response::Ok) => self.registered = true,
+                result => {
+                    self.disconnect(error(format!("登记分流管理会话失败：{result:?}")));
+                    return;
+                }
+            }
+        }
         match round(conn, &mut self.syncer, desired, poll).await {
             Ok(Some((flows, status))) => {
-                self.bps = self.rates.update(&flows, Instant::now());
-                self.flows = flows;
+                if poll {
+                    self.bps = self.rates.update(&flows, Instant::now());
+                    self.flows = flows;
+                }
                 self.svc = Some(status);
             }
             Ok(None) => {}
@@ -486,12 +498,20 @@ impl Link {
             .map(|r| {
                 let id = ProcessRuleId(r.id.clone());
                 let (up_bps, down_bps) = self.bps.get(&r.id).copied().unwrap_or_default();
-                let action = match r.action {
-                    Action::Proxy(_) => "Proxy",
-                    Action::Direct => "Direct",
-                    Action::Block => "Block",
+                let pending = self.syncer.manual_retry || self.syncer.attempted.as_ref() != Some(desired);
+                let confirmed = self.connected() && !pending && self.syncer.last_sent.as_ref() == Some(desired);
+                let actual = confirmed.then(|| self.svc.as_ref()?.rules.iter().find(|a| a.id == r.id)).flatten();
+                let (action, reason) = if let Some(actual) = actual {
+                    (actual.action.as_deref().unwrap_or("Unknown"), actual.reason.clone().or_else(|| reasons.get(&id).cloned().flatten()))
+                } else if !self.connected() {
+                    ("Unknown", Some("无法连接分流服务，状态未知".into()))
+                } else if pending {
+                    ("Pending", Some("等待服务确认当前设置".into()))
+                } else if !self.syncer.errors.is_empty() {
+                    ("Failed", Some("应用失败；请手动重试".into()))
+                } else {
+                    ("Pending", Some("等待服务确认当前设置".into()))
                 };
-                let reason = reasons.get(&id).cloned().flatten();
                 (id, RuleView { action: action.into(), reason, up_bps, down_bps })
             })
             .collect();
@@ -515,6 +535,7 @@ enum Command {
     Goodbye(oneshot::Sender<()>),
     Cleanup(oneshot::Sender<Option<Result<(), String>>>),
     Reconnect,
+    Retry(oneshot::Sender<Result<(), String>>),
 }
 
 static STATUS: LazyLock<Mutex<ProcRouteStatus>> = LazyLock::new(|| Mutex::new(ProcRouteStatus::initial()));
@@ -563,6 +584,14 @@ pub async fn cleanup() -> Option<Result<(), String>> {
     wait.await.ok().flatten()
 }
 
+/// 用户主动重试，等待这一轮应用结果。
+pub async fn retry() -> Result<(), String> {
+    let tx = COMMANDS.get().ok_or("分流同步任务未启动")?;
+    let (done, wait) = oneshot::channel();
+    tx.send(Command::Retry(done)).await.map_err(|_| "分流同步任务已结束")?;
+    wait.await.map_err(|_| "分流同步任务已结束")?
+}
+
 pub fn spawn(rt: Arc<Runtime>, app: AppHandle) -> JoinHandle<()> {
     let (tx, rx) = mpsc::channel(8);
     if COMMANDS.set(tx).is_err() {
@@ -585,6 +614,7 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
     let mut start_tried = false;
     let mut emitted_flows: Option<Vec<Flow>> = None;
     loop {
+        let mut retry_done = None;
         let poll = tokio::select! {
             // 命令优先：Goodbye 不能排在一轮同步之后。
             biased;
@@ -599,6 +629,11 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
                     let _ = done.send(link.cleanup().await);
                     false
                 }
+                Some(Command::Retry(done)) => {
+                    retry_done = Some(done);
+                    next_connect = Instant::now();
+                    true
+                }
                 Some(Command::Reconnect) => {
                     next_connect = Instant::now();
                     false
@@ -611,6 +646,7 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
         // goodbye() 已开始（可能已超时放弃等待）：不再连接或下发，只等 Goodbye 命令。
         if EXITING.load(Ordering::SeqCst) {
             link.stop();
+            if let Some(done) = retry_done { let _ = done.send(Err("程序正在退出".into())); }
             continue;
         }
 
@@ -633,6 +669,20 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
         let (model, st) = (rt.model(), rt.status());
         // 全局开关关闭时 decide 不含任何规则：照样下发，服务据此撤掉全部规则。
         let desired = decide(&model, &st, pid);
+        if retry_done.is_some() {
+            if link.connected() {
+                link.syncer.manual_retry = true;
+            } else {
+                link.syncer.attempted = Some(desired.clone());
+                link.syncer.errors = vec!["无法连接分流服务，请手动重试".into()];
+            }
+        }
+        if link.connected() && (link.syncer.manual_retry || link.syncer.attempted.as_ref() != Some(&desired)) {
+            link.svc = None;
+            let pending = link.view(&desired, &decide::reasons(&model, &st));
+            *STATUS.lock().unwrap_or_else(|e| e.into_inner()) = pending.clone();
+            let _ = app.emit("procroute-status", pending);
+        }
         let was_connected = link.connected();
         link.sync(desired.clone(), poll).await;
         if was_connected && !link.connected() {
@@ -651,6 +701,12 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
                 eprintln!("emit procroute-status failed: {e}");
             }
         }
+        if let Some(done) = retry_done {
+            let result = if !link.connected() { Err("无法连接分流服务，请手动重试".into()) }
+                else if link.syncer.errors.is_empty() { Ok(()) }
+                else { Err(link.syncer.errors.join("；")) };
+            let _ = done.send(result);
+        }
         if emitted_flows.as_ref() != Some(&link.flows) {
             if let Err(e) = app.emit("procroute-flows", &link.flows) {
                 eprintln!("emit procroute-flows failed: {e}");
@@ -664,7 +720,7 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use routa_procsvc_proto::{ExitPolicy, FaultPolicy, RuleSpec};
+    use routa_procsvc_proto::{Action, ExitPolicy, FaultPolicy, RuleSpec};
 
     use super::*;
 
@@ -672,19 +728,29 @@ mod tests {
     struct FakeConn {
         sent: Arc<Mutex<Vec<Request>>>,
         replies: Vec<Result<Response, String>>,
+        attach_error: Option<String>,
     }
 
     impl FakeConn {
         fn new(replies: Vec<Result<Response, String>>) -> (Self, Arc<Mutex<Vec<Request>>>) {
             let sent = Arc::new(Mutex::new(Vec::new()));
-            (Self { sent: sent.clone(), replies }, sent)
+            (Self { sent: sent.clone(), replies, attach_error: None }, sent)
         }
     }
 
     #[async_trait]
     impl SvcConn for FakeConn {
         async fn call(&mut self, req: Request) -> Result<Response, String> {
-            self.sent.lock().unwrap().push(req);
+            self.sent.lock().unwrap().push(req.clone());
+            if matches!(req, Request::Attach { .. }) {
+                return Ok(self.attach_error.as_ref().map(|e| Response::Error(e.clone())).unwrap_or(Response::Ok));
+            }
+            if matches!(req, Request::GetStatus) && !matches!(self.replies.first(), Some(Ok(Response::Status(_)))) {
+                return Ok(Response::Status(SvcStatus {
+                    version: PROTO_VERSION, owner_sid: "test".into(),
+                    last_interruption: None, truncated_flows: false, conflicts: vec![], rules: vec![],
+                }));
+            }
             if self.replies.is_empty() {
                 return Err("no more replies".into());
             }
@@ -720,31 +786,26 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn changed_state_is_sent() {
+    async fn failures_wait_for_manual_retry_and_changed_settings_are_sent() {
         let (mut conn, sent) = FakeConn::new(vec![
-            Ok(Response::Ok),
-            Ok(Response::Applied { errors: vec!["规则 r1 失败".into()] }),
+            Ok(Response::Applied { errors: vec!["代理失败".into()] }),
             Ok(Response::Error("拒绝".into())),
             Ok(Response::Ok),
         ]);
         let mut s = Syncer::default();
-        assert_eq!(s.push(&mut conn, state(r"C:\a.exe")).await, Ok(true));
-        // Applied：状态已生效，错误留给界面，不重发。
-        assert_eq!(s.push(&mut conn, state(r"C:\b.exe")).await, Ok(true));
-        assert_eq!(s.errors(), ["规则 r1 失败"]);
-        assert_eq!(s.push(&mut conn, state(r"C:\b.exe")).await, Ok(false));
-        // Error：未生效，同一状态下次照常重发。
-        assert_eq!(s.push(&mut conn, state(r"C:\c.exe")).await, Ok(true));
-        assert_eq!(s.errors(), ["拒绝"]);
-        // 被拒绝的同一状态隔 2 秒才重发。
-        assert_eq!(s.push(&mut conn, state(r"C:\c.exe")).await, Ok(false));
-        tokio::time::advance(REJECTED_RETRY).await;
-        assert_eq!(s.push(&mut conn, state(r"C:\c.exe")).await, Ok(true));
+        let a = state(r"C:\a.exe");
+        let b = state(r"C:\b.exe");
+        assert_eq!(s.push(&mut conn, a.clone()).await, Ok(true));
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert_eq!(s.push(&mut conn, a).await, Ok(false));
+        assert_eq!(s.errors(), ["代理失败"]);
+        assert_eq!(s.push(&mut conn, b.clone()).await, Ok(true));
+        assert_eq!(s.push(&mut conn, b.clone()).await, Ok(false));
+        s.manual_retry = true;
+        assert_eq!(s.push(&mut conn, b.clone()).await, Ok(true));
         assert!(s.errors().is_empty());
-        assert_eq!(applies(&sent), 4);
-        // 连接出错：返回 Err，不记为已下发。
-        assert!(s.push(&mut conn, state(r"C:\d.exe")).await.is_err());
-        assert_eq!(s.last_sent, Some(state(r"C:\c.exe")));
+        assert_eq!(s.last_sent, Some(b.clone()));
+        assert_eq!(sent.lock().unwrap().last(), Some(&Request::RetryApply(b)));
     }
 
     #[tokio::test]
@@ -783,24 +844,35 @@ mod tests {
         assert_eq!(*sent.lock().unwrap(), vec![Request::Hello { version: PROTO_VERSION }]);
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn rejected_state_retried_only_on_tick() {
+    #[tokio::test]
+    async fn rejected_registration_disconnects_without_applying_or_clearing_errors() {
         let mut link = Link::default();
-        let (conn, sent) = FakeConn::new(vec![
-            Ok(Response::Hello { version: PROTO_VERSION, accepted: true }),
-            Ok(Response::Error("拒绝".into())),
-            Ok(Response::Ok),
-        ]);
-        link.attach(handshake(Box::new(conn)).await);
-        link.sync(state(r"C:.exe"), false).await;
-        assert_eq!(applies(&sent), 1);
-        tokio::time::advance(REJECTED_RETRY).await;
-        // 运行状态变化触发的同步不重发被拒绝的同一状态。
-        link.sync(state(r"C:.exe"), false).await;
-        assert_eq!(applies(&sent), 1);
-        // 定时同步才重发（这一轮的 GetFlows 没有预设回复，连接随之断开，与此无关）。
-        link.sync(state(r"C:.exe"), true).await;
-        assert_eq!(applies(&sent), 2);
+        link.syncer.errors = vec!["原来的应用错误".into()];
+        let (mut conn, sent) = FakeConn::new(vec![]);
+        conn.attach_error = Some("进程已退出".into());
+        link.attach(Ok(Box::new(conn)));
+        link.sync(state(r"C:\a.exe"), true).await;
+        assert!(!link.connected());
+        assert_eq!(applies(&sent), 0);
+        assert_eq!(link.syncer.errors(), ["原来的应用错误"]);
+    }
+
+    #[tokio::test]
+    async fn failed_state_is_not_retried_after_reconnect() {
+        for reply in [Ok(Response::Error("拒绝".into())), Ok(Response::Applied { errors: vec!["部分失败".into()] }), Err("timeout".into())] {
+            let mut link = Link::default();
+            let (conn, _) = FakeConn::new(vec![reply]);
+            link.attach(Ok(Box::new(conn)));
+            link.sync(state(r"C:\a.exe"), false).await;
+            let (conn, sent) = FakeConn::new(vec![]);
+            link.attach(Ok(Box::new(conn)));
+            link.sync(state(r"C:\a.exe"), false).await;
+            assert_eq!(applies(&sent), 0);
+            assert!(matches!(sent.lock().unwrap().as_slice(), [Request::Attach { routa_pid: 1 }]));
+            link.goodbye().await;
+            assert!(matches!(sent.lock().unwrap().last(), Some(Request::Goodbye)));
+            assert!(!link.syncer.errors().is_empty());
+        }
     }
 
     #[tokio::test]
@@ -869,8 +941,59 @@ mod tests {
     }
 
     #[test]
+    fn view_never_treats_desired_or_stale_state_as_confirmed() {
+        let mut link = Link::default();
+        let desired = state(r"C:\a.exe");
+        let key = ProcessRuleId("r1".into());
+        assert_eq!(link.view(&desired, &HashMap::new()).actions[&key].action, "Unknown");
+        let (conn, _) = FakeConn::new(vec![]);
+        link.attach(Ok(Box::new(conn)));
+        assert_eq!(link.view(&desired, &HashMap::new()).actions[&key].action, "Pending");
+        link.syncer.attempted = Some(desired.clone());
+        link.syncer.errors = vec!["被拒绝".into()];
+        assert_eq!(link.view(&desired, &HashMap::new()).actions[&key].action, "Failed");
+        link.syncer.last_sent = Some(desired.clone());
+        link.svc = Some(SvcStatus {
+            version: PROTO_VERSION, owner_sid: "test".into(), last_interruption: None,
+            truncated_flows: false, conflicts: vec![],
+            rules: vec![routa_procsvc_proto::RuleStatus { id: "r1".into(), action: Some("Block".into()), reason: Some("应用失败，已阻断".into()) }],
+        });
+        assert_eq!(link.view(&desired, &HashMap::new()).actions[&key].action, "Block");
+        assert_eq!(link.view(&state(r"C:\b.exe"), &HashMap::new()).actions[&key].action, "Pending");
+        link.disconnect(error("断开"));
+        assert_eq!(link.view(&desired, &HashMap::new()).actions[&key].action, "Unknown");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn polling_failed_apply_only_reads_status_until_user_retries() {
+        let desired = state(r"C:\a.exe");
+        let (conn, sent) = FakeConn::new(vec![
+            Ok(Response::Applied { errors: vec!["部分失败".into()] }),
+            Ok(Response::Flows(vec![])),
+            Ok(Response::Flows(vec![])),
+            Ok(Response::Ok),
+        ]);
+        let mut link = Link::default();
+        link.attach(Ok(Box::new(conn)));
+        link.sync(desired.clone(), false).await;
+        for _ in 0..2 {
+            tokio::time::advance(Duration::from_secs(60)).await;
+            link.sync(desired.clone(), true).await;
+        }
+        assert_eq!(applies(&sent), 1);
+        link.syncer.manual_retry = true;
+        link.sync(desired, false).await;
+        assert!(link.syncer.errors().is_empty());
+        assert_eq!(sent.lock().unwrap().iter().filter(|r| matches!(r, Request::RetryApply(_))).count(), 1);
+    }
+
+    #[test]
     fn view_reports_actions_rates_and_service_status() {
         let mut link = Link::default();
+        let (conn, _) = FakeConn::new(vec![]);
+        link.attach(Ok(Box::new(conn)));
+        link.syncer.last_sent = Some(state(r"C:\a.exe"));
+        link.syncer.attempted = link.syncer.last_sent.clone();
         link.bps.insert("r1".into(), (10, 20));
         link.svc = Some(SvcStatus {
             version: PROTO_VERSION,
@@ -878,6 +1001,7 @@ mod tests {
             last_interruption: Some(routa_procsvc_proto::Interruption { at_unix: 5, reason: "崩溃".into() }),
             truncated_flows: true,
             conflicts: vec!["冲突".into()],
+            rules: vec![routa_procsvc_proto::RuleStatus { id: "r1".into(), action: Some("Block".into()), reason: None }],
         });
         let why = HashMap::from([(ProcessRuleId("r1".into()), Some("内核崩溃".into()))]);
         let v = link.view(&state(r"C:\a.exe"), &why);

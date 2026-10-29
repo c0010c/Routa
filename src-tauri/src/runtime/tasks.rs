@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant, MissedTickBehavior};
 
-use super::{now_unix, Inner, RuntimeEvent};
+use super::{now_unix, Inner};
 use crate::core::api::MihomoApi;
 use crate::core::apply::ApplyOutcome;
 use crate::core::process::{backoff_delay, CoreState};
@@ -153,7 +153,10 @@ async fn sample_traffic(inner: Arc<Inner>) {
     let mut last = Instant::now();
     loop {
         tick.tick().await;
-        let api = inner.live.lock().unwrap().api.clone();
+        let (api, generation) = {
+            let live = inner.live.lock().unwrap();
+            (live.api.clone(), live.traffic_generation)
+        };
         let Some(api) = api else {
             last = Instant::now();
             continue;
@@ -162,16 +165,7 @@ async fn sample_traffic(inner: Arc<Inner>) {
         let now = Instant::now();
         let elapsed = now.duration_since(last);
         last = now;
-        let (name_to_id, stream_rate) = {
-            let live = inner.live.lock().unwrap();
-            (live.name_to_id.clone(), live.stream_rate.clone())
-        };
-        let mut t = inner.traffic.lock().unwrap().ingest(&snap, &name_to_id, elapsed);
-        if let Some(rate) = stream_rate {
-            t.total_rate = rate;
-        }
-        inner.status.lock().unwrap().traffic = Some(t.clone());
-        let _ = inner.events.try_send(RuntimeEvent::Traffic(t));
+        inner.record_traffic_sample(generation, &snap, elapsed);
     }
 }
 

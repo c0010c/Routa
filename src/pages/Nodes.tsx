@@ -23,9 +23,10 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
-import { Link as RouterLink } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import {
+  errorMessage,
   useDeleteManualNode,
   useDeleteNodeGroup,
   useDeleteSubscription,
@@ -116,8 +117,39 @@ export function Nodes() {
   const [editingGroup, setEditingGroup] = useState<NodeGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
+  const requestedSubscription = params.get("editSubscription");
+  const resolveExit = params.get("resolveExit");
+  const [focusFallback, setFocusFallback] = useState(false);
+  const [missingSubscription, setMissingSubscription] = useState(false);
 
-  if (!model.data || !status.data) return <Typography>加载中…</Typography>;
+  useEffect(() => {
+    if (!requestedSubscription || !model.data || !status.data || model.isError) return;
+    const subscription = model.data.subscriptions.find((s) => s.id === requestedSubscription);
+    setMissingSubscription(!subscription);
+    if (subscription) {
+      setPicked({ kind: "sub", id: subscription.id });
+      setFocusFallback(true);
+      setEditingSub(subscription);
+    }
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("editSubscription");
+      return next;
+    }, { replace: true });
+  }, [requestedSubscription, model.data, model.isError, status.data, setParams]);
+
+  if (!model.data || !status.data) {
+    const error = model.error || status.error;
+    if (error) return (
+      <Alert severity="error" action={
+        <Button onClick={() => { void model.refetch(); void status.refetch(); }}>重新加载</Button>
+      }>
+        {errorMessage(error)}
+      </Alert>
+    );
+    return <Typography>加载中…</Typography>;
+  }
   const m = model.data;
   const subs = m.subscriptions;
   const delays = status.data.delays;
@@ -165,9 +197,27 @@ export function Nodes() {
     rows = inGroup(sel.id).map(manualRow);
   }
   const newNodeGroups = sel.kind === "group" ? [sel.id] : [];
+  const resolvingExit = m.exits.find((e) => e.id === resolveExit);
 
   return (
     <Stack spacing={2}>
+      {resolveExit && (
+        <Alert severity="info" action={
+          <>
+            {model.isError && <Button onClick={() => void model.refetch()}>重新加载</Button>}
+            <Button component={RouterLink} to={`/exits?${new URLSearchParams({ delete: resolveExit })}`}>
+              返回删除检查
+            </Button>
+          </>
+        }>
+          {model.isError ? `未能读取最新配置：${errorMessage(model.error)}` : missingSubscription
+            ? "该订阅已不存在，请返回重新检查。"
+            : resolvingExit
+              ? `正在处理出口「${resolvingExit.name}」的引用。请修改订阅的备用出口，保存后返回检查。`
+              : "正在处理的出口已不存在，请返回重新检查。"}
+        </Alert>
+      )}
+      {missingSubscription && !resolveExit && <Alert severity="warning">该订阅已不存在。</Alert>}
       <Stack direction="row" sx={{ justifyContent: "space-between" }}>
         <Typography variant="h5">节点</Typography>
         <Button variant="outlined" disabled={test.isPending || allNames.length === 0} onClick={() => test.mutate(allNames)}>
@@ -309,7 +359,10 @@ export function Nodes() {
         </Stack>
       </Stack>
 
-      {editingSub && <SubscriptionDialog key={editingSub.id} subscription={editingSub} onClose={() => setEditingSub(null)} />}
+      {editingSub && <SubscriptionDialog key={editingSub.id} subscription={editingSub} focusFallback={focusFallback} onClose={() => {
+        setEditingSub(null);
+        setFocusFallback(false);
+      }} />}
       {deletingSub && (
         <ConfirmDeleteDialog
           text={`确定删除订阅「${deletingSub.name}」吗？`}

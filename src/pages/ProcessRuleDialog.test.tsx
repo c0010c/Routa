@@ -94,9 +94,9 @@ describe("ProcessRuleDialog", () => {
   it("shows ipv4 hint when reset enabled", async () => {
     renderDialog(rule);
     await loaded();
-    expect(screen.queryByText("仅对 IPv4 TCP 连接有效")).not.toBeInTheDocument();
+    expect(screen.queryByText(/仅对 IPv4 TCP 连接有效/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch", { name: "规则变化时断开旧连接" }));
-    expect(screen.getByText("仅对 IPv4 TCP 连接有效")).toBeInTheDocument();
+    expect(screen.getByText("仅对 IPv4 TCP 连接有效；更换代理目标不触发断开")).toBeInTheDocument();
   });
 
   it("shows fault policy explanation", async () => {
@@ -143,5 +143,18 @@ describe("ProcessRuleDialog", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     const saved = vi.mocked(commands.saveProcessRule).mock.calls[0][0];
     expect(saved).toMatchObject({ exe_path: "D:\\Tools\\app.exe", listener: "l1", on_fault: "Block", reset_on_change: false });
+  });
+
+  it("shows unsupported IPv6 entry errors on the listener field", async () => {
+    vi.mocked(commands.saveProcessRule).mockResolvedValue({
+      status: "error",
+      error: [{ ListenerAddressNotAllowed: { listener: "浏览器", listen: "::1" } }],
+    });
+    const onClose = renderDialog(rule);
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("Listener「浏览器」的监听地址「::1」不能用于进程分流：仅支持 IPv4 入口，请修改监听地址或选择其他 Listener")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

@@ -273,13 +273,18 @@ impl Applier {
 
         match self.write_and_reload(&generated.yaml).await {
             Ok(()) => {
-                self.last_yaml = Some(generated.yaml.clone());
-                self.last_plan = Some(generated.plan.clone());
                 for (group, member) in &generated.selects {
                     if let Err(e) = self.api.select(group, member).await {
-                        eprintln!("apply: restore select {group} -> {member} failed: {e}");
+                        // The new config is already loaded; keeping the previous plan is
+                        // not a valid rollback. Reuse the existing fail-closed path.
+                        let error = format!("切换节点失败：策略组「{group}」无法切换到「{member}」：{e}");
+                        return self
+                            .fail_closed(error, &old_plan, &generated.plan, controller_port, secret, stop_core)
+                            .await;
                     }
                 }
+                self.last_yaml = Some(generated.yaml.clone());
+                self.last_plan = Some(generated.plan.clone());
                 // A connection accepted on a port mihomo still holds would
                 // keep the old route: cut only once those ports are gone.
                 let new_ports: HashSet<u16> = generated.plan.listeners.values().map(|l| l.port).collect();
@@ -639,11 +644,98 @@ mod tests {
         let (mut a, api, _d, _p) = setup(FakeApi::new(), owning(&[]));
         let mut g = generated("Y", plan(vec![]));
         g.selects = vec![("grp".into(), "grp/m1".into())];
-        a.apply(g, 9097, "s", PID, async || {}).await;
+        let out = a.apply(g, 9097, "s", PID, async || {}).await;
+        assert!(matches!(out, ApplyOutcome::Reloaded { .. }), "{out:?}");
         assert_eq!(
             *api.selects.lock().unwrap(),
             vec![("grp".to_string(), "grp/m1".to_string())]
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn select_failure_closes_old_and_new_listeners_after_partial_success() {
+        let (mut a, api, _d, path) = setup(FakeApi::new(), owning(&[]));
+        a.last_plan = Some(plan(vec![pl("old", "E1", 1, 7001)]));
+        a.last_yaml = Some("OLD".into());
+        *api.select_results.lock().unwrap() = vec![Ok(()), Err(rejected())].into();
+        api.set_connections(ConnectionsSnapshot {
+            connections: vec![conn("old-conn", "old"), conn("new-conn", "new"), conn("unrelated", "other")],
+            ..Default::default()
+        });
+        let mut g = generated("NEW", plan(vec![pl("new", "E2", 2, 7002)]));
+        g.selects = vec![
+            ("first".into(), "first/m1".into()),
+            ("second".into(), "second/m2".into()),
+            ("third".into(), "third/m3".into()),
+        ];
+        let stopped = Cell::new(false);
+        let out = a.apply(g, 9097, "s", PID, async || stopped.set(true)).await;
+        match out {
+            ApplyOutcome::FailedClosed { error, uncut: 0 } => {
+                assert!(error.contains("切换节点失败") && error.contains("second") && error.contains("second/m2"), "{error}");
+            }
+            other => panic!("expected FailedClosed, got {other:?}"),
+        }
+        assert!(!stopped.get());
+        assert_eq!(*api.selects.lock().unwrap(), vec![("first".into(), "first/m1".into()), ("second".into(), "second/m2".into())]);
+        let expected = empty_config(9097, "s");
+        let reloads = api.reloads.lock().unwrap();
+        assert_eq!(reloads.len(), 2);
+        assert_eq!(reloads[0].1, "NEW");
+        assert_eq!(reloads[1].1, expected);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), expected);
+        assert_eq!(a.last_yaml.as_deref(), Some(expected.as_str()));
+        assert!(a.effective_listeners().is_empty());
+        let mut closed = api.closed.lock().unwrap().clone();
+        closed.sort();
+        assert_eq!(closed, ["new-conn", "old-conn"]);
+    }
+
+    #[tokio::test]
+    async fn select_timeout_fails_closed_even_on_initial_apply() {
+        let (mut a, api, _d, _p) = setup(FakeApi::new(), owning(&[]));
+        api.select_results.lock().unwrap().push_back(Err(ApiError::Unreachable("timeout".into())));
+        let mut g = generated("NEW", plan(vec![]));
+        g.selects = vec![("grp".into(), "grp/m1".into())];
+        let out = a.apply(g, 9097, "s", PID, async || panic!("empty config succeeds")).await;
+        match out {
+            ApplyOutcome::FailedClosed { error, uncut: 0 } => assert!(error.contains("grp/m1") && error.contains("timeout"), "{error}"),
+            other => panic!("expected FailedClosed, got {other:?}"),
+        }
+        assert_eq!(api.selects.lock().unwrap().len(), 1); // no automatic retry
+        assert_eq!(api.reloads.lock().unwrap().len(), 2);
+        assert!(a.effective_listeners().is_empty());
+    }
+
+    #[tokio::test]
+    async fn select_failure_stops_core_if_empty_config_also_fails() {
+        let (mut a, api, _d, _p) = setup(FakeApi::with_reload_results(vec![Ok(()), Err(rejected())]), owning(&[]));
+        api.select_results.lock().unwrap().push_back(Err(rejected()));
+        let mut g = generated("NEW", plan(vec![pl("new", "E1", 1, 7001)]));
+        g.selects = vec![("grp".into(), "grp/m1".into())];
+        let stopped = Cell::new(false);
+        let out = a.apply(g, 9097, "s", PID, async || stopped.set(true)).await;
+        match out {
+            ApplyOutcome::FailedCoreStopped { error } => assert!(error.contains("grp/m1") && error.contains("empty config also failed"), "{error}"),
+            other => panic!("expected FailedCoreStopped, got {other:?}"),
+        }
+        assert!(stopped.get());
+        assert_eq!(api.selects.lock().unwrap().len(), 1);
+        assert_eq!(api.reloads.lock().unwrap().len(), 2);
+        assert!(a.effective_listeners().is_empty()); // the failed new plan was not committed
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn select_failure_reports_connections_that_could_not_be_closed() {
+        let (mut a, api, _d, _p) = setup(FakeApi::new(), owning(&[]));
+        a.last_plan = Some(plan(vec![pl("old", "E1", 1, 7001)]));
+        api.select_results.lock().unwrap().push_back(Err(rejected()));
+        *api.connections_error.lock().unwrap() = Some(ApiError::Unreachable("offline".into()));
+        let mut g = generated("NEW", plan(vec![pl("new", "E2", 2, 7002)]));
+        g.selects = vec![("grp".into(), "grp/m1".into())];
+        let out = a.apply(g, 9097, "s", PID, async || {}).await;
+        assert!(matches!(out, ApplyOutcome::FailedClosed { uncut: 2, .. }), "{out:?}");
+        assert!(a.effective_listeners().is_empty());
     }
 
     #[tokio::test(start_paused = true)]

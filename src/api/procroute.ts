@@ -18,6 +18,7 @@ export const useSaveProcessRoutingSettings = make(() => commands.saveProcessRout
 export const useProcRouteInstall = make(() => commands.procrouteInstall);
 export const useProcRouteUninstall = make(() => commands.procrouteUninstall);
 export const useProcRouteCleanup = make(() => commands.procrouteCleanup);
+export const useProcRouteRetry = make(() => commands.procrouteRetry);
 
 // 服务每秒推送的连接列表（"procroute-flows" 事件），同 trafficStore 的做法。
 const NO_FLOWS: Flow[] = [];

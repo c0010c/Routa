@@ -521,6 +521,126 @@ async fn shutdown_persists_totals() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn stopping_publishes_zero_rates_and_preserves_totals_without_more_samples() {
+    let mut h = harness(&model_with_listener(false));
+    h.rt.start().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    h.api.set_connections(ConnectionsSnapshot {
+        upload_total: 100, download_total: 200,
+        connections: vec![conn("c1", "L1", 100, 200)],
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let before = h.rt.status().traffic.unwrap();
+    assert!(before.total_rate.up > 0);
+    assert!(before.per_listener_rate[&ListenerId("lis-1".into())].down > 0);
+    drain(&mut h.events);
+
+    h.rt.stop_core().await;
+
+    let stopped = h.rt.status().traffic.unwrap();
+    assert_eq!(stopped.total_rate, Rate::default());
+    assert!(stopped.per_listener_rate.is_empty());
+    assert_eq!(stopped.totals, before.totals);
+    assert!(drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::TrafficSnapshot(t) if *t == stopped)));
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(h.rt.status().traffic.unwrap(), stopped);
+    assert!(!drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::Traffic(_))));
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn reset_publishes_totals_only_and_discards_older_in_flight_samples() {
+    let mut h = harness(&model_with_listener(false));
+    h.rt.restart_core().await;
+    let generation = h.rt.inner.live.lock().unwrap().traffic_generation;
+    let first = ConnectionsSnapshot {
+        upload_total: 100, download_total: 200,
+        connections: vec![conn("c1", "L1", 100, 200)],
+    };
+    let next = ConnectionsSnapshot {
+        upload_total: 110, download_total: 220,
+        connections: vec![conn("c1", "L1", 110, 220)],
+    };
+    h.rt.inner.record_traffic_sample(generation, &first, Duration::from_secs(1));
+    h.rt.inner.record_traffic_sample(generation, &next, Duration::from_secs(1));
+    let before = h.rt.status().traffic.unwrap();
+    drain(&mut h.events);
+
+    h.rt.reset_traffic().await;
+
+    let cleared = h.rt.status().traffic.unwrap();
+    assert_eq!(cleared.total_rate, before.total_rate);
+    assert_eq!(cleared.per_listener_rate, before.per_listener_rate);
+    assert_eq!(cleared.totals, TrafficTotals::default());
+    assert_eq!(Store::open(h.data.clone()).unwrap().load_totals().unwrap(), cleared.totals);
+    let events = drain(&mut h.events);
+    assert!(events.iter().any(|e| matches!(e, RuntimeEvent::TrafficSnapshot(t) if *t == cleared)));
+    assert!(!events.iter().any(|e| matches!(e, RuntimeEvent::Traffic(_))));
+
+    // A request issued before reset may complete afterwards. It must not
+    // restore old totals or move the aggregator's preserved baselines.
+    let late = ConnectionsSnapshot { upload_total: 9999, download_total: 9999, connections: vec![] };
+    h.rt.inner.record_traffic_sample(generation, &late, Duration::from_secs(1));
+    assert_eq!(h.rt.status().traffic.unwrap(), cleared);
+    assert!(drain(&mut h.events).is_empty());
+    let current_generation = h.rt.inner.live.lock().unwrap().traffic_generation;
+    let fresh = ConnectionsSnapshot {
+        upload_total: 120, download_total: 240,
+        connections: vec![conn("c1", "L1", 120, 240)],
+    };
+    h.rt.inner.record_traffic_sample(current_generation, &fresh, Duration::from_secs(1));
+    let resumed = h.rt.status().traffic.unwrap();
+    assert_eq!(resumed.totals.total, Bytes { up: 10, down: 20 });
+    assert_eq!(resumed.totals.per_listener[&ListenerId("lis-1".into())], Bytes { up: 10, down: 20 });
+}
+
+#[tokio::test(start_paused = true)]
+async fn reset_while_stopped_updates_the_snapshot_immediately() {
+    let mut h = harness(&model_with_listener(false));
+    h.rt.restart_core().await;
+    let generation = h.rt.inner.live.lock().unwrap().traffic_generation;
+    h.rt.inner.record_traffic_sample(generation, &ConnectionsSnapshot {
+        upload_total: 100, download_total: 200,
+        connections: vec![conn("c1", "L1", 100, 200)],
+    }, Duration::from_secs(1));
+    h.rt.stop_core().await;
+    drain(&mut h.events);
+
+    h.rt.reset_traffic().await;
+
+    let tick = h.rt.status().traffic.unwrap();
+    assert_eq!(tick, TrafficTick::default());
+    assert!(drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::TrafficSnapshot(t) if *t == tick)));
+    // Even after another start, an old core's response is still stale.
+    h.rt.restart_core().await;
+    h.rt.inner.record_traffic_sample(generation, &ConnectionsSnapshot {
+        upload_total: 9999, download_total: 9999, connections: vec![],
+    }, Duration::from_secs(1));
+    assert_eq!(h.rt.status().traffic.unwrap(), tick);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crash_also_publishes_zero_rates_without_clearing_totals() {
+    let mut h = harness(&model_with_listener(false));
+    h.rt.start().await.unwrap();
+    let generation = h.rt.inner.live.lock().unwrap().traffic_generation;
+    h.rt.inner.record_traffic_sample(generation, &ConnectionsSnapshot {
+        upload_total: 100, download_total: 200,
+        connections: vec![conn("c1", "L1", 100, 200)],
+    }, Duration::from_secs(1));
+    let before = h.rt.status().traffic.unwrap().totals;
+    drain(&mut h.events);
+    h.launcher.crash(0, 3);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let after = h.rt.status().traffic.unwrap();
+    assert_eq!(after.total_rate, Rate::default());
+    assert!(after.per_listener_rate.is_empty());
+    assert_eq!(after.totals, before);
+    assert!(drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::TrafficSnapshot(t) if *t == after)));
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn delay_test_records_results() {
     let mut m = model_with_listener(false);
     m.settings.delay_test_interval_mins = Some(10);

@@ -427,7 +427,7 @@ BOOL establish_udp_associate_for_config(PROXY_CONFIG *cfg)
 
     configure_tcp_socket(tcp_sock, 262144, 3000);
 
-    UINT32 socks5_ip = resolve_hostname(cfg->host);
+    UINT32 socks5_ip = cfg->resolved_ip ? cfg->resolved_ip : resolve_hostname(cfg->host);
     if (socks5_ip == 0)
     {
         closesocket(tcp_sock);

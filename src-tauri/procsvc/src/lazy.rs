@@ -50,7 +50,7 @@ impl<B: Bridge> Lazy<B> {
 impl<B: Bridge> Interceptor for Lazy<B> {
     fn set_proxy(&mut self, rule: &str, target: &ProxyTarget) -> Result<(), String> {
         // 代理配置本身不拦截任何流量，未运行时也能设置；
-        // 先于启动设置还能让 ProxyBridge 在启动时看到 SOCKS5 配置、开启 UDP 中转。
+        // UDP 中转随引擎启动，不再依赖启动时是否已有 SOCKS5 配置。
         self.inner.set_proxy(rule, target)
     }
 

@@ -113,6 +113,7 @@ typedef struct CONNECTION_INFO {
     UINT32 proxy_config_id;
     BOOL   is_ipv6;
     LONG64 udp_policy_version; // version of the verdict, not of the later cache insertion
+    UINT64 udp_session_id;     // unique across local-port reuse / destination changes
     UINT8  src_ip6[16];        // raw IPv6 src (only valid when is_ipv6)
     UINT8  orig_dest_ip6[16];  // raw IPv6 dest (only valid when is_ipv6)
     struct CONNECTION_INFO *next;      // chain in the forward table (keyed by src_port)
@@ -125,6 +126,15 @@ typedef struct CONNECTION_INFO {
     volatile LONG64 up_bytes;          // UDP: payload bytes app -> proxy
     volatile LONG64 down_bytes;        // UDP: payload bytes proxy -> app
 } CONNECTION_INFO;
+
+typedef struct {
+    UINT64 id;
+    LONG64 policy_version;
+    UINT32 config_id;
+    UINT16 client_port, dest_port;
+    BOOL ipv6;
+    UINT8 client[16], dest[16];
+} UDP_FLOW;
 
 typedef struct {
     SOCKET client_socket;
@@ -173,7 +183,7 @@ typedef struct PID_CACHE_ENTRY {
     struct PID_CACHE_ENTRY *next;
 } PID_CACHE_ENTRY;
 
-// Internal proxy configuration with per-config UDP SOCKS5 state
+// Proxy settings plus reusable SOCKS5 state. The UDP relay keeps a private copy per flow.
 typedef struct {
     UINT32 config_id;           // Unique ID (1-based), 0 = unused slot
     ProxyType type;
@@ -196,7 +206,7 @@ typedef BOOL (*token_match_func)(const char *token, const void *data);
 extern PROXY_CONFIG g_proxy_configs[MAX_PROXY_CONFIGS];
 extern int g_proxy_config_count;
 extern UINT32 g_next_config_id;
-extern SRWLOCK g_proxy_config_lock; // config mutations vs UDP relay / config snapshots
+extern SRWLOCK g_proxy_config_lock; // config mutations vs short-lived config snapshots
 extern CONNECTION_INFO *connection_hash_table[CONNECTION_HASH_SIZE];
 extern CONNECTION_INFO *connection_rev_table[CONNECTION_HASH_SIZE];
 extern LOGGED_CONNECTION *logged_connections;
@@ -363,6 +373,14 @@ LONG64 udp_policy_current(void);
 void udp_policy_changed(void);
 void udp_policy_snapshot(void);
 BOOL udp_connection_current(const CONNECTION_INFO *conn);
+BOOL udp_flow_snapshot(UINT16 port, BOOL ipv6, UDP_FLOW *out);
+BOOL udp_flow_account(const UDP_FLOW *flow, UINT32 up, UINT32 down);
+
+// pb_udp.c: local listeners are bound before start succeeds; associations are per flow.
+#define PB_UDP_MAX_SESSIONS 1024
+BOOL udp_relay_start(void);
+void udp_relay_stop(void);
+BOOL udp_is_proxy_endpoint(UINT32 ip, UINT16 port);
 UINT32 rev_hash_v4(UINT32 dest_ip, UINT16 dest_port);
 UINT32 rev_hash_v6(const UINT8 dest_ip6[16], UINT16 dest_port);
 void rev_insert(CONNECTION_INFO *c);

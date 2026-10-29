@@ -41,27 +41,35 @@ export function useApplyResult(): ApplyResultApi {
 }
 
 export function ApplyResultProvider({ children }: { children: ReactNode }) {
-  const [outcome, setOutcome] = useState<ApplyOutcome | null>(null);
-  const [error, setError] = useState<{ text: string; severity: "success" | "error" } | null>(null);
-  const show = useCallback((o: ApplyOutcome) => setOutcome(o), []);
-  const showMessage = useCallback((text: string, severity: "success" | "error") => setError({ text, severity }), []);
-  const showError = useCallback((m: string) => setError({ text: m, severity: "error" }), []);
+  const [notice, setNotice] = useState<
+    | { kind: "apply"; outcome: ApplyOutcome }
+    | { kind: "message"; text: string; severity: "success" | "error" }
+    | null
+  >(null);
+  const show = useCallback((outcome: ApplyOutcome) => {
+    setNotice(applyOutcomeMessages(outcome).length > 0 ? { kind: "apply", outcome } : null);
+  }, []);
+  const showMessage = useCallback((text: string, severity: "success" | "error") => setNotice({ kind: "message", text, severity }), []);
+  const showError = useCallback((text: string) => setNotice({ kind: "message", text, severity: "error" }), []);
   const api = useMemo(() => ({ show, showError, showMessage }), [show, showError, showMessage]);
   return (
     <ApplyResultContext.Provider value={api}>
       {children}
-      <ApplyResultSnackbar outcome={outcome} onClose={() => setOutcome(null)} />
-      <Snackbar
-        open={error !== null}
-        // Successes fade on their own; errors stay until dismissed.
-        autoHideDuration={error?.severity === "success" ? 4000 : null}
-        onClose={(_, reason) => reason !== "clickaway" && setError(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
-      >
-        <Alert severity={error?.severity ?? "error"} variant="filled" sx={{ whiteSpace: "pre-line" }} onClose={() => setError(null)}>
-          {error?.text}
-        </Alert>
-      </Snackbar>
+      {notice?.kind === "apply" ? (
+        <ApplyResultSnackbar outcome={notice.outcome} onClose={() => setNotice(null)} />
+      ) : (
+        <Snackbar
+          open={notice?.kind === "message"}
+          // Successes fade on their own; errors stay until dismissed.
+          autoHideDuration={notice?.severity === "success" ? 4000 : null}
+          onClose={(_, reason) => reason !== "clickaway" && setNotice(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        >
+          <Alert severity={notice?.severity ?? "error"} variant="filled" sx={{ whiteSpace: "pre-line" }} onClose={() => setNotice(null)}>
+            {notice?.text}
+          </Alert>
+        </Snackbar>
+      )}
     </ApplyResultContext.Provider>
   );
 }

@@ -244,6 +244,14 @@ async saveProcessRoutingSettings(enabled: boolean, onRoutaExit: ExitPolicy) : Pr
 async procrouteStatus() : Promise<ProcRouteStatus> {
     return await TAURI_INVOKE("procroute_status");
 },
+async procrouteRetry() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("procroute_retry") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Registers the service (one UAC prompt), then connects right away.
  */
@@ -449,11 +457,11 @@ export type ParsedProxy = { raw: JsonValue;
 stripped: string[] }
 export type ProcRouteStatus = { component: ComponentState; 
 /**
- * 下发给服务的规则（全局开关打开时用户启用的规则）的实际动作。
+ * 当前启用规则的服务确认结果；未确认时为 Pending / Failed / Unknown。
  */
 actions: Partial<{ [key in ProcessRuleId]: RuleView }>; last_interruption: InterruptionView | null; conflicts: string[]; 
 /**
- * 最近一次下发时服务报告的错误：部分规则失败（状态已生效），或整个状态被拒绝（未生效，会重试）。
+ * 最近一次应用错误；由用户主动重试。
  */
 apply_errors: string[]; 
 /**
@@ -472,11 +480,11 @@ export type ProcessRuleId = string
 export type Rate = { up: number; down: number }
 export type RuleView = { 
 /**
- * "Proxy" | "Direct" | "Block"
+ * "Proxy" | "Direct" | "Block" | "Pending" | "Failed" | "Unknown"
  */
 action: string; 
 /**
- * 不是代理时的原因（中文）。
+ * 回落、执行失败或无法确认状态的原因（中文）。
  */
 reason: string | null; up_bps: number; down_bps: number }
 export type RunningProcess = { pid: number; 
@@ -568,7 +576,7 @@ export type ValidationError = { DuplicateName: { kind: string; name: string } } 
 /**
  * The generated config was rejected by `mihomo -t`.
  */
-{ CoreRejected: { message: string } } | { DuplicateProcessRule: { exe_path: string } } | { InvalidExePath: { exe_path: string; reason: string } } | { ListenerTypeNotAllowed: { listener: string } } | { TooManyProcessRules: { max: number } }
+{ CoreRejected: { message: string } } | { DuplicateProcessRule: { exe_path: string } } | { InvalidExePath: { exe_path: string; reason: string } } | { ListenerTypeNotAllowed: { listener: string } } | { ListenerAddressNotAllowed: { listener: string; listen: string } } | { TooManyProcessRules: { max: number } }
 
 /** tauri-specta globals **/
 

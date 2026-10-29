@@ -2,7 +2,7 @@
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-pub const PROTO_VERSION: u32 = 1;
+pub const PROTO_VERSION: u32 = 3;
 pub const PIPE_NAME: &str = r"\\.\pipe\RoutaProcSvc";
 pub const SERVICE_NAME: &str = "RoutaProcSvc";
 /// 单帧 JSON 正文的最大字节数。
@@ -63,7 +63,11 @@ pub struct DesiredState {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum Request {
     Hello { version: u32 },
+    /// 登记管理进程，不应用配置或重试失败操作。
+    Attach { routa_pid: u32 },
     Apply(DesiredState),
+    /// 用户主动重试，包括上次未成功断开的连接。
+    RetryApply(DesiredState),
     Goodbye,
     GetFlows,
     GetStatus,
@@ -109,6 +113,16 @@ pub struct SvcStatus {
     pub last_interruption: Option<Interruption>,
     pub truncated_flows: bool,
     pub conflicts: Vec<String>,
+    pub rules: Vec<RuleStatus>,
+}
+
+/// 服务确认的规则动作；不回传代理密码等配置。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RuleStatus {
+    pub id: String,
+    /// Proxy / Direct / Block；无法确认执行结果时为 None。
+    pub action: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -201,6 +215,13 @@ mod tests {
         assert_eq!(len, buf.len() - 4);
         let back: Request = decode(&buf[4..]).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn roundtrip_attach() {
+        let request = Request::Attach { routa_pid: 1234 };
+        let buf = encode(&request).unwrap();
+        assert_eq!(decode::<Request>(&buf[4..]).unwrap(), request);
     }
 
     #[test]

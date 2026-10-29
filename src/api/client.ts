@@ -44,16 +44,21 @@ export function useTrafficHistory(): TrafficHistory {
   return useSyncExternalStore(subscribeTraffic, getTrafficHistory);
 }
 
+interface MutationOptions {
+  errorFeedback?: "global" | "local";
+}
+
 function useApiMutation<A extends unknown[], T>(
   run: (...a: A) => Promise<Result<T, ValidationError[] | string | null>>,
+  options: MutationOptions = {},
 ) {
   const qc = useQueryClient();
   const apply = useApplyResult();
   return useMutation({
     mutationFn: async (a: A) => unwrap(await run(...a)),
     onError: (e) => {
-      // Validation errors are shown in-form by the caller; everything else must be visible.
-      if (!isValidationError(e)) apply.showError(errorMessage(e));
+      // Async callers own validation errors; local mode also owns ordinary failures.
+      if (!isValidationError(e) && options.errorFeedback !== "local") apply.showError(errorMessage(e));
     },
     onSuccess: (data) => {
       if (typeof data === "object" && data !== null && isApplyOutcome(data)) apply.show(data);
@@ -64,7 +69,7 @@ function useApiMutation<A extends unknown[], T>(
   });
 }
 
-function errorMessage(e: unknown): string {
+export function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   const t = String(e ?? "");
   return t === "" ? "操作失败" : t;
@@ -83,8 +88,8 @@ type Fn<A extends unknown[], T> = (...a: A) => Promise<Result<T, ValidationError
 
 // Each hook's mutate takes a single argument (or an args tuple for multi-arg commands).
 export function make<A extends unknown[], T>(get: () => Fn<A, T>) {
-  return () => {
-    const m = useApiMutation<A, T>((...a) => get()(...a));
+  return (options: MutationOptions = {}) => {
+    const m = useApiMutation<A, T>((...a) => get()(...a), options);
     const apply = useApplyResult();
     return {
       ...m,

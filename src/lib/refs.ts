@@ -2,6 +2,18 @@ import type { ExitMember, Model, NodeRef } from "../bindings";
 
 export const MANUAL_PREFIX = "手动";
 
+export type ExitUsage =
+  | { kind: "listener"; id: string; name: string }
+  | { kind: "subscription"; id: string; name: string };
+
+/** Match the backend's exit references, including disabled listeners. */
+export function collectExitUsages(model: Model, exitId: string): ExitUsage[] {
+  return [
+    ...model.listeners.filter((l) => l.exit === exitId).map((l) => ({ kind: "listener" as const, id: l.id, name: l.name })),
+    ...model.subscriptions.filter((s) => s.fallback_exit === exitId).map((s) => ({ kind: "subscription" as const, id: s.id, name: s.name })),
+  ];
+}
+
 export type SubNodeRef = Extract<NodeRef, { subscription_id: string }>;
 export type ManualNodeRef = Extract<NodeRef, { manual_id: string }>;
 export type GroupMember = Extract<ExitMember, { group: unknown }>;

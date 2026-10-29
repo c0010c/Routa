@@ -16,11 +16,22 @@ pub enum ValidationError {
     DuplicateProcessRule { exe_path: String },
     InvalidExePath { exe_path: String, reason: String },
     ListenerTypeNotAllowed { listener: String },
+    ListenerAddressNotAllowed { listener: String, listen: String },
     TooManyProcessRules { max: u32 },
 }
 
 /// 已启用的进程分流规则数上限（与服务端一致）。
 pub const MAX_PROCESS_RULES: u32 = 32;
+
+/// ProxyBridge 的上游连接仅支持 IPv4；不能把 IPv6 监听冒充为 IPv4 入口。
+pub(crate) fn process_proxy_host(listen: &str) -> Option<String> {
+    let t = listen.trim();
+    let t = t.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(t);
+    if t.eq_ignore_ascii_case("localhost") || matches!(t, "" | "0.0.0.0") {
+        return Some("127.0.0.1".into());
+    }
+    t.parse::<std::net::Ipv4Addr>().ok().map(|ip| ip.to_string())
+}
 
 fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
     let pr = &model.process_routing;
@@ -42,6 +53,12 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
             }),
             Some(l) if l.listener_type == ListenerType::Http => {
                 errors.push(ValidationError::ListenerTypeNotAllowed { listener: l.name.clone() })
+            }
+            Some(l) if process_proxy_host(&l.listen).is_none() => {
+                errors.push(ValidationError::ListenerAddressNotAllowed {
+                    listener: l.name.clone(),
+                    listen: l.listen.clone(),
+                })
             }
             Some(_) => {}
         }
@@ -405,6 +422,28 @@ mod tests {
         m.listeners[0].listener_type = ListenerType::Http;
         assert!(errs(&m).contains(&ValidationError::ListenerTypeNotAllowed { listener: "l1".into() }));
         m.listeners[0].listener_type = ListenerType::Socks;
+        assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn process_rule_requires_ipv4_listener_but_other_listeners_can_use_ipv6() {
+        let mut m = pmodel(|l| vec![prule("C:\\a.exe", l)]);
+        for listen in ["::", "::1", "[::1]", "2001:db8::1", "::ffff:127.0.0.1", "host.lan"] {
+            m.listeners[0].listen = listen.into();
+            assert!(
+                errs(&m).contains(&ValidationError::ListenerAddressNotAllowed {
+                    listener: "l1".into(),
+                    listen: listen.into(),
+                }),
+                "{listen}"
+            );
+        }
+        for listen in ["0.0.0.0", "127.0.0.1", "192.168.1.5", "localhost", ""] {
+            m.listeners[0].listen = listen.into();
+            assert_eq!(validate(&m), Ok(()), "{listen}");
+        }
+        m.listeners[0].listen = "::1".into();
+        m.process_routing.rules.clear();
         assert_eq!(validate(&m), Ok(()));
     }
 

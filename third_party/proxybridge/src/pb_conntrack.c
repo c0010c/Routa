@@ -6,6 +6,7 @@
 // Stamp the verdict when evaluated, never when inserted: edits may occur in between.
 static volatile LONG64 g_udp_policy_version = 1;
 static __declspec(thread) LONG64 g_udp_verdict_version;
+static volatile LONG64 g_udp_next_session;
 
 LONG64 udp_policy_current(void) { return InterlockedCompareExchange64(&g_udp_policy_version, 0, 0); }
 void udp_policy_changed(void) { InterlockedIncrement64(&g_udp_policy_version); }
@@ -13,6 +14,44 @@ void udp_policy_snapshot(void) { g_udp_verdict_version = udp_policy_current(); }
 BOOL udp_connection_current(const CONNECTION_INFO *conn)
 {
     return !conn->is_udp || conn->udp_policy_version == udp_policy_current();
+}
+
+BOOL udp_flow_snapshot(UINT16 port, BOOL ipv6, UDP_FLOW *out)
+{
+    BOOL found = FALSE;
+    AcquireSRWLockShared(&lock);
+    for (CONNECTION_INFO *c = connection_hash_table[port % CONNECTION_HASH_SIZE]; c; c = c->next)
+    {
+        if (c->src_port != port || !c->is_udp || c->is_ipv6 != ipv6 || !udp_connection_current(c)) continue;
+        ZeroMemory(out, sizeof(*out));
+        out->id = c->udp_session_id; out->policy_version = c->udp_policy_version;
+        out->config_id = c->proxy_config_id; out->client_port = port;
+        out->dest_port = c->orig_dest_port; out->ipv6 = ipv6;
+        if (ipv6) { memcpy(out->client, c->src_ip6, 16); memcpy(out->dest, c->orig_dest_ip6, 16); }
+        else { memcpy(out->client, &c->src_ip, 4); memcpy(out->dest, &c->orig_dest_ip, 4); }
+        found = TRUE; break;
+    }
+    ReleaseSRWLockShared(&lock);
+    return found;
+}
+
+// Reply ownership is established by the association's flow ID, never by a remote endpoint.
+BOOL udp_flow_account(const UDP_FLOW *flow, UINT32 up, UINT32 down)
+{
+    BOOL found = FALSE;
+    AcquireSRWLockShared(&lock);
+    for (CONNECTION_INFO *c = connection_hash_table[flow->client_port % CONNECTION_HASH_SIZE]; c; c = c->next)
+    {
+        if (!c->is_udp || c->src_port != flow->client_port || c->is_ipv6 != flow->ipv6 ||
+            c->udp_session_id != flow->id || c->proxy_config_id != flow->config_id ||
+            c->udp_policy_version != flow->policy_version || !udp_connection_current(c)) continue;
+        if (up) InterlockedExchangeAdd64(&c->up_bytes, up);
+        if (down) InterlockedExchangeAdd64(&c->down_bytes, down);
+        if (up || down) InterlockedExchange64((volatile LONG64*)&c->last_activity, (LONG64)GetTickCount64());
+        found = TRUE; break;
+    }
+    ReleaseSRWLockShared(&lock);
+    return found;
 }
 
 // Reverse-index helpers. Keyed by the ORIGINAL destination (what the app connected to) -
@@ -69,6 +108,7 @@ void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip,
             existing->orig_dest_port = dest_port;
             existing->proxy_config_id = proxy_config_id;
             existing->udp_policy_version = g_udp_verdict_version;
+            existing->udp_session_id = (UINT64)InterlockedIncrement64(&g_udp_next_session);
             existing->is_tracked = TRUE;
             existing->fin_flags = 0;
             existing->last_activity = GetTickCount64();
@@ -94,6 +134,7 @@ void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip,
     conn->orig_dest_port = dest_port;
     conn->proxy_config_id = proxy_config_id;
     conn->udp_policy_version = g_udp_verdict_version;
+    conn->udp_session_id = (UINT64)InterlockedIncrement64(&g_udp_next_session);
     conn->is_tracked = TRUE;
     conn->is_ipv6 = FALSE;
     conn->last_activity = GetTickCount64();
@@ -122,6 +163,7 @@ void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], co
             existing->orig_dest_port = dest_port;
             existing->proxy_config_id = proxy_config_id;
             existing->udp_policy_version = g_udp_verdict_version;
+            existing->udp_session_id = (UINT64)InterlockedIncrement64(&g_udp_next_session);
             existing->is_tracked = TRUE;
             existing->fin_flags = 0;
             existing->last_activity = GetTickCount64();
@@ -150,6 +192,7 @@ void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], co
     conn->orig_dest_port = dest_port;
     conn->proxy_config_id = proxy_config_id;
     conn->udp_policy_version = g_udp_verdict_version;
+    conn->udp_session_id = (UINT64)InterlockedIncrement64(&g_udp_next_session);
     conn->is_tracked = TRUE;
     conn->last_activity = GetTickCount64();
     conn->next = connection_hash_table[hash];
@@ -248,6 +291,7 @@ BOOL udp_flow_validate(UINT16 src_port, BOOL is_ipv6, UINT32 dest_ip, const UINT
     else
     {
         rev_unlink(c);                       // dest changes: re-key the reverse index
+        c->udp_session_id = (UINT64)InterlockedIncrement64(&g_udp_next_session);
         c->orig_dest_port = dest_port;
         if (is_ipv6) memcpy(c->orig_dest_ip6, dest_ip6, 16); else c->orig_dest_ip = dest_ip;
         c->last_activity = now;

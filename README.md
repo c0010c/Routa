@@ -50,11 +50,14 @@
 
 - 被管程序的 DNS 查询由系统 DNS 客户端服务发出，不经过分流，会照常直连；
 - 规则按 exe 路径匹配，对本机所有 Windows 用户运行的该程序都生效；
+- 进程分流仅支持 IPv4 Listener 入口（如 `127.0.0.1`、`0.0.0.0`）；IPv6 入口明确报错，不自动换地址。经 IPv4 代理入口访问 IPv6 目标不受此限制；
 - 开机后到服务启动前有短暂空窗，“组件故障时：直连”的规则在这段时间可能直连（“阻断”的规则不受影响）；
-- “断开旧连接”只对 IPv4 TCP 连接有效；HTTP 类型的 Listener 不能作为目标；
+- “断开旧连接”只对 IPv4 TCP 连接有效；更换代理目标不算动作切换，不触发断开；HTTP 类型的 Listener 不能作为目标；
 - WinDivert 驱动可能被杀毒软件报毒或隔离，必要时把安装目录和 `%ProgramFiles%\Routa\ProcessRouting` 加入排除项。
 
 > 仅支持 Windows x64。本工具不提供 TUN 模式和系统代理。
+
+源码当前的进程分流协议为版本 3，主程序与分流组件需配套更新。失败配置在重新连接后仍等待手动重试，但会恢复管理会话，正常退出时照常执行退出策略。UDP 新会话的代理握手异步进行，不阻塞已有会话的收发。
 
 ### 从源码构建
 
@@ -137,11 +140,14 @@ SHA256 checksums are in `SHA256SUMS.txt` on the same release. The installers and
 
 - DNS lookups of a routed program are made by the Windows DNS Client service, so they bypass routing and go direct;
 - Rules match by exe path and apply to that program for every Windows user on the PC;
+- Process routing requires an IPv4 listener endpoint (such as `127.0.0.1` or `0.0.0.0`); IPv6 endpoints are rejected without switching addresses. IPv6 destinations through an IPv4 proxy endpoint are still supported;
 - After boot there is a short window before the service starts in which rules set to "direct on failure" may go direct (rules set to "block" are not affected);
 - "Disconnect existing connections" only works for IPv4 TCP; HTTP listeners cannot be targets;
 - The WinDivert driver may be flagged or quarantined by antivirus software; if so, exclude the install folder and `%ProgramFiles%\Routa\ProcessRouting`.
 
 > Windows x64 only. TUN mode and system proxy are out of scope.
+
+The current source uses process-routing protocol version 3; update the GUI and service together. Reconnecting restores session ownership while failed configurations still wait for a manual retry, so normal-exit policies remain effective. New UDP sessions negotiate with the proxy asynchronously while established sessions continue forwarding traffic.
 
 ### Build from source
 
