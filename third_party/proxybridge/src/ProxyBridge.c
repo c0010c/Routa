@@ -301,7 +301,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                                 char dstr[64];
                                 inet_ntop(AF_INET6, ipv6_header->DstAddr, dstr, sizeof(dstr));
                                 char pinfo[128];
-                                if (action6u==RULE_ACTION_PROXY){PROXY_CONFIG*pc=find_proxy_config(pcid6u);if(pc)snprintf(pinfo,sizeof(pinfo),"Proxy %s://%s:%d (UDP)",pc->type==PROXY_TYPE_HTTP?"HTTP":"SOCKS5",pc->host,pc->port);else snprintf(pinfo,sizeof(pinfo),"Proxy (UDP)");}
+                                if (action6u==RULE_ACTION_PROXY){PROXY_CONFIG pc;if(copy_proxy_config(pcid6u,&pc))snprintf(pinfo,sizeof(pinfo),"Proxy %s://%s:%d (UDP)",pc.type==PROXY_TYPE_HTTP?"HTTP":"SOCKS5",pc.host,pc.port);else snprintf(pinfo,sizeof(pinfo),"Proxy (UDP)");}
                                 else if(action6u==RULE_ACTION_DIRECT) snprintf(pinfo,sizeof(pinfo),"Direct (UDP)");
                                 else snprintf(pinfo,sizeof(pinfo),"Blocked (UDP)");
                                 g_connection_callback(extract_filename(pname),pid6u,dstr,dp,pinfo);
@@ -314,8 +314,8 @@ DWORD WINAPI packet_processor(LPVOID arg)
 
                     if (action6u == RULE_ACTION_PROXY)
                     {
-                        PROXY_CONFIG *pc6u = find_proxy_config(pcid6u);
-                        if (pc6u == NULL || pc6u->type != PROXY_TYPE_SOCKS5)
+                        PROXY_CONFIG pc6u;
+                        if (!copy_proxy_config(pcid6u, &pc6u) || pc6u.type != PROXY_TYPE_SOCKS5)
                         {
                             // HTTP proxy can't relay UDP - drop
                             continue;
@@ -503,8 +503,9 @@ DWORD WINAPI packet_processor(LPVOID arg)
                             char proxy_info[128];
                             if (action6 == RULE_ACTION_PROXY)
                             {
-                                PROXY_CONFIG *pcfg = find_proxy_config(proxy_config_id6);
-                                if (pcfg != NULL)
+                                PROXY_CONFIG snapshot;
+                                PROXY_CONFIG *pcfg = &snapshot;
+                                if (copy_proxy_config(proxy_config_id6, pcfg))
                                     snprintf(proxy_info, sizeof(proxy_info), "Proxy %s://%s:%d",
                                         pcfg->type == PROXY_TYPE_HTTP ? "HTTP" : "SOCKS5",
                                         pcfg->host, pcfg->port);
@@ -696,8 +697,9 @@ DWORD WINAPI packet_processor(LPVOID arg)
                                 char proxy_info[128];
                                 if (action == RULE_ACTION_PROXY)
                                 {
-                                    PROXY_CONFIG *pcfg = find_proxy_config(proxy_config_id);
-                                    if (pcfg != NULL)
+                                    PROXY_CONFIG snapshot;
+                                    PROXY_CONFIG *pcfg = &snapshot;
+                                    if (copy_proxy_config(proxy_config_id, pcfg))
                                         snprintf(proxy_info, sizeof(proxy_info), "Proxy %s://%s:%d (UDP)",
                                             pcfg->type == PROXY_TYPE_HTTP ? "HTTP" : "SOCKS5",
                                             pcfg->host, pcfg->port);
@@ -951,8 +953,9 @@ DWORD WINAPI packet_processor(LPVOID arg)
                             char proxy_info[128];
                             if (action == RULE_ACTION_PROXY)
                             {
-                                PROXY_CONFIG *pcfg = find_proxy_config(proxy_config_id);
-                                if (pcfg != NULL)
+                                PROXY_CONFIG snapshot;
+                                PROXY_CONFIG *pcfg = &snapshot;
+                                if (copy_proxy_config(proxy_config_id, pcfg))
                                     snprintf(proxy_info, sizeof(proxy_info), "Proxy %s://%s:%d",
                                         pcfg->type == PROXY_TYPE_HTTP ? "HTTP" : "SOCKS5",
                                         pcfg->host, pcfg->port);

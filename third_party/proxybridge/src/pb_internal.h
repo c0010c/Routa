@@ -112,6 +112,7 @@ typedef struct CONNECTION_INFO {
     ULONGLONG last_activity;
     UINT32 proxy_config_id;
     BOOL   is_ipv6;
+    LONG64 udp_policy_version; // version of the verdict, not of the later cache insertion
     UINT8  src_ip6[16];        // raw IPv6 src (only valid when is_ipv6)
     UINT8  orig_dest_ip6[16];  // raw IPv6 dest (only valid when is_ipv6)
     struct CONNECTION_INFO *next;      // chain in the forward table (keyed by src_port)
@@ -195,6 +196,7 @@ typedef BOOL (*token_match_func)(const char *token, const void *data);
 extern PROXY_CONFIG g_proxy_configs[MAX_PROXY_CONFIGS];
 extern int g_proxy_config_count;
 extern UINT32 g_next_config_id;
+extern SRWLOCK g_proxy_config_lock; // config mutations vs UDP relay / config snapshots
 extern CONNECTION_INFO *connection_hash_table[CONNECTION_HASH_SIZE];
 extern CONNECTION_INFO *connection_rev_table[CONNECTION_HASH_SIZE];
 extern LOGGED_CONNECTION *logged_connections;
@@ -326,6 +328,8 @@ void update_has_active_rules(void);
 
 // ---- pb_proxy.c ----
 PROXY_CONFIG* find_proxy_config(UINT32 config_id);
+BOOL copy_proxy_config(UINT32 config_id, PROXY_CONFIG *out);
+RuleAction checked_proxy_action(RuleAction action, UINT32 config_id, BOOL is_udp);
 BOOL any_socks5_config(void);
 BOOL is_proxy_config_referenced(UINT32 config_id);
 
@@ -355,6 +359,10 @@ int http_connect_v6(SOCKET s, const UINT8 dest_ip6[16], UINT16 dest_port, const 
 int http_connect(SOCKET s, UINT32 dest_ip, UINT16 dest_port, const PROXY_CONFIG *cfg);
 
 // ---- pb_conntrack.c ----
+LONG64 udp_policy_current(void);
+void udp_policy_changed(void);
+void udp_policy_snapshot(void);
+BOOL udp_connection_current(const CONNECTION_INFO *conn);
 UINT32 rev_hash_v4(UINT32 dest_ip, UINT16 dest_port);
 UINT32 rev_hash_v6(const UINT8 dest_ip6[16], UINT16 dest_port);
 void rev_insert(CONNECTION_INFO *c);
@@ -369,6 +377,7 @@ BOOL find_v6_udp_sender(const UINT8 orig_dest_ip6[16], UINT16 orig_dest_port, UI
 // that moves to another server, e.g. a voice call migrating) the entry is retargeted, and
 // (b) if the flow has been idle longer than UDP_REEVAL_IDLE_MS the source port may belong to a
 // different socket now, so the entry is dropped and the caller re-evaluates the rules.
+// Policy changes also evict old verdicts, including verdicts inserted after the change.
 // Returns TRUE if a valid entry exists (and was refreshed), FALSE if not tracked / evicted.
 #define UDP_REEVAL_IDLE_MS 20000
 BOOL udp_flow_validate(UINT16 src_port, BOOL is_ipv6, UINT32 dest_ip, const UINT8 dest_ip6[16], UINT16 dest_port);

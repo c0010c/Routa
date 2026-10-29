@@ -43,6 +43,7 @@ __declspec(thread) UINT32 g_tl_rule_id = 0;
 
 RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
 {
+    udp_policy_snapshot();
     g_tl_rule_localhost = FALSE; g_tl_rule_id = 0;
     DWORD pid;
     char process_name[MAX_PROCESS_NAME];
@@ -60,14 +61,7 @@ RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const
     UINT32 proxy_config_id = 0;
     RuleAction action = match_rule_v6(process_name, dest_ip6, dest_port, is_udp, &proxy_config_id);
 
-    if (action == RULE_ACTION_PROXY)
-    {
-        PROXY_CONFIG *cfg = find_proxy_config(proxy_config_id);
-        if (cfg == NULL || cfg->host[0] == '\0' || cfg->port == 0)
-            return RULE_ACTION_DIRECT;
-        if (is_udp && cfg->type == PROXY_TYPE_HTTP)
-            return RULE_ACTION_DIRECT;
-    }
+    action = checked_proxy_action(action, proxy_config_id, is_udp);
     if (out_proxy_config_id) *out_proxy_config_id = proxy_config_id;
     return action;
 }
@@ -705,6 +699,7 @@ RuleAction match_rule_inner(const char *process_name, UINT32 dest_ip, UINT16 des
 // DeleteRule/MoveRule from the GUI thread cannot free a node/string mid-match.
 RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id)
 {
+    udp_policy_snapshot();
     if (!g_proxy_enabled)                      // paused: no rule applies
     {
         g_tl_rule_localhost = FALSE; g_tl_rule_id = 0;
@@ -712,6 +707,7 @@ RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 dest_port
         return RULE_ACTION_DIRECT;
     }
     AcquireSRWLockShared(&g_rules_lock);
+    udp_policy_snapshot();
     RuleAction action = match_rule_inner(process_name, dest_ip, dest_port, is_udp, out_proxy_config_id);
     ReleaseSRWLockShared(&g_rules_lock);
     return action;
@@ -802,6 +798,7 @@ RuleAction match_rule_v6_inner(const char *process_name, const UINT8 dest_ip6[16
 
 RuleAction match_rule_v6(const char *process_name, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id)
 {
+    udp_policy_snapshot();
     if (!g_proxy_enabled)                      // paused: no rule applies
     {
         g_tl_rule_localhost = FALSE; g_tl_rule_id = 0;
@@ -809,6 +806,7 @@ RuleAction match_rule_v6(const char *process_name, const UINT8 dest_ip6[16], UIN
         return RULE_ACTION_DIRECT;
     }
     AcquireSRWLockShared(&g_rules_lock);
+    udp_policy_snapshot();
     RuleAction action = match_rule_v6_inner(process_name, dest_ip6, dest_port, is_udp, out_proxy_config_id);
     ReleaseSRWLockShared(&g_rules_lock);
     return action;
@@ -816,6 +814,7 @@ RuleAction match_rule_v6(const char *process_name, const UINT8 dest_ip6[16], UIN
 
 RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
 {
+    udp_policy_snapshot();
     g_tl_rule_localhost = FALSE; g_tl_rule_id = 0;
     DWORD pid;
     char process_name[MAX_PROCESS_NAME];
@@ -844,17 +843,7 @@ RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UI
     UINT32 proxy_config_id = 0;
     RuleAction action = match_rule(process_name, dest_ip, dest_port, is_udp, &proxy_config_id);
 
-    // Additional checks for proxy configuration
-    if (action == RULE_ACTION_PROXY)
-    {
-        PROXY_CONFIG *cfg = find_proxy_config(proxy_config_id);
-        if (cfg == NULL || cfg->host[0] == '\0' || cfg->port == 0)
-            return RULE_ACTION_DIRECT;  // No proxy configured
-
-        // UDP: HTTP proxy doesn't support UDP - use per-rule proxy config type
-        if (is_udp && cfg->type == PROXY_TYPE_HTTP)
-            return RULE_ACTION_DIRECT;
-    }
+    action = checked_proxy_action(action, proxy_config_id, is_udp);
 
     if (out_proxy_config_id != NULL)
         *out_proxy_config_id = proxy_config_id;
@@ -976,6 +965,7 @@ PROXYBRIDGE_API UINT32 ProxyBridge_AddRule(const char* process_name, const char*
         tail->next = rule;
     }
     UINT32 new_id = rule->rule_id;
+    udp_policy_changed();
     ReleaseSRWLockExclusive(&g_rules_lock);
 
     update_has_active_rules();
@@ -997,6 +987,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_EnableRule(UINT32 rule_id)
         if (rule->rule_id == rule_id)
         {
             rule->enabled = TRUE;
+            udp_policy_changed();
             found = TRUE;
             break;
         }
@@ -1025,6 +1016,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_DisableRule(UINT32 rule_id)
         if (rule->rule_id == rule_id)
         {
             rule->enabled = FALSE;
+            udp_policy_changed();
             found = TRUE;
             break;
         }
@@ -1069,6 +1061,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_DeleteRule(UINT32 rule_id)
                 free(rule->target_domains);
             free(rule);
             found = TRUE;
+            udp_policy_changed();
             break;
         }
         prev = rule;
@@ -1127,6 +1120,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_EditRule(UINT32 rule_id, const char* process_na
             rule->proxy_config_id = proxy_config_id;
             rule->localhost_via_proxy = localhost_via_proxy;
             found = TRUE;
+            udp_policy_changed();
             break;
         }
         rule = rule->next;
@@ -1241,6 +1235,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_MoveRuleToPosition(UINT32 rule_id, UINT32 new_p
         }
     }
 
+    udp_policy_changed();
     ReleaseSRWLockExclusive(&g_rules_lock);
 
     log_message("Moved rule ID %u to position %u", rule_id, new_position);

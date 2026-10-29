@@ -2,7 +2,9 @@
 
 // Proxy config: config store, lookup helpers, and management/test API.
 
-// Helper: find proxy config by ID; falls back to first config if not found
+SRWLOCK g_proxy_config_lock = SRWLOCK_INIT;
+
+// Only ID 0 explicitly requests the default. A missing concrete ID must fail closed.
 PROXY_CONFIG* find_proxy_config(UINT32 config_id)
 {
     for (int i = 0; i < g_proxy_config_count; i++)
@@ -10,10 +12,34 @@ PROXY_CONFIG* find_proxy_config(UINT32 config_id)
         if (g_proxy_configs[i].config_id == config_id)
             return &g_proxy_configs[i];
     }
-    // Fall back to first available config
-    if (g_proxy_config_count > 0)
+    if (config_id == 0 && g_proxy_config_count > 0)
         return &g_proxy_configs[0];
     return NULL;
+}
+
+// The returned pointer from find_proxy_config is only stable while holding the config lock.
+// TCP handshake workers take a value copy so a later deletion cannot switch their upstream.
+BOOL copy_proxy_config(UINT32 config_id, PROXY_CONFIG *out)
+{
+    // Never block WinDivert's packet thread behind an edit waiting for relay handshake I/O.
+    // A busy config store is temporarily unavailable, so callers drop/block instead.
+    if (!TryAcquireSRWLockShared(&g_proxy_config_lock)) return FALSE;
+    PROXY_CONFIG *cfg = find_proxy_config(config_id);
+    if (cfg != NULL) *out = *cfg;
+    ReleaseSRWLockShared(&g_proxy_config_lock);
+    return cfg != NULL;
+}
+
+// Shared by IPv4/IPv6 rule evaluation. Missing configs must not turn PROXY into DIRECT.
+RuleAction checked_proxy_action(RuleAction action, UINT32 config_id, BOOL is_udp)
+{
+    if (action != RULE_ACTION_PROXY) return action;
+    PROXY_CONFIG config;
+    if (!copy_proxy_config(config_id, &config) || config.host[0] == '\0' || config.port == 0)
+        return RULE_ACTION_BLOCK;
+    // Preserve upstream's HTTP/UDP behavior; Routa only assigns SOCKS5 to process rules.
+    if (is_udp && config.type == PROXY_TYPE_HTTP) return RULE_ACTION_DIRECT;
+    return RULE_ACTION_PROXY;
 }
 
 // Helper: check if any proxy config is SOCKS5 (needed to decide whether to start UDP relay)
@@ -52,12 +78,12 @@ BOOL is_proxy_config_referenced(UINT32 config_id)
     return referenced;
 }
 
-PROXYBRIDGE_API UINT32 ProxyBridge_AddProxyConfig(ProxyType type, const char* proxy_ip, UINT16 proxy_port, const char* username, const char* password, BOOL send_domain_to_proxy)
+static UINT32 add_proxy_config(ProxyType type, const char* proxy_ip, UINT16 proxy_port, const char* username, const char* password, BOOL send_domain_to_proxy, UINT32 resolved_ip)
 {
     if (proxy_ip == NULL || proxy_ip[0] == '\0' || proxy_port == 0)
         return 0;
 
-    if (resolve_hostname(proxy_ip) == 0)
+    if (resolved_ip == 0)
         return 0;
 
     if (g_proxy_config_count >= MAX_PROXY_CONFIGS)
@@ -71,7 +97,7 @@ PROXYBRIDGE_API UINT32 ProxyBridge_AddProxyConfig(ProxyType type, const char* pr
     cfg->port      = proxy_port;
     cfg->send_domain_to_proxy = send_domain_to_proxy;
     strncpy_s(cfg->host, sizeof(cfg->host), proxy_ip, _TRUNCATE);
-    cfg->resolved_ip = resolve_hostname(proxy_ip);
+    cfg->resolved_ip = resolved_ip;
     if (username != NULL) strncpy_s(cfg->username, sizeof(cfg->username), username, _TRUNCATE);
     if (password != NULL) strncpy_s(cfg->password, sizeof(cfg->password), password, _TRUNCATE);
     cfg->udp_tcp_ctrl  = INVALID_SOCKET;
@@ -79,16 +105,16 @@ PROXYBRIDGE_API UINT32 ProxyBridge_AddProxyConfig(ProxyType type, const char* pr
     cfg->udp_connected = FALSE;
 
     g_proxy_config_count++;
+    udp_policy_changed();
     log_message("Added proxy config ID %u: %s:%u (type %d)", cfg->config_id, cfg->host, cfg->port, cfg->type);
     return cfg->config_id;
 }
 
-PROXYBRIDGE_API BOOL ProxyBridge_EditProxyConfig(UINT32 config_id, ProxyType type, const char* proxy_ip, UINT16 proxy_port, const char* username, const char* password, BOOL send_domain_to_proxy)
+static BOOL edit_proxy_config(UINT32 config_id, ProxyType type, const char* proxy_ip, UINT16 proxy_port, const char* username, const char* password, BOOL send_domain_to_proxy, UINT32 resolved)
 {
     if (proxy_ip == NULL || proxy_ip[0] == '\0' || proxy_port == 0)
         return FALSE;
 
-    UINT32 resolved = resolve_hostname(proxy_ip);
     if (resolved == 0)
         return FALSE;
 
@@ -112,6 +138,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_EditProxyConfig(UINT32 config_id, ProxyType typ
             if (username != NULL) strncpy_s(cfg->username, sizeof(cfg->username), username, _TRUNCATE);
             if (password != NULL) strncpy_s(cfg->password, sizeof(cfg->password), password, _TRUNCATE);
 
+            udp_policy_changed();
             log_message("Edited proxy config ID %u: %s:%u (type %d)", config_id, cfg->host, cfg->port, cfg->type);
             return TRUE;
         }
@@ -119,7 +146,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_EditProxyConfig(UINT32 config_id, ProxyType typ
     return FALSE;
 }
 
-PROXYBRIDGE_API BOOL ProxyBridge_DeleteProxyConfig(UINT32 config_id)
+static BOOL delete_proxy_config(UINT32 config_id)
 {
     for (int i = 0; i < g_proxy_config_count; i++)
     {
@@ -135,6 +162,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_DeleteProxyConfig(UINT32 config_id)
                 memmove(&g_proxy_configs[i], &g_proxy_configs[i + 1], remaining * sizeof(PROXY_CONFIG));
 
             g_proxy_config_count--;
+            udp_policy_changed();
             log_message("Deleted proxy config ID %u", config_id);
             return TRUE;
         }
@@ -142,10 +170,39 @@ PROXYBRIDGE_API BOOL ProxyBridge_DeleteProxyConfig(UINT32 config_id)
     return FALSE;
 }
 
+PROXYBRIDGE_API UINT32 ProxyBridge_AddProxyConfig(ProxyType type, const char* host, UINT16 port, const char* user, const char* pass, BOOL domain)
+{
+    if (host == NULL || host[0] == '\0' || port == 0) return 0;
+    UINT32 resolved = resolve_hostname(host); // DNS must not hold a lock needed by the packet path
+    AcquireSRWLockExclusive(&g_proxy_config_lock);
+    UINT32 id = add_proxy_config(type, host, port, user, pass, domain, resolved);
+    ReleaseSRWLockExclusive(&g_proxy_config_lock);
+    return id;
+}
+
+PROXYBRIDGE_API BOOL ProxyBridge_EditProxyConfig(UINT32 id, ProxyType type, const char* host, UINT16 port, const char* user, const char* pass, BOOL domain)
+{
+    if (host == NULL || host[0] == '\0' || port == 0) return FALSE;
+    UINT32 resolved = resolve_hostname(host);
+    AcquireSRWLockExclusive(&g_proxy_config_lock);
+    BOOL ok = edit_proxy_config(id, type, host, port, user, pass, domain, resolved);
+    ReleaseSRWLockExclusive(&g_proxy_config_lock);
+    return ok;
+}
+
+PROXYBRIDGE_API BOOL ProxyBridge_DeleteProxyConfig(UINT32 id)
+{
+    AcquireSRWLockExclusive(&g_proxy_config_lock);
+    BOOL ok = delete_proxy_config(id);
+    ReleaseSRWLockExclusive(&g_proxy_config_lock);
+    return ok;
+}
+
 PROXYBRIDGE_API int ProxyBridge_TestProxyConfig(UINT32 config_id, const char* target_host, UINT16 target_port, char* result_buffer, size_t buffer_size)
 {
-    PROXY_CONFIG *cfg = find_proxy_config(config_id);
-    if (cfg == NULL)
+    PROXY_CONFIG snapshot;
+    PROXY_CONFIG *cfg = &snapshot;
+    if (!copy_proxy_config(config_id, cfg))
     {
         if (result_buffer && buffer_size > 0)
             strncpy_s(result_buffer, buffer_size, "No proxy config found", _TRUNCATE);
@@ -222,8 +279,9 @@ PROXYBRIDGE_API int ProxyBridge_TestProxyConfigEx(UINT32 config_id, const char* 
 {
     #define TLOG(...) do { if (cb) { char _l[300]; _snprintf_s(_l, sizeof(_l), _TRUNCATE, __VA_ARGS__); cb(_l, user); } } while (0)
 
-    PROXY_CONFIG *cfg = find_proxy_config(config_id);
-    if (cfg == NULL) { TLOG("[FAIL] No proxy config found"); return -1; }
+    PROXY_CONFIG snapshot;
+    PROXY_CONFIG *cfg = &snapshot;
+    if (!copy_proxy_config(config_id, cfg)) { TLOG("[FAIL] No proxy config found"); return -1; }
     if (target_host == NULL || target_host[0] == '\0') target_host = "www.google.com";
     if (target_port == 0) target_port = 80;
 

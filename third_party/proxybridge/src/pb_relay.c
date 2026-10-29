@@ -60,6 +60,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
 
     // Try initial UDP ASSOCIATE only for SOCKS5 configs that an enabled rule actually uses.
     // Skipping unreferenced configs avoids stalling the relay on dead/unused proxies.
+    AcquireSRWLockShared(&g_proxy_config_lock);
     for (int i = 0; i < g_proxy_config_count; i++)
     {
         if (g_proxy_configs[i].type == PROXY_TYPE_SOCKS5 &&
@@ -69,10 +70,13 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
         }
     }
 
+    ReleaseSRWLockShared(&g_proxy_config_lock);
     log_message("UDP relay listening on port %d", g_local_udp_relay_port);
 
     while (running)
     {
+        AcquireSRWLockShared(&g_proxy_config_lock);
+        LONG64 policy_version = udp_policy_current();
         // Set whenever an association's sockets are closed and recreated this iteration.
         // Windows reuses closed SOCKET handle values, so the current read_fds (from the
         // select() below) can falsely report the NEW socket ready -> recvfrom on it
@@ -98,7 +102,12 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
         }
 
         struct timeval timeout = {1, 0};
-        if (select(0, &read_fds, NULL, NULL, &timeout) <= 0)
+        // Do not block config edits during select. A changed version invalidates this fd_set.
+        ReleaseSRWLockShared(&g_proxy_config_lock);
+        int ready = select(0, &read_fds, NULL, NULL, &timeout);
+        AcquireSRWLockShared(&g_proxy_config_lock);
+        if (policy_version != udp_policy_current()) goto udp_iteration_done;
+        if (ready <= 0)
         {
             // Select timed out proactively reconnect any dropped UDP ASSOCIATEs so
             // the connection is ready before the next client packet arrives.
@@ -111,7 +120,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
                     is_proxy_config_referenced(rc->config_id))
                     establish_udp_associate_for_config(rc);
             }
-            continue;
+            goto udp_iteration_done;
         }
 
         // Check if any SOCKS5 proxy TCP control socket disconnected
@@ -140,7 +149,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
                 }
             }
         }
-        if (assoc_replaced) continue;   // rebuild read_fds before touching new sockets
+        if (assoc_replaced) goto udp_iteration_done;   // rebuild read_fds before touching new sockets
 
         // Check if packet is from local application
         if (FD_ISSET(udp_relay_socket, &read_fds))
@@ -154,13 +163,13 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
                 // take the error  unreachable so
                 // https://github.com/InterceptSuite/ProxyBridge/issues/89
                 // select() does not immediately return readable again, causing a spin.
-                continue;
+                goto udp_iteration_done;
             }
 
             if (recv_len > 0)
             {
                 // Buffer overflow protection
-                if (recv_len > MAXBUF - 10) continue;
+                if (recv_len > MAXBUF - 10) goto udp_iteration_done;
 
                 UINT16 from_port = ntohs(from_addr.sin_port);
                 UINT32 dest_ip;
@@ -174,7 +183,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
                     if (cfg == NULL || cfg->type != PROXY_TYPE_SOCKS5)
                     {
                         log_message("[UDP RELAY] No SOCKS5 config for port %d", from_port);
-                        continue;
+                        goto udp_iteration_done;
                     }
 
                     // UDP ASSOCIATE is established (reconnect if dropped).
@@ -185,7 +194,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
                         if (!establish_udp_associate_for_config(cfg))
                         {
                             log_message("[UDP RELAY] UDP ASSOCIATE unavailable for %s:%d - dropping packet", cfg->host, cfg->port);
-                            continue;
+                            goto udp_iteration_done;
                         }
                         assoc_replaced = 1;   // new sockets created - read_fds is stale
                     }
@@ -223,7 +232,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
                 }
             }
         }
-        if (assoc_replaced) continue;   // rebuild read_fds before inspecting new sockets
+        if (assoc_replaced) goto udp_iteration_done;   // rebuild read_fds before inspecting new sockets
 
         // Check if packet is from any SOCKS5 proxy's UDP socket
         for (int i = 0; i < g_proxy_config_count; i++)
@@ -283,7 +292,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
                     for (CONNECTION_INFO *conn = connection_rev_table[rev_hash_v4(src_ip, src_port)];
                          conn != NULL; conn = conn->rev_next)
                     {
-                        if (conn->is_udp && !conn->is_ipv6 && conn->orig_dest_ip == src_ip && conn->orig_dest_port == src_port)
+                        if (conn->is_udp && udp_connection_current(conn) && !conn->is_ipv6 && conn->orig_dest_ip == src_ip && conn->orig_dest_port == src_port)
                         {
                             if (!found || conn->last_activity > best_activity)
                             {
@@ -381,9 +390,12 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
                 }
             }
         }
+udp_iteration_done:
+        ReleaseSRWLockShared(&g_proxy_config_lock);
     }
 
     // Clean up all proxy UDP sockets
+    AcquireSRWLockShared(&g_proxy_config_lock);
     for (int i = 0; i < g_proxy_config_count; i++)
     {
         PROXY_CONFIG *cfg = &g_proxy_configs[i];
@@ -391,6 +403,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
         if (cfg->udp_send_sock != INVALID_SOCKET) { closesocket(cfg->udp_send_sock); cfg->udp_send_sock = INVALID_SOCKET; }
         cfg->udp_connected = FALSE;
     }
+    ReleaseSRWLockShared(&g_proxy_config_lock);
     closesocket(udp_relay_socket);
     udp_relay_socket = INVALID_SOCKET;
     if (udp_relay_socket6 != INVALID_SOCKET) { closesocket(udp_relay_socket6); udp_relay_socket6 = INVALID_SOCKET; }
@@ -613,8 +626,9 @@ static DWORD WINAPI connection_handler_impl(LPVOID arg)
     free(config);
 
     // Look up the proxy config for this connection
-    PROXY_CONFIG *proxy = find_proxy_config(proxy_config_id);
-    if (proxy == NULL || proxy->host[0] == '\0' || proxy->port == 0)
+    PROXY_CONFIG proxy_snapshot;
+    PROXY_CONFIG *proxy = &proxy_snapshot;
+    if (!copy_proxy_config(proxy_config_id, proxy) || proxy->host[0] == '\0' || proxy->port == 0)
     {
         log_message("[RELAY] No proxy config (id=%u) - dropping connection", proxy_config_id);
         closesocket(client_sock);

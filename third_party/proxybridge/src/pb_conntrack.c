@@ -2,6 +2,19 @@
 
 // Connection tracking: forward table, reverse index, logged connections.
 
+// Mutations only bump an atomic version; the capture thread owns the DIRECT cache.
+// Stamp the verdict when evaluated, never when inserted: edits may occur in between.
+static volatile LONG64 g_udp_policy_version = 1;
+static __declspec(thread) LONG64 g_udp_verdict_version;
+
+LONG64 udp_policy_current(void) { return InterlockedCompareExchange64(&g_udp_policy_version, 0, 0); }
+void udp_policy_changed(void) { InterlockedIncrement64(&g_udp_policy_version); }
+void udp_policy_snapshot(void) { g_udp_verdict_version = udp_policy_current(); }
+BOOL udp_connection_current(const CONNECTION_INFO *conn)
+{
+    return !conn->is_udp || conn->udp_policy_version == udp_policy_current();
+}
+
 // Reverse-index helpers. Keyed by the ORIGINAL destination (what the app connected to) -
 // an inbound relay reply carries that as its source. All callers hold `lock` exclusively.
 UINT32 rev_hash_v4(UINT32 dest_ip, UINT16 dest_port)
@@ -55,6 +68,7 @@ void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip,
             existing->orig_dest_ip = dest_ip;
             existing->orig_dest_port = dest_port;
             existing->proxy_config_id = proxy_config_id;
+            existing->udp_policy_version = g_udp_verdict_version;
             existing->is_tracked = TRUE;
             existing->fin_flags = 0;
             existing->last_activity = GetTickCount64();
@@ -79,6 +93,7 @@ void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip,
     conn->orig_dest_ip = dest_ip;
     conn->orig_dest_port = dest_port;
     conn->proxy_config_id = proxy_config_id;
+    conn->udp_policy_version = g_udp_verdict_version;
     conn->is_tracked = TRUE;
     conn->is_ipv6 = FALSE;
     conn->last_activity = GetTickCount64();
@@ -106,6 +121,7 @@ void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], co
             memcpy(existing->orig_dest_ip6, dest_ip6, 16);
             existing->orig_dest_port = dest_port;
             existing->proxy_config_id = proxy_config_id;
+            existing->udp_policy_version = g_udp_verdict_version;
             existing->is_tracked = TRUE;
             existing->fin_flags = 0;
             existing->last_activity = GetTickCount64();
@@ -133,6 +149,7 @@ void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], co
     memcpy(conn->orig_dest_ip6, dest_ip6, 16);
     conn->orig_dest_port = dest_port;
     conn->proxy_config_id = proxy_config_id;
+    conn->udp_policy_version = g_udp_verdict_version;
     conn->is_tracked = TRUE;
     conn->last_activity = GetTickCount64();
     conn->next = connection_hash_table[hash];
@@ -153,7 +170,7 @@ BOOL get_connection_full_v6_x(UINT16 src_port, BOOL is_udp, UINT8 dest_ip6[16], 
     int hash = src_port % CONNECTION_HASH_SIZE;
     CONNECTION_INFO *conn = connection_hash_table[hash];
     while (conn != NULL) {
-        if (conn->src_port == src_port && conn->is_udp == is_udp && conn->is_ipv6) {
+        if (conn->src_port == src_port && conn->is_udp == is_udp && conn->is_ipv6 && udp_connection_current(conn)) {
             memcpy(dest_ip6, conn->orig_dest_ip6, 16);
             *dest_port = conn->orig_dest_port;
             if (proxy_config_id != NULL) *proxy_config_id = conn->proxy_config_id;
@@ -180,7 +197,7 @@ BOOL find_v6_udp_sender(const UINT8 orig_dest_ip6[16], UINT16 orig_dest_port, UI
     // O(1): only the reverse bucket for this (dest ip6, dest port).
     for (CONNECTION_INFO *conn = connection_rev_table[rev_hash_v6(orig_dest_ip6, orig_dest_port)];
          conn != NULL; conn = conn->rev_next) {
-        if (conn->is_udp && conn->is_ipv6 && conn->orig_dest_port == orig_dest_port &&
+        if (conn->is_udp && udp_connection_current(conn) && conn->is_ipv6 && conn->orig_dest_port == orig_dest_port &&
             memcmp(conn->orig_dest_ip6, orig_dest_ip6, 16) == 0) {
             if (!found || conn->last_activity > best) {
                 memcpy(src_ip6, conn->src_ip6, 16);
@@ -209,7 +226,8 @@ BOOL udp_flow_validate(UINT16 src_port, BOOL is_ipv6, UINT32 dest_ip, const UINT
     if (c == NULL) { ReleaseSRWLockShared(&lock); return FALSE; }
     BOOL same = (c->orig_dest_port == dest_port) &&
                 (is_ipv6 ? memcmp(c->orig_dest_ip6, dest_ip6, 16) == 0 : c->orig_dest_ip == dest_ip);
-    if (c->last_activity < now && now - c->last_activity > UDP_REEVAL_IDLE_MS) need_write = TRUE;   // evict (guard: another thread may have stamped a later tick)
+    if (!udp_connection_current(c)) need_write = TRUE;
+    else if (c->last_activity < now && now - c->last_activity > UDP_REEVAL_IDLE_MS) need_write = TRUE;   // evict (guard: another thread may have stamped a later tick)
     else if (same) { InterlockedExchange64((LONGLONG volatile*)&c->last_activity, (LONGLONG)now); valid = TRUE; }
     else need_write = TRUE;                                                   // retarget
     ReleaseSRWLockShared(&lock);
@@ -220,7 +238,7 @@ BOOL udp_flow_validate(UINT16 src_port, BOOL is_ipv6, UINT32 dest_ip, const UINT
     while (*pp != NULL && !((*pp)->src_port == src_port && (*pp)->is_udp && (*pp)->is_ipv6 == is_ipv6)) pp = &(*pp)->next;
     c = *pp;
     if (c == NULL) { ReleaseSRWLockExclusive(&lock); return FALSE; }
-    if (c->last_activity < now && now - c->last_activity > UDP_REEVAL_IDLE_MS)
+    if (!udp_connection_current(c) || (c->last_activity < now && now - c->last_activity > UDP_REEVAL_IDLE_MS))
     {
         *pp = c->next;
         rev_unlink(c);
@@ -241,7 +259,7 @@ BOOL udp_flow_validate(UINT16 src_port, BOOL is_ipv6, UINT32 dest_ip, const UINT
 }
 
 #define UDP_DIRECT_SLOTS 4096
-typedef struct { UINT8 dst[16]; UINT16 sp, dp; BOOL v6; DWORD until; } UDP_DIRECT_ENTRY;
+typedef struct { UINT8 dst[16]; UINT16 sp, dp; BOOL v6; DWORD until; LONG64 policy_version; } UDP_DIRECT_ENTRY;
 static UDP_DIRECT_ENTRY g_udp_direct[UDP_DIRECT_SLOTS];
 
 static UDP_DIRECT_ENTRY *udp_direct_slot(BOOL v6, const void *dst, UINT16 sp, UINT16 dp, UINT8 key[16])
@@ -257,7 +275,7 @@ BOOL udp_direct_cached(BOOL is_ipv6, const void *dst, UINT16 src_port, UINT16 ds
 {
     UINT8 key[16];
     UDP_DIRECT_ENTRY *e = udp_direct_slot(is_ipv6, dst, src_port, dst_port, key);
-    return e->until != 0 && e->sp == src_port && e->dp == dst_port && e->v6 == is_ipv6 &&
+    return e->policy_version == udp_policy_current() && e->until != 0 && e->sp == src_port && e->dp == dst_port && e->v6 == is_ipv6 &&
            memcmp(e->dst, key, 16) == 0 && (int)(e->until - GetTickCount()) > 0;
 }
 
@@ -266,6 +284,7 @@ void udp_direct_remember(BOOL is_ipv6, const void *dst, UINT16 src_port, UINT16 
     UINT8 key[16];
     UDP_DIRECT_ENTRY *e = udp_direct_slot(is_ipv6, dst, src_port, dst_port, key);
     memcpy(e->dst, key, 16); e->sp = src_port; e->dp = dst_port; e->v6 = is_ipv6;
+    e->policy_version = g_udp_verdict_version;
     DWORD u = GetTickCount() + UDP_DIRECT_TTL_MS;
     e->until = u ? u : 1;
 }
@@ -284,7 +303,7 @@ BOOL is_connection_tracked(UINT16 src_port, BOOL is_udp, BOOL is_ipv6)
     CONNECTION_INFO *conn = connection_hash_table[hash];
 
     while (conn != NULL) {
-        if (conn->src_port == src_port && conn->is_udp == is_udp && conn->is_ipv6 == is_ipv6 && conn->is_tracked) {
+        if (conn->src_port == src_port && conn->is_udp == is_udp && conn->is_ipv6 == is_ipv6 && conn->is_tracked && udp_connection_current(conn)) {
             tracked = TRUE;
             break;
         }
@@ -305,7 +324,7 @@ BOOL get_connection(UINT16 src_port, BOOL is_udp, UINT32 *dest_ip, UINT16 *dest_
 
     while (conn != NULL)
     {
-        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6)
+        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6 && udp_connection_current(conn))
         {
             *dest_ip = conn->orig_dest_ip;
             *dest_port = conn->orig_dest_port;
@@ -336,7 +355,7 @@ BOOL get_connection_full_x(UINT16 src_port, BOOL is_udp, UINT32 *dest_ip, UINT16
 
     while (conn != NULL)
     {
-        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6)
+        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6 && udp_connection_current(conn))
         {
             *dest_ip = conn->orig_dest_ip;
             *dest_port = conn->orig_dest_port;
@@ -432,7 +451,7 @@ UINT32 udp_flows_snapshot(PB_FLOW *out, UINT32 max)
     {
         for (CONNECTION_INFO *c = connection_hash_table[i]; c != NULL && n < max; c = c->next)
         {
-            if (!c->is_udp || !c->is_tracked) continue;
+            if (!c->is_udp || !c->is_tracked || !udp_connection_current(c)) continue;
             ULONGLONG last = c->last_activity;
             if (last <= now && now - last > UDP_FLOW_LIVE_MS) continue;
             PB_FLOW *f = &out[n++];
@@ -466,7 +485,7 @@ void cleanup_stale_connections(void)
 
         while (*conn_ptr != NULL)
         {
-            if (now - (*conn_ptr)->last_activity > CONNECTION_STALE_TIMEOUT_MS)
+            if (!udp_connection_current(*conn_ptr) || now - (*conn_ptr)->last_activity > CONNECTION_STALE_TIMEOUT_MS)
             {
                 CONNECTION_INFO *to_free = *conn_ptr;
                 *conn_ptr = (*conn_ptr)->next;
