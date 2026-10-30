@@ -874,11 +874,35 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn unique_pipe_name() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        format!(r"\\.\pipe\RoutaProcSvc-test-{}-{nanos}", std::process::id())
+        // Windows 的系统时间可在并发调用中重复，不能单独用作实例标识。
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        format!(r"\\.\pipe\RoutaProcSvc-test-{}-{nanos}-{id}", std::process::id())
+    }
+
+    #[test]
+    fn pipe_names_are_unique_across_threads() {
+        let start = Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    (0..1024).map(|_| unique_pipe_name()).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let names: Vec<_> = workers.into_iter().flat_map(|w| w.join().unwrap()).collect();
+        assert_eq!(
+            names.iter().collect::<HashSet<_>>().len(),
+            names.len(),
+            "并发测试不能复用命名管道名"
+        );
     }
 
     #[test]
