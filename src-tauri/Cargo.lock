@@ -3123,7 +3123,7 @@ dependencies = [
 
 [[package]]
 name = "routa"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3155,7 +3155,7 @@ dependencies = [
 
 [[package]]
 name = "routa-procsvc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libloading 0.8.9",
  "routa-procsvc-proto",
@@ -3168,7 +3168,7 @@ dependencies = [
 
 [[package]]
 name = "routa-procsvc-proto"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
