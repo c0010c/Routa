@@ -1,187 +1,147 @@
 # Routa
 
-[中文](#中文) | [English](#english)
+English | [简体中文](README.zh-CN.md)
 
----
+A Windows desktop proxy manager built on [mihomo](https://github.com/MetaCubeX/mihomo). Choose a node and connect in Simple mode, or manage multiple proxy ports, routing rules, and network interfaces in Full mode—without writing YAML.
 
-## 中文
+> This README describes the current source. Published release builds may have fewer features. Windows x64 only; the application UI is currently in Simplified Chinese.
 
-一个基于 [mihomo](https://github.com/MetaCubeX/mihomo) 内核的 Windows 桌面工具，围绕 **“入口端口 → 出口（节点 / 策略组 / 直连 + 网卡）”** 的映射来管理代理，全程不用手写 YAML。
+## Features
 
-适合这样的场景：
+- **Two interface modes**: Simple mode focuses on node selection and connecting; Full mode provides an overview, proxy management, process routing, subscriptions, and nodes. Switch modes in Settings while keeping existing configuration and connections.
+- **Three ways to connect**: Windows system proxy, selected applications through process routing, or TUN through a virtual adapter. TUN requires running Routa as administrator.
+- **Independent proxy ports**: create `mixed` (HTTP + SOCKS5), `http`, or `socks` listeners. Configure each port's node, proxy group or direct outbound, network interface, authentication, and LAN access together.
+- **Network interface isolation**: when a configured outbound becomes unavailable or its bound adapter disconnects, the affected listener is disabled rather than silently switching to direct or the default adapter. It resumes when the adapter is available again.
+- **Per-port routing rules**: match an exact domain, domain suffix, or IPv4 CIDR in order, then proxy, connect directly, or reject. Set the action for unmatched traffic and check sample destinations in the editor.
+- **Subscriptions and nodes**: import Clash/mihomo YAML or base64 share-link subscriptions, schedule updates, and select a fallback proxy for subscription downloads. Create HTTP/SOCKS5 nodes with a form or import other mihomo node types from YAML, including batch imports. Search nodes, sort by latency, and organize custom groups.
+- **Proxy groups and Tailscale**: use `url-test`, `fallback`, `load-balance`, or `select` groups; manage Tailscale nodes, login state, and exit settings.
+- **Process routing**: route programs by full executable path to Mixed/Socks listeners, inspect per-process connections and traffic, and choose direct or block on component failure. A separate policy controls behavior when Routa exits normally.
+- **Monitoring and diagnostics**: view core and capture status separately, live and total traffic, active connections and their routes, core logs, port conflicts, and component status.
+- **Desktop integration**: bundled mihomo core, configuration hot reload, automatic core restart after a crash, Windows startup, optional auto-connect, and a choice of minimizing to the tray or exiting when closing the window.
 
-- 本机和局域网设备通过不同端口接入，每个端口走不同的出口；
-- 电脑有多张网卡，不同端口的流量要从指定网卡出去，并且严格隔离。
+## Install
 
-### 功能
+Download a Windows x64 build from [Releases](https://github.com/c0010c/Routa/releases). Available package formats are:
 
-- **订阅**：导入 Clash/mihomo YAML 订阅或 base64 分享链接订阅，每个订阅可单独设置自动更新间隔。
-- **手动节点**：`socks5`、`http` 用表单创建，其他类型可粘贴 mihomo 节点 YAML 创建；支持自建节点组。
-- **出口**：单个节点、策略组（`url-test` / `fallback` / `load-balance` / `select`，成员可以是节点或整个组）或直连，都可以绑定指定网卡。
-- **Listener**：多个 `mixed`（HTTP + SOCKS5）、`http` 或 `socks` 端口，可设置用户名/密码，可开放给局域网。
-- **概览（组装页）**：在一张表里给每个 Listener 选出口、新建出口、切换 `select` 组节点，查看实时/累计流量和延迟。
-- **Tailscale**：管理 `type: tailscale` 节点，包括登录状态与参数。
-- **进程分流**：按 exe 完整路径把指定程序的全部流量交给某个 Mixed / Socks Listener，改规则即时生效；每条规则可设置组件故障时直连或阻断（阻断由 Windows 防火墙平台 WFP 保证，组件崩溃、服务停止、重启电脑都不漏到直连），并显示每个进程的实时连接和流量。由一个 Windows 服务（`RoutaProcSvc`，基于 [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) 与 [WinDivert](https://github.com/basil00/WinDivert)）完成，注册时需要一次管理员权限。
-- **不泄露**：节点失效或网卡断开时，对应 Listener 直接停用，不会悄悄改走直连或默认网卡；网卡恢复后自动恢复。
-- **进程托管**：内置 mihomo 内核，配置变更后热重载，内核意外退出会自动重启；托盘常驻，可开机自启。
+| Package | Usage |
+| --- | --- |
+| `routa_<version>_x64-setup.exe` | NSIS installer |
+| `routa_<version>_x64_en-US.msi` | MSI installer |
+| `routa_<version>_x64_portable.zip` | Extract and run `routa.exe` |
 
-### 安装
+Verify downloads against `SHA256SUMS.txt` on the corresponding release. Builds bundle mihomo; the source pins its version in [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION). The current source uses the bundled core rather than a custom core path.
 
-从 [Releases](https://github.com/c0010c/Routa/releases) 下载最新版本（当前为 [v0.2.0](https://github.com/c0010c/Routa/releases/tag/v0.2.0)），Windows x64 提供以下三种格式，任选其一：
+The [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/) is required.
 
-- [routa_0.2.0_x64-setup.exe](https://github.com/c0010c/Routa/releases/download/v0.2.0/routa_0.2.0_x64-setup.exe)（NSIS 安装程序）
-- [routa_0.2.0_x64_en-US.msi](https://github.com/c0010c/Routa/releases/download/v0.2.0/routa_0.2.0_x64_en-US.msi)（MSI 安装包）
-- [routa_0.2.0_x64_portable.zip](https://github.com/c0010c/Routa/releases/download/v0.2.0/routa_0.2.0_x64_portable.zip)（便携版，解压后运行 `routa.exe`）
+## Quick start
 
-各文件的 SHA256 见同一 Release 中的 `SHA256SUMS.txt`。安装包和便携版都已内置 mihomo 内核（版本见 [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)），也可以在设置页改用自己的内核。
+### Simple mode
 
-**安装版**的数据保存在 `%APPDATA%\dev.routa\`（`state.json` 为配置，`mihomo\` 为内核工作目录和日志）。
+1. On first launch, choose **简洁版** (Simple).
+2. Import a subscription or add a node manually, then select a node.
+3. Choose **系统代理** (System proxy), **指定应用** (Selected apps), or **TUN** and turn the connection on. Selected apps requires installing the process-routing component and adding applications; TUN requires restarting Routa as administrator.
+4. Open Settings to change interface mode, auto-connect, startup behavior, or the close-window action.
 
-**便携版**：exe 旁边有 `portable` 文件时，所有数据（包括 WebView 缓存）都保存在 exe 旁边的 `data\` 文件夹中；删除该标记文件并重启即改为保存到 `%APPDATA%\dev.routa\`。切换模式不会自动搬移数据。注意：
+System proxy affects applications that honor Windows proxy settings. For applications that bypass those settings, use selected-app routing or TUN as appropriate.
 
-- 程序目录必须可写（不要放在 `Program Files` 下），否则启动时会报错；
-- 开机自启会记录当前 exe 路径，移动文件夹后需在设置页重新开启；
-- 需要系统自带的 WebView2 运行时（Windows 10/11 一般已内置）；
-- 便携版与安装版不能同时运行。
+### Full mode
 
-**从 v0.1.0 升级**：v0.1.0 仍使用更名前的 `mihomo-mapper` 名称，数据保存在 `%APPDATA%\dev.mihomo-mapper\`。v0.2.0 **不会自动迁移**该目录，升级后不会沿用旧配置；旧版本可在 [v0.1.0 Release](https://github.com/c0010c/Routa/releases/tag/v0.1.0) 下载。
+1. Add subscriptions or nodes from **订阅** (Subscriptions) or **节点** (Nodes).
+2. Create a proxy on **代理** (Proxies): set its port, outbound node/group/direct connection, and optionally routing rules, network interface, authentication, or LAN access.
+3. Point a client at that port, or select a default proxy on **概览 → 运行概况** (Overview → Runtime summary) and enable system proxy or TUN. System proxy requires a Mixed listener bound to local IPv4.
+4. Use **进程分流** (Process routing) to assign individual applications to proxies. Inspect **概览 → 连接 / 日志** (Overview → Connections / Logs) when troubleshooting.
 
-**进程分流组件**：NSIS 安装版在安装末尾弹一次 UAC 注册服务，卸载时同样弹一次 UAC 删除服务和防护规则（拒绝 UAC 不影响安装，之后可在“进程分流”页面启用）；MSI 版和便携版在页面上首次点“启用进程分流”时弹 UAC。服务文件安装在 `%ProgramFiles%\Routa\ProcessRouting`。**卸载 MSI 版前请先在页面上点“卸载组件”**，否则服务和防护规则会留在系统里。NSIS 版卸载时若拒绝了 UAC 或删除失败，卸载程序会弹窗提示并可重试。服务和防护规则留在系统里时（被设为“阻断”的程序会继续无法联网），以管理员身份运行 `"%ProgramFiles%\Routa\ProcessRouting\routa-procsvc.exe" --uninstall` 即可删除它们；该命令删不掉正在运行的 `routa-procsvc.exe` 本身，之后手动删除 `ProcessRouting` 文件夹即可。进程分流的限制：
+Stopping system proxy or TUN leaves the core and proxy ports available; manually configured clients and independently enabled process-routing rules may still use them.
 
-- 被管程序的 DNS 查询由系统 DNS 客户端服务发出，不经过分流，会照常直连；
-- 规则按 exe 路径匹配，对本机所有 Windows 用户运行的该程序都生效；
-- 进程分流仅支持 IPv4 Listener 入口（如 `127.0.0.1`、`0.0.0.0`）；IPv6 入口明确报错，不自动换地址。经 IPv4 代理入口访问 IPv6 目标不受此限制；
-- 开机后到服务启动前有短暂空窗，“组件故障时：直连”的规则在这段时间可能直连（“阻断”的规则不受影响）；
-- “断开旧连接”只对 IPv4 TCP 连接有效；更换代理目标不算动作切换，不触发断开；HTTP 类型的 Listener 不能作为目标；
-- WinDivert 驱动可能被杀毒软件报毒或隔离，必要时把安装目录和 `%ProgramFiles%\Routa\ProcessRouting` 加入排除项。
+## Data and upgrades
 
-> 仅支持 Windows x64。本工具不提供 TUN 模式和系统代理。
+Installed builds store data in `%APPDATA%\dev.routa\`:
 
-源码当前的进程分流协议为版本 3，主程序与分流组件需配套更新。失败配置在重新连接后仍等待手动重试，但会恢复管理会话，正常退出时照常执行退出策略。UDP 新会话的代理握手异步进行，不阻塞已有会话的收发。
+| File or directory | Contents |
+| --- | --- |
+| `state.json` | Proxy, node, subscription, and process-routing configuration |
+| `ui-preferences.json` | Interface mode, default proxy, and connection preferences |
+| `mihomo\` | Core working directory and `mihomo.log` |
 
-### 从源码构建
+When a `portable` file sits next to `routa.exe`, all application data, including the WebView cache, is stored in the adjacent `data\` directory. Remove the marker and restart to use `%APPDATA%\dev.routa\` instead. Switching storage modes does not move data automatically.
 
-构建使用的内核版本见 [`src-tauri/binaries/MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)。
+- Keep portable builds in a writable directory, outside `Program Files`.
+- After moving a portable folder, turn Windows startup off and on again to update its recorded executable path.
+- Installed and portable builds cannot run simultaneously.
+- Existing Routa configurations open in Full mode when no interface preference has been saved. The current source migrates legacy shared outbounds into per-proxy configurations and saves the original configuration as `state.before-v43.json` before migration.
+- Version 0.1.0 used the name `mihomo-mapper` and `%APPDATA%\dev.mihomo-mapper\`. That directory is not imported automatically into Routa.
 
-需要 Node.js、[pnpm](https://pnpm.io/)、Rust 工具链，以及 Tauri 2 的 [Windows 依赖](https://tauri.app/start/prerequisites/)（WebView2、MSVC 生成工具）。
+## Process-routing component
 
-```bash
-pnpm install
-pnpm fetch-mihomo     # 下载并校验固定版本的 mihomo 内核到 src-tauri/binaries
-pnpm fetch-windivert  # 下载 WinDivert 到 src-tauri/binaries/procsvc
-pnpm build-proxybridge  # 编译 ProxyBridgeCore.dll（需要 MSVC）
-pnpm build-procsvc    # 编译进程分流服务 routa-procsvc（pnpm tauri build 会自动执行）
-pnpm tauri dev        # 开发模式运行
-pnpm tauri build      # 生成 NSIS / MSI 安装包，位于 src-tauri/target/release/bundle
-pnpm pack:portable    # 生成便携版目录及 zip，位于 src-tauri/target/release/bundle/portable-<时间戳>
+Process routing runs as the `RoutaProcSvc` Windows service, built on [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) and [WinDivert](https://github.com/basil00/WinDivert). Its files are installed in `%ProgramFiles%\Routa\ProcessRouting`.
+
+The NSIS installer requests UAC at the end of setup to register the service. Declining does not fail installation; enable the component later in the app. MSI and portable builds request UAC when enabling the component from the app.
+
+**Before uninstalling an MSI or removing a portable build, uninstall the component from the app.** NSIS uninstallation requests UAC to remove the service and filter rules, with a retry prompt if removal fails. If the component remains installed, programs configured to block may stay offline. To remove the service and rules manually, run this in an administrator PowerShell:
+
+```powershell
+& "$env:ProgramFiles\Routa\ProcessRouting\routa-procsvc.exe" --uninstall
 ```
 
-`pnpm tauri build` 本地生成 `routa_<版本>_x64-setup.exe` 和 `routa_<版本>_x64_en-US.msi`。`pnpm pack:portable` 先运行 Tauri 生产构建，重新编译分流服务和前端，再将 `routa.exe`、`mihomo.exe`、`routa-procsvc.exe`、`procsvc\` 目录、`portable` 标记文件和 `LICENSE` 打包为 `routa_<版本>_x64_portable.zip`，解压后运行 `routa.exe`。
+The command cannot delete its own running executable; remove the remaining `ProcessRouting` folder afterwards.
 
-便携包附带 `build-info.json`，记录 GUI、服务、前端的构建摘要和文件 SHA-256。`--skip-build` 仍会校验源码、服务协议和产物一致性；直接用 `cargo build --release --features custom-protocol` 构建前，需要先运行 `node scripts/build-procsvc.mjs` 和 `node scripts/build-frontend.mjs`。可用 `--out-dir <目录>` 指定便携包位置；目标下已有同名程序目录或 ZIP 时会拒绝覆盖，保护现有 `data`。
+Limitations and behavior:
 
-测试：
+- DNS requests made by the Windows DNS Client service bypass process routing. Process routing alone does not proxy those DNS requests.
+- Executable-path rules apply to that program for every Windows user on the computer.
+- Targets must be Mixed/Socks listeners with IPv4 endpoints, such as `127.0.0.1` or `0.0.0.0`. HTTP-only and IPv6 listener endpoints are unsupported; IPv6 destinations through an IPv4 proxy endpoint are still supported.
+- Block policies use Windows Filtering Platform (WFP) rules that persist across component crashes, service stops, and restarts. Rules configured to go direct on failure may connect directly before the service starts after boot.
+- A missing, disabled, or ineffective target listener blocks the routed application. When the core crashes, the rule's failure policy applies; normal exit uses the separate exit policy.
+- Disconnecting existing connections affects IPv4 TCP only. Changing the proxy target without changing the routing action does not trigger a disconnect.
+- Antivirus software may flag or quarantine WinDivert. Check the component files and service status if routing fails.
+- The current process-routing protocol is version 3. Update the GUI and service together. Failed configurations require a manual retry after reconnecting.
 
-```bash
-pnpm test                                        # 前端测试
-pnpm typecheck                                   # 类型检查
-cargo test --manifest-path src-tauri/Cargo.toml --workspace  # 后端测试
+## Build from source
+
+Use Node.js 24 and pnpm 10 to match CI, plus the Rust toolchain and [Tauri 2 Windows prerequisites](https://tauri.app/start/prerequisites/) (MSVC build tools and WebView2).
+
+Prepare dependencies and bundled components:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm fetch-mihomo       # Download and verify the pinned core
+pnpm fetch-windivert    # Download the WinDivert files
+pnpm build-proxybridge  # Build ProxyBridgeCore.dll with MSVC
+pnpm build-procsvc      # Build the process-routing service
 ```
 
-技术栈：Tauri 2（Rust、tokio）+ React + TypeScript + Vite + MUI，前后端类型由 tauri-specta 生成。
+Run or package the application:
 
-### 许可证
-
-[MIT](LICENSE)
-
----
-
-## English
-
-A Windows desktop tool built on the [mihomo](https://github.com/MetaCubeX/mihomo) core. It manages proxies as a mapping of **inbound port → exit (node / proxy group / direct, plus network interface)**, so you never have to hand-write YAML.
-
-It is made for setups like:
-
-- Local and LAN devices connect through different ports, and each port goes out through a different exit;
-- The PC has several network adapters, and traffic from each port must leave through a specific adapter, strictly isolated.
-
-### Features
-
-- **Subscriptions**: import Clash/mihomo YAML subscriptions or base64 share-link subscriptions, each with its own auto-update interval.
-- **Manual nodes**: create `socks5` / `http` nodes with a form, or any other type by pasting mihomo proxy YAML; organize them into your own node groups.
-- **Exits**: a single node, a proxy group (`url-test` / `fallback` / `load-balance` / `select`, whose members can be nodes or whole groups), or direct — each optionally bound to a network interface.
-- **Listeners**: multiple `mixed` (HTTP + SOCKS5), `http` or `socks` ports, with optional username/password, optionally open to the LAN.
-- **Overview (assembly page)**: assign an exit to each listener, create exits and switch `select` group members in one table, with live/total traffic and latency.
-- **Tailscale**: manage `type: tailscale` nodes, including login state and parameters.
-- **Process routing**: send all traffic of a given program (matched by full exe path) to a Mixed / Socks listener, with rule changes applied instantly; each rule chooses direct or block when the component fails (blocking is enforced by the Windows Filtering Platform, so nothing leaks to direct when the component crashes, the service stops or the PC restarts), and live connections and traffic are shown per process. It runs as a Windows service (`RoutaProcSvc`, built on [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) and [WinDivert](https://github.com/basil00/WinDivert)) and needs administrator rights once to register.
-- **No leaks**: when a node disappears or an adapter goes down, the affected listener is stopped instead of silently falling back to direct or the default adapter; it resumes when the adapter comes back.
-- **Process management**: bundled mihomo core, hot reload on config changes, automatic restart if the core exits; lives in the system tray and can start with Windows.
-
-### Install
-
-Download the latest version from [Releases](https://github.com/c0010c/Routa/releases) (currently [v0.2.0](https://github.com/c0010c/Routa/releases/tag/v0.2.0)). Three Windows x64 formats are available; choose any one:
-
-- [routa_0.2.0_x64-setup.exe](https://github.com/c0010c/Routa/releases/download/v0.2.0/routa_0.2.0_x64-setup.exe) (NSIS installer)
-- [routa_0.2.0_x64_en-US.msi](https://github.com/c0010c/Routa/releases/download/v0.2.0/routa_0.2.0_x64_en-US.msi) (MSI package)
-- [routa_0.2.0_x64_portable.zip](https://github.com/c0010c/Routa/releases/download/v0.2.0/routa_0.2.0_x64_portable.zip) (portable; unzip and run `routa.exe`)
-
-SHA256 checksums are in `SHA256SUMS.txt` on the same release. The installers and the portable build bundle the mihomo core (version in [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)); you can point the app to your own core in Settings.
-
-**Installed builds** store data in `%APPDATA%\dev.routa\` (`state.json` holds the configuration, `mihomo\` is the core's working directory and log).
-
-**Portable build**: when a `portable` file sits next to the exe, all data (including the WebView cache) is stored in a `data\` folder next to the exe; delete that marker file and restart to store data in `%APPDATA%\dev.routa\` instead. Switching modes does not move data automatically. Note:
-
-- The app folder must be writable (not under `Program Files`), otherwise the app reports an error on startup;
-- Start with Windows records the current exe path; after moving the folder, turn it on again in Settings;
-- The WebView2 runtime is required (usually built into Windows 10/11);
-- The portable and installed builds cannot run at the same time.
-
-**Upgrading from v0.1.0**: v0.1.0 still uses the previous `mihomo-mapper` name and stores data in `%APPDATA%\dev.mihomo-mapper\`. v0.2.0 does **not migrate** that directory automatically, so the old configuration is not reused after upgrading. The old version is still available on the [v0.1.0 release](https://github.com/c0010c/Routa/releases/tag/v0.1.0).
-
-**Process routing component**: the NSIS installer asks for UAC once at the end of setup to register the service, and once when uninstalling to remove the service and its filter rules (declining does not fail the installation; you can enable it later on the 进程分流 (Process Routing) page). The MSI and portable builds ask for UAC the first time you click 启用进程分流 (Enable process routing) on that page. The service files are installed in `%ProgramFiles%\Routa\ProcessRouting`. **Before uninstalling the MSI build, click 卸载组件 (Uninstall component) on that page**, otherwise the service and its filter rules stay on the system. If UAC is declined or removal fails while uninstalling the NSIS build, the uninstaller shows a warning and lets you retry. If the service and its filter rules are left behind (programs set to block stay offline), run `"%ProgramFiles%\Routa\ProcessRouting\routa-procsvc.exe" --uninstall` as administrator to remove them; it cannot delete the running `routa-procsvc.exe` itself, so delete the `ProcessRouting` folder afterwards. Limitations of process routing:
-
-- DNS lookups of a routed program are made by the Windows DNS Client service, so they bypass routing and go direct;
-- Rules match by exe path and apply to that program for every Windows user on the PC;
-- Process routing requires an IPv4 listener endpoint (such as `127.0.0.1` or `0.0.0.0`); IPv6 endpoints are rejected without switching addresses. IPv6 destinations through an IPv4 proxy endpoint are still supported;
-- After boot there is a short window before the service starts in which rules set to "direct on failure" may go direct (rules set to "block" are not affected);
-- "Disconnect existing connections" only works for IPv4 TCP; HTTP listeners cannot be targets;
-- The WinDivert driver may be flagged or quarantined by antivirus software; if so, exclude the install folder and `%ProgramFiles%\Routa\ProcessRouting`.
-
-> Windows x64 only. TUN mode and system proxy are out of scope.
-
-The current source uses process-routing protocol version 3; update the GUI and service together. Reconnecting restores session ownership while failed configurations still wait for a manual retry, so normal-exit policies remain effective. New UDP sessions negotiate with the proxy asynchronously while established sessions continue forwarding traffic.
-
-### Build from source
-
-The core version used for source builds is pinned in [`src-tauri/binaries/MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION).
-
-Requires Node.js, [pnpm](https://pnpm.io/), the Rust toolchain and the Tauri 2 [Windows prerequisites](https://tauri.app/start/prerequisites/) (WebView2, MSVC build tools).
-
-```bash
-pnpm install
-pnpm fetch-mihomo     # download and verify the pinned mihomo core into src-tauri/binaries
-pnpm fetch-windivert  # download WinDivert into src-tauri/binaries/procsvc
-pnpm build-proxybridge  # build ProxyBridgeCore.dll (needs MSVC)
-pnpm build-procsvc    # build the process-routing service routa-procsvc (pnpm tauri build runs it automatically)
-pnpm tauri dev        # run in development mode
-pnpm tauri build      # build NSIS / MSI installers into src-tauri/target/release/bundle
-pnpm pack:portable    # build the portable folder and zip into src-tauri/target/release/bundle/portable-<timestamp>
+```powershell
+pnpm tauri dev        # Development mode
+pnpm tauri build      # NSIS/MSI installers in src-tauri/target/release/bundle
+pnpm pack:portable    # Portable folder and ZIP in bundle/portable-<timestamp>
 ```
 
-`pnpm tauri build` produces `routa_<version>_x64-setup.exe` and `routa_<version>_x64_en-US.msi` locally. `pnpm pack:portable` runs a Tauri production build, rebuilding the routing service and frontend, then packages `routa.exe`, `mihomo.exe`, `routa-procsvc.exe`, the `procsvc\` folder, the `portable` marker and `LICENSE` into `routa_<version>_x64_portable.zip`; unzip it and run `routa.exe`.
+`pnpm tauri build` rebuilds the service and frontend automatically. Portable packaging builds the production app and includes `routa.exe`, `mihomo.exe`, `routa-procsvc.exe`, `procsvc\`, the `portable` marker, `LICENSE`, and `build-info.json`.
 
-The portable folder includes `build-info.json` with GUI, service, frontend and file SHA-256 fingerprints. `--skip-build` still checks sources, service protocol and build consistency. Before running `cargo build --release --features custom-protocol` directly, run `node scripts/build-procsvc.mjs` and `node scripts/build-frontend.mjs`. Use `--out-dir <directory>` to choose the output location; an existing app folder or ZIP is never overwritten, preserving any `data` folder.
+`build-info.json` records GUI, service, frontend, and file SHA-256 fingerprints. `--skip-build` still verifies source, protocol, and artifact consistency. Use `--out-dir <directory>` to choose the portable output location; existing app folders or ZIPs are rejected to protect any `data` directory. Before a direct `cargo build --release --features custom-protocol`, run `node scripts/build-procsvc.mjs` and `node scripts/build-frontend.mjs`.
 
-Tests:
+### Checks
 
-```bash
-pnpm test                                        # frontend tests
-pnpm typecheck                                   # type check
-cargo test --manifest-path src-tauri/Cargo.toml --workspace  # backend tests
+```powershell
+pnpm typecheck
+pnpm test
+pnpm build
+node --test scripts/build-artifacts.test.mjs
+cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
 ```
 
-Stack: Tauri 2 (Rust, tokio) + React + TypeScript + Vite + MUI, with frontend/backend types generated by tauri-specta.
+Some Rust tests are ignored by default because they need administrator rights or a real core. To run the real-core integration test:
 
-### License
+```powershell
+$env:MIHOMO_BIN = (Resolve-Path src-tauri/binaries/mihomo-x86_64-pc-windows-msvc.exe).Path
+$env:NO_PROXY = ''
+cargo test --locked --manifest-path src-tauri/Cargo.toml --test e2e_real_core -- --ignored --nocapture
+```
 
-[MIT](LICENSE)
+Stack: Tauri 2 (Rust and tokio), React, TypeScript, Vite, and MUI. Frontend/backend bindings are generated with tauri-specta.
+
+## License
+
+[MIT](LICENSE). Third-party components retain their respective licenses; see [ProxyBridge's license](third_party/proxybridge/LICENSE) and [upstream notes](third_party/proxybridge/UPSTREAM.md).
