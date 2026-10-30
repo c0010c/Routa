@@ -90,7 +90,7 @@ const CORE_DOT: Record<"Running" | "Starting" | "Stopped" | "Crashed", string> =
   Crashed: "error.main",
 };
 
-function CoreStatusCard({ core, controllerPort }: { core: CoreState; controllerPort: number }) {
+export function CoreStatusCard({ core, controllerPort }: { core: CoreState; controllerPort: number }) {
   const c = useCoreControl();
   const kind = typeof core === "object" ? "Crashed" : core;
   return (
@@ -191,7 +191,7 @@ function currentNode(model: Model, exit: Exit | undefined, now: Partial<Record<s
   return v.startsWith(prefix) ? v.slice(prefix.length) : v;
 }
 
-export function Overview() {
+export function Overview({ embedded = false }: { embedded?: boolean } = {}) {
   const model = useModel();
   const status = useStatus();
   const liveTick = useTraffic();
@@ -256,7 +256,7 @@ export function Overview() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h5">概览</Typography>
+      {!embedded && <Typography variant="h5">概览</Typography>}
       {resolveExit && (
         <Alert severity="info" action={
           <>

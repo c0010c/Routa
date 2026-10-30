@@ -42,7 +42,7 @@ import {
 import { delayFailure } from "../lib/format";
 import { isAutoExitNode } from "../lib/tailnet";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
-import { ExitDialog, newExit } from "./ExitDialog";
+import { ListenerDialog, newListener } from "./ListenerDialog";
 
 export const EPHEMERAL_HELP = "建议关闭：临时节点离线一段时间后会被 tailnet 自动删除，修改配置或重启内核后可能需要重新登录";
 export const HOSTNAME_CHANGE_HELP = "修改后会在 tailnet 中注册为一台新机器，需要重新登录";
@@ -69,7 +69,7 @@ const STEPS = ["命名", "登录", "出口节点与验证"];
 
 /**
  * New instance: a wizard (name → login → exit node and check). Existing
- * instance: one form. "用它新建出口" swaps the dialog for the exit dialog.
+ * instance: one form. "用于新代理" swaps the dialog for the exit dialog.
  */
 export function TailscaleDialog({ node, onClose }: { node: ManualNode; onClose: () => void }) {
   const model = useModel();
@@ -141,8 +141,7 @@ export function TailscaleDialog({ node, onClose }: { node: ManualNode; onClose: 
   const toggleGroup = (id: string) => setGroups((gs) => (gs.includes(id) ? gs.filter((g) => g !== id) : [...gs, id]));
 
   if (creatingExit) {
-    const exit = { ...newExit(), name: current.name, kind: { Node: { node: { manual_id: node.id } } }, interface: iface };
-    return <ExitDialog exit={exit} onClose={onClose} />;
+    return <ListenerDialog listener={{...newListener(model.data?.listeners ?? []), name: current.name}} initialNode={{manual_id: node.id}} onClose={()=>setCreatingExit(false)} />;
   }
 
   const nodeGroups = model.data?.node_groups ?? [];
@@ -354,7 +353,7 @@ function WizardFinish(props: {
           完成
         </Button>
         <Button variant="contained" disabled={props.busy} onClick={() => void props.onFinish("exit")}>
-          用它新建出口
+          用于新代理
         </Button>
       </>
     );

@@ -19,6 +19,14 @@ async saveListener(l: Listener) : Promise<Result<ApplyOutcome, ValidationError[]
     else return { status: "error", error: e  as any };
 }
 },
+async saveProxy(l: Listener, target: Exit) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_proxy", { l, target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async deleteListener(id: ListenerId) : Promise<Result<ApplyOutcome, ValidationError[]>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_listener", { id }) };
@@ -83,7 +91,7 @@ async testDelays(proxyNames: string[]) : Promise<Result<([string, DelayResult])[
     else return { status: "error", error: e  as any };
 }
 },
-async saveSettings(s: Settings) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+async saveSettings(s: Settings) : Promise<Result<ApplyOutcome, SettingsSaveError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_settings", { s }) };
 } catch (e) {
@@ -126,6 +134,22 @@ async deleteNodeGroup(id: NodeGroupId) : Promise<Result<ApplyOutcome, Validation
 async parseProxyYaml(text: string) : Promise<Result<ParsedProxy, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("parse_proxy_yaml", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async parseProxyYamlBatch(text: string) : Promise<Result<ParsedProxy[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("parse_proxy_yaml_batch", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveManualNodes(nodes: ManualNode[]) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_manual_nodes", { nodes }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -284,6 +308,94 @@ async procrouteCleanup() : Promise<Result<null, string>> {
  */
 async listRunningProcesses() : Promise<RunningProcess[]> {
     return await TAURI_INVOKE("list_running_processes");
+},
+async desktopState() : Promise<Result<DesktopState, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("desktop_state") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveUiPreferences(input: UiPreferences) : Promise<Result<UiPreferences, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_ui_preferences", { input }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async bindDefaultListener(id: ListenerId | null) : Promise<Result<UiPreferences, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("bind_default_listener", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async selectSimpleNode(node: NodeRef) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("select_simple_node", { node }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async setDesktopConnection(mode: CaptureMode | null) : Promise<Result<DesktopState, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_desktop_connection", { mode }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async setSystemProxyListener(id: ListenerId) : Promise<Result<DesktopState, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_system_proxy_listener", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveSimpleApp(path: string, selected: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_simple_app", { path, selected }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async setSimplePort(port: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_simple_port", { port }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeProcessListener(id: ProcessRuleId, listener: ListenerId) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_process_listener", { id, listener }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getConnectionDetails() : Promise<Result<ConnectionInfo[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_connection_details") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async readCoreLog() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_core_log") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -317,6 +429,7 @@ uncut: number } } | { FailedCoreStopped: { error: string } } |
 { NotRunning: { error: string } }
 export type Auth = { username: string; password: string }
 export type Bytes = { up: number; down: number }
+export type CaptureMode = "System" | "Apps" | "Tun"
 export type ComponentState = "NotInstalled" | "Stopped" | "Running" | 
 /**
  * 服务的协议版本与本程序不一致，需要重新安装组件；此时不下发任何状态。
@@ -326,6 +439,7 @@ export type ComponentState = "NotInstalled" | "Stopped" | "Running" |
  * 管道只放行注册组件的用户：组件归其他 Windows 用户所有。
  */
 "OwnedByOtherUser" | { Error: { message: string } }
+export type ConnectionInfo = { id: string; listener: string; process: string; target: string; node: string; protocol: string; uploaded: number; downloaded: number }
 export type CoreState = "Stopped" | "Starting" | "Running" | { Crashed: { exit_code: number | null } }
 export type CoreStopReason = 
 /**
@@ -374,7 +488,12 @@ tested_at: number;
 /**
  * Why `ms` is `None`.
  */
-error?: DelayError | null }
+error?: DelayError | null; 
+/**
+ * The measured path/test settings changed after this result was produced.
+ */
+stale?: boolean }
+export type DesktopState = { preferences: UiPreferences; connection: CaptureMode | null; requested: CaptureMode | null; error: string | null; is_admin: boolean; system_listener_id: ListenerId | null }
 export type Exit = { id: ExitId; name: string; kind: ExitKind; interface: InterfaceGuid | null }
 export type ExitHealth = { status: ExitStatus; effective_members: NodeRef[]; missing_members: ExitMember[]; 
 /**
@@ -407,10 +526,15 @@ export type Health = { exits: Partial<{ [key in ExitId]: ExitHealth }>; listener
  * Windows 网卡标识（GUID）。
  */
 export type InterfaceGuid = string
+export type InterfaceMode = "Simple" | "Full"
 export type InterruptionView = { at_unix: number; reason: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
-export type Listener = { id: ListenerId; name: string; listener_type: ListenerType; listen: string; port: number; auth: Auth | null; exit: ExitId | null; user_enabled: boolean }
+export type Listener = { id: ListenerId; name: string; listener_type: ListenerType; listen: string; port: number; auth: Auth | null; exit: ExitId | null; user_enabled: boolean; routing?: ListenerRouting | null }
 export type ListenerId = string
+/**
+ * Per-port routing; None preserves legacy uniform forwarding.
+ */
+export type ListenerRouting = { rules: PortRule[]; unmatched: RuleAction }
 export type ListenerStatus = "Active" | "DisabledByUser" | "NoExit" | { ExitBroken: { exit_status: ExitStatus } }
 export type ListenerType = "Mixed" | "Http" | "Socks"
 /**
@@ -439,7 +563,7 @@ export type Node = { name: string; proxy_type: string; server: string;
  * 原样的 mihomo proxy 映射
  */
 raw: JsonValue }
-export type NodeGroup = { id: NodeGroupId; name: string }
+export type NodeGroup = { id: NodeGroupId; name: string; members?: NodeRef[] }
 export type NodeGroupId = string
 /**
  * 指向一个节点。untagged：旧 JSON `{subscription_id, name}` 直接落到
@@ -455,6 +579,7 @@ export type ParsedProxy = { raw: JsonValue;
  * `["interface-name", "routing-mark", "dialer-proxy"]` in that order.
  */
 stripped: string[] }
+export type PortRule = { matcher: RuleMatch; value: string; action: RuleAction }
 export type ProcRouteStatus = { component: ComponentState; 
 /**
  * 当前启用规则的服务确认结果；未确认时为 Pending / Failed / Unknown。
@@ -478,6 +603,8 @@ export type ProcessRuleId = string
  * Bytes per second.
  */
 export type Rate = { up: number; down: number }
+export type RuleAction = "Proxy" | "Direct" | "Reject"
+export type RuleMatch = "Domain" | "DomainSuffix" | "Ipv4Cidr"
 export type RuleView = { 
 /**
  * "Proxy" | "Direct" | "Block" | "Pending" | "Failed" | "Unknown"
@@ -536,7 +663,8 @@ core_stop_reason: CoreStopReason | null;
  */
 core_recovering: boolean }
 export type Settings = { autostart: boolean; core_path: string | null; controller_port: number; delay_test_interval_mins: number | null; delay_test_url: string }
-export type Subscription = { id: SubscriptionId; name: string; url: string; update_interval_mins: number | null; fallback_exit: ExitId | null; 
+export type SettingsSaveError = ValidationError[] | string
+export type Subscription = { id: SubscriptionId; name: string; url: string; update_interval_mins: number | null; fallback_exit: ExitId | null; fallback_listener?: ListenerId | null; 
 /**
  * unix 秒
  */
@@ -568,6 +696,7 @@ export type TrafficTick = { total_rate: Rate;
  */
 per_listener_rate: Partial<{ [key in ListenerId]: Rate }>; totals: TrafficTotals }
 export type TrafficTotals = { total: Bytes; per_listener: Partial<{ [key in ListenerId]: Bytes }> }
+export type UiPreferences = { mode: InterfaceMode | null; listener_id: ListenerId | null; exit_id: ExitId | null; system_listener_id: ListenerId | null; capture_mode: CaptureMode; auto_connect: boolean; close_to_tray: boolean; managed_rules: ProcessRuleId[]; selected_apps: ProcessRuleId[] }
 export type ValidationError = { DuplicateName: { kind: string; name: string } } | { PortConflict: { port: number; with: string } } | { InvalidName: { name: string; reason: string } } | { IntervalOutOfRange: { field: string; value: number } } | { DanglingRef: { what: string } } | 
 /**
  * A Tailscale instance used by the exit is bound to a different interface than the exit.

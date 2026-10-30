@@ -35,7 +35,7 @@ fn invalid_data(path: &Path, e: serde_json::Error) -> io::Error {
 }
 
 /// Missing file -> `Ok(None)`; unreadable or malformed file -> error (never a silent default).
-fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
+pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
@@ -46,7 +46,7 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
 }
 
 /// Write `<path>.tmp`, flush + sync, then rename over the target.
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
+pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     let data = serde_json::to_vec_pretty(value)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let mut tmp_name = path.as_os_str().to_owned();
@@ -73,11 +73,23 @@ impl Store {
     }
 
     pub fn load_model(&self) -> io::Result<Model> {
-        Ok(read_json(&self.dir.join(STATE_FILE))?.unwrap_or_default())
+        let raw: Option<serde_json::Value> = read_json(&self.dir.join(STATE_FILE))?;
+        let Some(raw) = raw else { return Ok(Model::default()); };
+        let old = raw.get("proxy_layout_version").and_then(|v| v.as_u64()).unwrap_or(0) < 1;
+        let mut model: Model = serde_json::from_value(raw).map_err(|e| invalid_data(&self.state_path(), e))?;
+        if old {
+            let backup = self.dir.join("state.before-v43.json");
+            if !backup.exists() { fs::copy(self.state_path(), backup)?; }
+            crate::model::migrate::private_outbounds(&mut model);
+        }
+        model.settings.core_path = None;
+        Ok(model)
     }
 
     pub fn save_model(&self, m: &Model) -> io::Result<()> {
-        write_json_atomic(&self.dir.join(STATE_FILE), m)
+        let mut value = serde_json::to_value(m).map_err(io::Error::other)?;
+        value["proxy_layout_version"] = serde_json::json!(1);
+        write_json_atomic(&self.dir.join(STATE_FILE), &value)
     }
 
     pub fn load_totals(&self) -> io::Result<TrafficTotals> {
@@ -115,6 +127,23 @@ mod tests {
         (td, store)
     }
 
+    #[test]
+    fn legacy_state_migrates_once_with_original_backup() {
+        let (_td, store) = open_tmp();
+        let mut model = Model::default();
+        let e = crate::model::Exit { name: "旧方案".into(), ..Default::default() };
+        model.exits.push(e.clone());
+        let original = serde_json::to_vec(&model).unwrap();
+        fs::write(store.state_path(), &original).unwrap();
+        let migrated = store.load_model().unwrap();
+        assert_eq!(migrated.listeners.len(),1);
+        assert!(!migrated.listeners[0].user_enabled);
+        assert_eq!(migrated.listeners[0].exit,Some(e.id));
+        assert_eq!(fs::read(store.dir.join("state.before-v43.json")).unwrap(),original);
+        store.save_model(&migrated).unwrap();
+        assert_eq!(store.load_model().unwrap(),migrated);
+        assert_eq!(fs::read(store.dir.join("state.before-v43.json")).unwrap(),original);
+    }
     #[test]
     fn open_creates_dirs_and_paths() {
         let (td, s) = open_tmp();

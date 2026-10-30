@@ -215,8 +215,8 @@ describe("Tailscale page card", () => {
   it("creates an exit for the instance", async () => {
     renderPage();
     const card = await screen.findByRole("article", { name: "家里" });
-    fireEvent.click(within(card).getByRole("button", { name: "用它新建出口" }));
-    expect(await screen.findByText("新建出口")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: "用于新代理" }));
+    expect(await screen.findByText("新增代理")).toBeInTheDocument();
     expect(screen.getByLabelText("名称")).toHaveValue("家里");
   });
 
@@ -301,8 +301,8 @@ describe("new instance wizard", () => {
     await waitFor(() => expect(commands.saveManualNode).toHaveBeenCalledTimes(2));
     expect(saved(1).kind).toMatchObject({ Tailscale: { exit_node: "100.91.166.56" } });
     expect(await screen.findByText("出口节点已生效，测速 210 ms")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "用它新建出口" }));
-    expect(await screen.findByText("新建出口")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "用于新代理" }));
+    expect(await screen.findByText("新增代理")).toBeInTheDocument();
   });
 
   it("keeps checking while the backend retries, stops once it gave up", async () => {

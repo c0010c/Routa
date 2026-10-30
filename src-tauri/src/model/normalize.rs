@@ -16,6 +16,11 @@ pub fn normalize_exe_path(p: &str) -> String {
 }
 
 pub fn normalize(model: &mut Model) {
+    for sub in &mut model.subscriptions {
+        if let Some(id) = &sub.fallback_listener {
+            sub.fallback_exit = model.listeners.iter().find(|l| &l.id == id).and_then(|l| l.exit.clone());
+        }
+    }
     for r in &mut model.process_routing.rules {
         r.exe_path = normalize_exe_path(&r.exe_path);
     }
@@ -84,6 +89,7 @@ mod tests {
     }
     fn sub_with(node: &str) -> Subscription {
         Subscription {
+            fallback_listener: None,
             id: SubscriptionId("s".into()),
             name: "s".into(),
             url: "https://x".into(),

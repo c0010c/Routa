@@ -61,8 +61,8 @@ describe("DelayText", () => {
   });
 
   it("shows a slow delay in the warning colour", () => {
-    renderDelay(286);
-    expect(colorOf("286 ms")).toMatch(/warning/i);
+    renderDelay(437);
+    expect(colorOf("437 ms")).toMatch(/warning/i);
   });
 
   it("shows a timeout", () => {

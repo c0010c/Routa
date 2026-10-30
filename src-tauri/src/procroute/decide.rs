@@ -111,6 +111,7 @@ mod tests {
 
     fn listener(listen: &str) -> Listener {
         Listener {
+            routing: None,
             id: ListenerId("l1".into()),
             name: "L1".into(),
             listener_type: ListenerType::Socks,

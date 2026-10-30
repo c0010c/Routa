@@ -32,6 +32,8 @@ describe("SubscriptionDialog", () => {
       </QueryClientProvider>,
     );
     await screen.findByText("新建订阅");
+    fireEvent.change(screen.getByLabelText("URL"),{target:{value:"https://example.invalid/sub"}});
+    fireEvent.click(screen.getByText("高级选项"));
     fireEvent.change(screen.getByLabelText("单位"), { target: { value: "天" } });
     fireEvent.change(screen.getByLabelText("间隔"), { target: { value: "400" } });
     const save = screen.getByRole("button", { name: "保存" });

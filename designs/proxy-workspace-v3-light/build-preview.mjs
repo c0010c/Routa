@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import {fileURLToPath} from 'node:url';
+const folder=path.dirname(fileURLToPath(import.meta.url));
+const source=fs.readFileSync(path.join(folder,'prototype.html'),'utf8');
+for(const [,script] of source.matchAll(/<script>([\s\S]*?)<\/script>/g))new vm.Script(script);
+const tooltipRuntime=fs.readFileSync(path.join(folder,'tooltip-runtime.js'),'utf8');
+new vm.Script(tooltipRuntime);
+const tooltipCss='#routa-light-prototype .l-prototype-tooltip{position:fixed;inset:auto;margin:0;width:max-content;max-width:min(308px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;border:1px solid #cbd5e2;border-radius:7px;background:#fff;color:#34445a;box-shadow:0 5px 20px #18355324;padding:11px 13px;font:12px/1.65 "Segoe UI","Microsoft YaHei UI",sans-serif;white-space:pre-line;overflow-wrap:anywhere;z-index:1000}';
+const html='<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Routa · 亮色代理工作区 V3</title><style>body{margin:0;background:#e9edf3}#routa-light-prototype{max-width:1440px;margin:auto;border-radius:0!important;border:0!important;min-height:100vh}'+tooltipCss+'</style></head><body>\n'+source+'\n<script>'+tooltipRuntime+'</script>\n</body></html>';
+fs.writeFileSync(path.join(folder,'index.html'),html);
+const inline='C:/Users/Q/.codex/visualizations/2026/10/29/01a18855-63c0-7b11-86f1-28889f7599c6/proxy-workspace-light.html';
+fs.writeFileSync(inline,source);
+console.log(JSON.stringify({syntax:'pass',bytes:Buffer.byteLength(source),index:path.join(folder,'index.html'),inline}));

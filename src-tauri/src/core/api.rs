@@ -34,11 +34,26 @@ impl std::error::Error for ApiError {}
 pub struct ConnMeta {
     #[serde(rename = "inboundName", default)]
     pub inbound_name: String,
+    #[serde(default)]
+    pub host: String,
+    #[serde(rename = "destinationIP", default)]
+    pub destination_ip: String,
+    #[serde(rename = "destinationPort", default)]
+    pub destination_port: String,
+    #[serde(rename = "processPath", default)]
+    pub process_path: String,
+    #[serde(default)]
+    pub process: String,
+    #[serde(default)]
+    pub network: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Conn {
     pub id: String,
+    /// Actual route for this connection, leaf proxy first (not the group's current selection).
+    #[serde(default)]
+    pub chains: Vec<String>,
     #[serde(default)]
     pub upload: u64,
     #[serde(default)]
@@ -113,25 +128,18 @@ where
     let connect = async move {
         // tokio-tungstenite dials the address directly (no proxy support), so
         // the secret never goes through a system proxy.
-        let dial = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            tokio_tungstenite::connect_async(url),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            Err(tokio_tungstenite::tungstenite::Error::Io(
-                std::io::ErrorKind::TimedOut.into(),
-            ))
-        });
+        let dial = tokio::time::timeout(std::time::Duration::from_secs(5), tokio_tungstenite::connect_async(url))
+            .await
+            .unwrap_or_else(|_| {
+                Err(tokio_tungstenite::tungstenite::Error::Io(
+                    std::io::ErrorKind::TimedOut.into(),
+                ))
+            });
         match dial {
             Ok((ws, _)) => ws
                 .filter_map(move |msg| async move {
                     match msg {
-                        Ok(Message::Text(t)) => Some(
-                            serde_json::from_str::<T>(t.as_str())
-                                .map(f)
-                                .map_err(unreachable),
-                        ),
+                        Ok(Message::Text(t)) => Some(serde_json::from_str::<T>(t.as_str()).map(f).map_err(unreachable)),
                         Ok(_) => None,
                         Err(e) => Some(Err(unreachable(e))),
                     }
@@ -161,11 +169,7 @@ impl HttpMihomoApi {
     }
 
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response, ApiError> {
-        let resp = req
-            .bearer_auth(&self.secret)
-            .send()
-            .await
-            .map_err(unreachable)?;
+        let resp = req.bearer_auth(&self.secret).send().await.map_err(unreachable)?;
         let status = resp.status();
         if status.is_success() {
             return Ok(resp);
@@ -181,10 +185,7 @@ impl HttpMihomoApi {
         })
     }
 
-    async fn json<T: serde::de::DeserializeOwned>(
-        &self,
-        req: reqwest::RequestBuilder,
-    ) -> Result<T, ApiError> {
+    async fn json<T: serde::de::DeserializeOwned>(&self, req: reqwest::RequestBuilder) -> Result<T, ApiError> {
         self.send(req).await?.json().await.map_err(unreachable)
     }
 }
@@ -196,9 +197,7 @@ impl MihomoApi for HttpMihomoApi {
         struct V {
             version: String,
         }
-        let v: V = self
-            .json(self.client.get(format!("{}/version", self.base)))
-            .await?;
+        let v: V = self.json(self.client.get(format!("{}/version", self.base))).await?;
         Ok(v.version)
     }
 
@@ -214,9 +213,7 @@ impl MihomoApi for HttpMihomoApi {
     }
 
     async fn connections(&self) -> Result<ConnectionsSnapshot, ApiError> {
-        let raw: RawSnapshot = self
-            .json(self.client.get(format!("{}/connections", self.base)))
-            .await?;
+        let raw: RawSnapshot = self.json(self.client.get(format!("{}/connections", self.base))).await?;
         Ok(ConnectionsSnapshot {
             upload_total: raw.upload_total,
             download_total: raw.download_total,
@@ -225,12 +222,9 @@ impl MihomoApi for HttpMihomoApi {
     }
 
     async fn close_connection(&self, id: &str) -> Result<(), ApiError> {
-        self.send(
-            self.client
-                .delete(format!("{}/connections/{}", self.base, enc(id))),
-        )
-        .await
-        .map(|_| ())
+        self.send(self.client.delete(format!("{}/connections/{}", self.base, enc(id))))
+            .await
+            .map(|_| ())
     }
 
     async fn delay(&self, proxy: &str, url: &str, timeout_ms: u32) -> Result<u32, ApiError> {
@@ -248,9 +242,7 @@ impl MihomoApi for HttpMihomoApi {
                         enc(url),
                         timeout_ms
                     ))
-                    .timeout(std::time::Duration::from_millis(
-                        u64::from(timeout_ms) + 2000,
-                    )),
+                    .timeout(std::time::Duration::from_millis(u64::from(timeout_ms) + 2000)),
             )
             .await?;
         Ok(d.delay)
@@ -284,11 +276,7 @@ impl MihomoApi for HttpMihomoApi {
             up: u64,
             down: u64,
         }
-        let url = format!(
-            "ws://127.0.0.1:{}/traffic?token={}",
-            self.port,
-            enc(&self.secret)
-        );
+        let url = format!("ws://127.0.0.1:{}/traffic?token={}", self.port, enc(&self.secret));
         ws_json_stream(url, |t: T| (t.up, t.down))
     }
 
@@ -325,7 +313,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "uploadTotal": 7, "downloadTotal": 9,
                 "connections": [
-                    {"id": "a", "upload": 1, "download": 2, "metadata": {"inboundName": "l-1", "host": "x"}},
+                    {"id": "a", "upload": 1, "download": 2, "chains": ["出口/订阅/新加坡01", "出口"], "metadata": {"inboundName": "l-1", "host": "x", "network": "tcp", "process": "chrome.exe", "processPath": "C:\\Chrome\\chrome.exe"}},
                     {"id": "b", "upload": 3, "download": 4, "metadata": {}}
                 ]
             })))
@@ -337,17 +325,23 @@ mod tests {
         assert_eq!(snap.connections.len(), 2);
         assert_eq!(snap.connections[0].id, "a");
         assert_eq!(snap.connections[0].metadata.inbound_name, "l-1");
+        assert_eq!(snap.connections[0].chains, ["出口/订阅/新加坡01", "出口"]);
+        assert_eq!(snap.connections[0].metadata.network, "tcp");
+        assert_eq!(snap.connections[0].metadata.process, "chrome.exe");
+        assert_eq!(snap.connections[0].metadata.process_path, r"C:\Chrome\chrome.exe");
         assert_eq!(snap.connections[1].download, 4);
         assert_eq!(snap.connections[1].metadata.inbound_name, "");
+        assert!(snap.connections[1].chains.is_empty());
     }
 
     #[tokio::test]
     async fn null_connections_is_empty() {
         let server = MockServer::start().await;
         Mock::given(path("/connections"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"uploadTotal": 0, "downloadTotal": 0, "connections": null}),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"uploadTotal": 0, "downloadTotal": 0, "connections": null})),
+            )
             .mount(&server)
             .await;
         let snap = api_for(&server).connections().await.unwrap();
@@ -359,9 +353,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(header("authorization", "Bearer s3cret"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"delay": 42})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"delay": 42})))
             .mount(&server)
             .await;
         let d = api_for(&server)
@@ -392,10 +384,7 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        api_for(&server)
-            .reload(Path::new(r"C:\w\config.yaml"))
-            .await
-            .unwrap();
+        api_for(&server).reload(Path::new(r"C:\w\config.yaml")).await.unwrap();
     }
 
     #[tokio::test]
@@ -404,8 +393,7 @@ mod tests {
         Mock::given(method("PUT"))
             .and(path("/configs"))
             .respond_with(
-                ResponseTemplate::new(400)
-                    .set_body_json(serde_json::json!({"message": "path is not subpath of home"})),
+                ResponseTemplate::new(400).set_body_json(serde_json::json!({"message": "path is not subpath of home"})),
             )
             .mount(&server)
             .await;
@@ -466,15 +454,21 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(header("authorization", "Bearer s3cret"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"name": "组/A", "type": "Selector", "now": "g/x", "all": ["g/x"]}),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"name": "组/A", "type": "Selector", "now": "g/x", "all": ["g/x"]}),
+                ),
+            )
             .mount(&server)
             .await;
         let api = api_for(&server);
         assert_eq!(api.proxy_now("组/A").await.unwrap(), Some("g/x".into()));
         let reqs = server.received_requests().await.unwrap();
-        assert!(reqs[0].url.path().ends_with("/proxies/%E7%BB%84%2FA"), "{}", reqs[0].url);
+        assert!(
+            reqs[0].url.path().ends_with("/proxies/%E7%BB%84%2FA"),
+            "{}",
+            reqs[0].url
+        );
     }
 
     #[tokio::test]
@@ -492,10 +486,7 @@ mod tests {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         drop(l);
-        let err = HttpMihomoApi::new(port, "x".into())
-            .version()
-            .await
-            .unwrap_err();
+        let err = HttpMihomoApi::new(port, "x".into()).version().await.unwrap_err();
         assert!(matches!(err, ApiError::Unreachable(_)), "{err:?}");
     }
 
@@ -520,12 +511,8 @@ mod tests {
             .await
             .unwrap();
             tx.send(uri.lock().unwrap().clone()).unwrap();
-            ws.send(Message::text(r#"{"up":5,"down":6}"#))
-                .await
-                .unwrap();
-            ws.send(Message::text(r#"{"up":7,"down":8}"#))
-                .await
-                .unwrap();
+            ws.send(Message::text(r#"{"up":5,"down":6}"#)).await.unwrap();
+            ws.send(Message::text(r#"{"up":7,"down":8}"#)).await.unwrap();
             ws.close(None).await.unwrap();
         });
         let api = HttpMihomoApi::new(port, "tok".into());
@@ -571,7 +558,10 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                Ok("[Tailscale](手动/ts-x) LocalBackend state is NeedsLogin; running StartLoginInteractive...".to_string()),
+                Ok(
+                    "[Tailscale](手动/ts-x) LocalBackend state is NeedsLogin; running StartLoginInteractive..."
+                        .to_string()
+                ),
                 Ok(r#"say "hi""#.to_string()),
             ]
         );

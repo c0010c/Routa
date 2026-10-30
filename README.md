@@ -73,10 +73,12 @@ pnpm build-proxybridge  # 编译 ProxyBridgeCore.dll（需要 MSVC）
 pnpm build-procsvc    # 编译进程分流服务 routa-procsvc（pnpm tauri build 会自动执行）
 pnpm tauri dev        # 开发模式运行
 pnpm tauri build      # 生成 NSIS / MSI 安装包，位于 src-tauri/target/release/bundle
-pnpm pack:portable    # 生成便携版 zip，位于 src-tauri/target/release/bundle/portable
+pnpm pack:portable    # 生成便携版目录及 zip，位于 src-tauri/target/release/bundle/portable-<时间戳>
 ```
 
-`pnpm tauri build` 本地生成 `routa_<版本>_x64-setup.exe` 和 `routa_<版本>_x64_en-US.msi`。`pnpm pack:portable` 调用 `pnpm tauri build --no-bundle`，再将 `routa.exe`、`mihomo.exe`、`routa-procsvc.exe`、`procsvc\` 目录、`portable` 标记文件和 `LICENSE` 打包为 `routa_<版本>_x64_portable.zip`，解压后运行 `routa.exe`。
+`pnpm tauri build` 本地生成 `routa_<版本>_x64-setup.exe` 和 `routa_<版本>_x64_en-US.msi`。`pnpm pack:portable` 先运行 Tauri 生产构建，重新编译分流服务和前端，再将 `routa.exe`、`mihomo.exe`、`routa-procsvc.exe`、`procsvc\` 目录、`portable` 标记文件和 `LICENSE` 打包为 `routa_<版本>_x64_portable.zip`，解压后运行 `routa.exe`。
+
+便携包附带 `build-info.json`，记录 GUI、服务、前端的构建摘要和文件 SHA-256。`--skip-build` 仍会校验源码、服务协议和产物一致性；直接用 `cargo build --release --features custom-protocol` 构建前，需要先运行 `node scripts/build-procsvc.mjs` 和 `node scripts/build-frontend.mjs`。可用 `--out-dir <目录>` 指定便携包位置；目标下已有同名程序目录或 ZIP 时会拒绝覆盖，保护现有 `data`。
 
 测试：
 
@@ -163,10 +165,12 @@ pnpm build-proxybridge  # build ProxyBridgeCore.dll (needs MSVC)
 pnpm build-procsvc    # build the process-routing service routa-procsvc (pnpm tauri build runs it automatically)
 pnpm tauri dev        # run in development mode
 pnpm tauri build      # build NSIS / MSI installers into src-tauri/target/release/bundle
-pnpm pack:portable    # build the portable zip into src-tauri/target/release/bundle/portable
+pnpm pack:portable    # build the portable folder and zip into src-tauri/target/release/bundle/portable-<timestamp>
 ```
 
-`pnpm tauri build` produces `routa_<version>_x64-setup.exe` and `routa_<version>_x64_en-US.msi` locally. `pnpm pack:portable` runs `pnpm tauri build --no-bundle`, then packages `routa.exe`, `mihomo.exe`, `routa-procsvc.exe`, the `procsvc\` folder, the `portable` marker and `LICENSE` into `routa_<version>_x64_portable.zip`; unzip it and run `routa.exe`.
+`pnpm tauri build` produces `routa_<version>_x64-setup.exe` and `routa_<version>_x64_en-US.msi` locally. `pnpm pack:portable` runs a Tauri production build, rebuilding the routing service and frontend, then packages `routa.exe`, `mihomo.exe`, `routa-procsvc.exe`, the `procsvc\` folder, the `portable` marker and `LICENSE` into `routa_<version>_x64_portable.zip`; unzip it and run `routa.exe`.
+
+The portable folder includes `build-info.json` with GUI, service, frontend and file SHA-256 fingerprints. `--skip-build` still checks sources, service protocol and build consistency. Before running `cargo build --release --features custom-protocol` directly, run `node scripts/build-procsvc.mjs` and `node scripts/build-frontend.mjs`. Use `--out-dir <directory>` to choose the output location; an existing app folder or ZIP is never overwritten, preserving any `data` folder.
 
 Tests:
 

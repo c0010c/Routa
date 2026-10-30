@@ -5,17 +5,18 @@ import {
   Link,
   Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
+  Box,
+  Divider,
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { Link as RouterLink, useSearchParams } from "react-router-dom";
-import { errorMessage, useModel, useStatus, useTestDelays } from "../api/client";
+import {
+  errorMessage,
+  useModel,
+  useStatus,
+  useTestDelays,
+} from "../api/client";
 import type { Exit, Model } from "../bindings";
 import { isGroupMember, nodeLabel } from "../lib/refs";
 import { DelayText } from "../components/DelayText";
@@ -59,22 +60,36 @@ export function Exits() {
   useEffect(() => {
     if (!requestedDelete || !model.data) return;
     setDeleting(requestedDelete);
-    setParams((current) => {
-      const next = new URLSearchParams(current);
-      next.delete("delete");
-      return next;
-    }, { replace: true });
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("delete");
+        return next;
+      },
+      { replace: true },
+    );
   }, [requestedDelete, model.data, setParams]);
 
   if (!model.data || !status.data) {
     const error = model.error || status.error;
-    if (error) return (
-      <Alert severity="error" action={
-        <Button onClick={() => { void model.refetch(); void status.refetch(); }}>重新加载</Button>
-      }>
-        {errorMessage(error)}
-      </Alert>
-    );
+    if (error)
+      return (
+        <Alert
+          severity="error"
+          action={
+            <Button
+              onClick={() => {
+                void model.refetch();
+                void status.refetch();
+              }}
+            >
+              重新加载
+            </Button>
+          }
+        >
+          {errorMessage(error)}
+        </Alert>
+      );
     return <Typography>加载中…</Typography>;
   }
   const m = model.data;
@@ -100,54 +115,79 @@ export function Exits() {
           }
         />
       ) : (
-          <TableContainer component={Paper}>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  {["名称", "类型", "节点/成员", "网卡", "延迟", "使用它的监听器", "状态", ""].map((h) => (
-                    <TableCell key={h}>{h}</TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {m.exits.map((e) => {
-                  const h = s.health.exits[e.id];
-                  const d = s.delays[e.name];
-                  const iface = e.interface
-                    ? (s.interfaces.find((i) => i.guid === e.interface)?.friendly_name ??
-                      h?.interface?.friendly_name ??
-                      "（已移除的网卡）")
-                    : "系统默认";
-                  const users = m.listeners.filter((l) => l.exit === e.id).map((l) => l.name);
-                  return (
-                    <TableRow key={e.id}>
-                      <TableCell>{e.name}</TableCell>
-                      <TableCell>{kindText(e)}</TableCell>
-                      <TableCell>{nodeOrMembers(e, m)}</TableCell>
-                      <TableCell>{iface}</TableCell>
-                      <TableCell>
-                        <DelayText result={d} />
-                      </TableCell>
-                      <TableCell>{users.length > 0 ? users.join("、") : "—"}</TableCell>
-                      <TableCell>{h ? <ExitStatusChip status={h.status} /> : "—"}</TableCell>
-                      <TableCell>
-                        <RowActions
-                          label={e.name}
-                          items={[
-                            { label: "测速", onClick: () => test.mutate([e.name]), disabled: test.isPending },
-                            { label: "编辑", onClick: () => setEditing(e) },
-                            { label: "删除", onClick: () => setDeleting(e.id), danger: true },
-                          ]}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </TableContainer>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" },
+            gap: 2,
+          }}
+        >
+          {m.exits.map((e) => {
+            const h = s.health.exits[e.id];
+            const iface = e.interface
+              ? (s.interfaces.find((i) => i.guid === e.interface)
+                  ?.friendly_name ??
+                h?.interface?.friendly_name ??
+                "（已移除的网卡）")
+              : "系统默认";
+            const users = m.listeners
+              .filter((l) => l.exit === e.id)
+              .map((l) => l.name);
+            return (
+              <Paper key={e.id} sx={{ p: 2.5 }}>
+                <Stack direction="row" sx={{ alignItems: "center", mb: 2 }}>
+                  <Typography sx={{ fontWeight: 600, fontSize: 17, flex: 1 }}>
+                    {e.name}
+                  </Typography>
+                  {h ? <ExitStatusChip status={h.status} /> : "—"}
+                  <RowActions
+                    label={e.name}
+                    items={[
+                      {
+                        label: "测速",
+                        onClick: () => test.mutate([e.name]),
+                        disabled: test.isPending,
+                      },
+                      { label: "编辑", onClick: () => setEditing(e) },
+                      {
+                        label: "删除",
+                        onClick: () => setDeleting(e.id),
+                        danger: true,
+                      },
+                    ]}
+                  />
+                </Stack>
+                <Typography variant="body2" color="text.secondary">
+                  {kindText(e)}
+                </Typography>
+                <Typography sx={{ my: 1, overflowWrap: "anywhere" }}>
+                  {nodeOrMembers(e, m)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  网卡：{iface}
+                </Typography>
+                <Divider sx={{ my: 1.5 }} />
+                <Stack
+                  direction="row"
+                  sx={{ alignItems: "center", justifyContent: "space-between" }}
+                >
+                  <Typography variant="caption" color="text.secondary">
+                    {users.length ? users.join("、") : "暂无监听器使用"}
+                  </Typography>
+                  <DelayText result={s.delays[e.name]} />
+                </Stack>
+              </Paper>
+            );
+          })}
+        </Box>
       )}
-      {editing && <ExitDialog key={editing.id} exit={editing} onClose={() => setEditing(null)} />}
+      {editing && (
+        <ExitDialog
+          key={editing.id}
+          exit={editing}
+          onClose={() => setEditing(null)}
+        />
+      )}
       {deleting && (
         <ExitDeleteDialog
           key={deleting}

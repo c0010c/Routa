@@ -8,6 +8,7 @@ vi.mock("../bindings", () => ({
     getModel: vi.fn(),
     getStatus: vi.fn(),
     saveListener: vi.fn(),
+    testDelays: vi.fn(),
   },
 }));
 
@@ -76,7 +77,7 @@ describe("Listeners", () => {
         </ApplyResultProvider>
       </QueryClientProvider>,
     );
-    expect(await screen.findByText("未接出口")).toBeInTheDocument();
+    expect(await screen.findByText("未设置")).toBeInTheDocument();
   });
 
   function renderList(m: Model) {
@@ -96,18 +97,43 @@ describe("Listeners", () => {
 
   it("shows an empty state instead of an empty table", async () => {
     renderList({ ...model, listeners: [] });
-    expect(await screen.findByText("还没有监听器")).toBeInTheDocument();
-    expect(screen.queryByRole("columnheader")).toBeNull();
-    expect(screen.getByRole("link", { name: "回概览页按步骤开始 →" })).toBeInTheDocument();
+    expect(await screen.findByText("暂无代理，新增代理配置端口与去向。")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", {name:"新增代理"})).toBeInTheDocument();
   });
 
-  it("keeps the enable switch inline and edit/delete in the row menu", async () => {
+  it("keeps enable, edit and delete directly in the card header", async () => {
     renderList(model);
     expect(await screen.findByRole("switch", { name: "启用 下载" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "操作 下载" }));
-    expect(screen.getByRole("menuitem", { name: "编辑 下载" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "删除 下载" })).toBeInTheDocument();
+    expect(screen.getByRole("button", {name:"编辑 下载"})).toBeInTheDocument();
+    expect(screen.getByRole("button", {name:"删除 下载"})).toBeInTheDocument();
+    expect(screen.queryByRole("button", {name:"复制"})).not.toBeInTheDocument();
   });
+});
+
+it("measures the proxy's exit path from its delay value and prevents repeat submissions", async () => {
+  const data: Model = {
+    ...model,
+    manual_nodes: [{ id: "n", name: "节点甲", groups: [], kind: { Proxy: { raw: { type: "ss" } } } }],
+    exits: [{ id: "e", name: "代理出口", interface: null, kind: { Node: { node: { manual_id: "n" } } } }],
+    listeners: [{ ...model.listeners[0], exit: "e", user_enabled: true }],
+  };
+  vi.mocked(commands.getModel).mockResolvedValue(data);
+  vi.mocked(commands.getStatus).mockResolvedValue({ ...status, delays: { "代理出口": { ms: 132, tested_at: 1 }, "手动/节点甲": { ms: 42, tested_at: 1 } } });
+  let finish!: (value: Awaited<ReturnType<typeof commands.testDelays>>) => void;
+  vi.mocked(commands.testDelays).mockReset().mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><ApplyResultProvider><Listeners /></ApplyResultProvider></QueryClientProvider>);
+  const measure = await screen.findByRole("button", { name: "测量 下载 的代理延迟" });
+  expect(measure).toHaveTextContent("132");
+  fireEvent.click(measure);
+  fireEvent.click(measure);
+  await waitFor(() => expect(commands.testDelays).toHaveBeenCalledWith(["代理出口"]));
+  await waitFor(() => expect(measure).toBeDisabled());
+  expect(measure).toHaveAttribute("aria-busy", "true");
+  fireEvent.click(measure);
+  expect(commands.testDelays).toHaveBeenCalledTimes(1);
+  finish({ status: "ok", data: [] });
+  await waitFor(() => expect(measure).not.toBeDisabled());
 });
 
 it("updates the switch and runtime status after saving without remounting the page", async () => {

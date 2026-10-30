@@ -1,8 +1,11 @@
 .superpowers/
+.claude/
+__pycache__/
 node_modules/
 target/
 dist/
 src-tauri/binaries/*.exe
+src-tauri/binaries/*.build.json
 spike/bin/
 spike/work/
 src-tauri/gen/

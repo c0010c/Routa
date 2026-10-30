@@ -159,7 +159,7 @@ describe("Overview", () => {
     renderOverview();
     const section = await screen.findByRole("region", { name: "监听器" });
     fireEvent.click(within(section).getByRole("button", { name: "新建监听器" }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent("新建监听器");
+    expect(await screen.findByRole("dialog")).toHaveTextContent("新增代理");
   });
 
   it("marks port-failed listeners ahead of Active", async () => {
@@ -201,7 +201,7 @@ describe("Overview", () => {
     renderOverview();
     fireEvent.click(await screen.findByRole("button", { name: "操作 办公" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "编辑 办公" }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent("编辑监听器");
+    expect(await screen.findByRole("dialog")).toHaveTextContent("编辑代理");
     expect(screen.getByLabelText("名称")).toHaveValue("办公");
   });
 

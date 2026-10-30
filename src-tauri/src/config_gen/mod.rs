@@ -3,7 +3,7 @@
 //! so any name round-trips; key order is fixed so output is byte-stable.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
 use serde_yaml_ng::{Mapping, Value};
@@ -205,7 +205,11 @@ fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth, nics: &[NetInterface])
                     ("type", s("select")),
                     ("proxies", Value::Sequence(vec![s(&manual_proxy_name(node))])),
                 ]);
-                ExitParts { proxies: vec![], group: Some(group), shared: vec![def] }
+                ExitParts {
+                    proxies: vec![],
+                    group: Some(group),
+                    shared: vec![def],
+                }
             }
             None => return None,
         },
@@ -239,14 +243,22 @@ fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth, nics: &[NetInterface])
                 ("url", s(&model.settings.delay_test_url)),
                 ("interval", Value::from(interval)),
             ]);
-            ExitParts { proxies, group: Some(group), shared }
+            ExitParts {
+                proxies,
+                group: Some(group),
+                shared,
+            }
         }
         ExitKind::Direct => {
             let mut entries = vec![("name", s(&exit.name)), ("type", s("direct"))];
             if let Some(i) = iface {
                 entries.push(("interface-name", s(i)));
             }
-            ExitParts { proxies: vec![map(entries)], group: None, shared: vec![] }
+            ExitParts {
+                proxies: vec![map(entries)],
+                group: None,
+                shared: vec![],
+            }
         }
     };
     (!parts.proxies.is_empty() || !parts.shared.is_empty()).then_some(parts)
@@ -271,6 +283,37 @@ fn fingerprint(parts: &ExitParts) -> u64 {
         all.push(Value::Mapping(g));
     }
     hash_yaml(&Value::Sequence(all))
+}
+
+/// Measurement identity, independent of listener names, UI groups and update intervals.
+/// Base nodes and per-exit copies deliberately have different identities.
+pub fn delay_fingerprints(model: &Model, health: &Health, nics: &[NetInterface]) -> HashMap<String, u64> {
+    let mut out = HashMap::new();
+    let mut record = |name: String, path: Value| {
+        out.insert(name, hash_yaml(&map(vec![("path", path), ("url", s(&model.settings.delay_test_url))])));
+    };
+    for sub in &model.subscriptions {
+        for node in &sub.nodes {
+            let name = node_proxy_name(sub, node);
+            if let Some(proxy) = proxy_copy(&node.raw, &name, None) {
+                record(name, proxy);
+            }
+        }
+    }
+    for node in &model.manual_nodes {
+        let proxy = match &node.kind {
+            ManualNodeKind::Proxy { raw } => proxy_copy(raw, &manual_proxy_name(node), None),
+            ManualNodeKind::Tailscale(opts) => tailscale_def(node, opts, nics),
+        };
+        if let Some(proxy) = proxy { record(manual_proxy_name(node), proxy); }
+    }
+    for exit in &model.exits {
+        let Some(h) = health.exits.get(&exit.id).filter(|h| h.status == ExitStatus::Ok) else { continue };
+        let Some(parts) = exit_parts(model, exit, h, nics) else { continue };
+        let selected = match &exit.kind { ExitKind::Group { selected, .. } => serde_yaml_ng::to_value(selected).expect("selection serialization"), _ => Value::Null };
+        record(exit.name.clone(), map(vec![("config", Value::from(fingerprint(&parts))), ("selected", selected)]));
+    }
+    out
 }
 
 fn base_config(
@@ -336,16 +379,25 @@ pub fn generate(input: &GenInput) -> Generated {
     let mut fingerprints: BTreeMap<&ExitId, u64> = BTreeMap::new();
 
     for exit in &model.exits {
-        let Some(h) = input.health.exits.get(&exit.id) else { continue };
+        let Some(h) = input.health.exits.get(&exit.id) else {
+            continue;
+        };
         if h.status != ExitStatus::Ok {
             continue;
         }
-        let Some(parts) = exit_parts(model, exit, h, input.nics) else { continue };
+        let Some(parts) = exit_parts(model, exit, h, input.nics) else {
+            continue;
+        };
         fingerprints.insert(&exit.id, fingerprint(&parts));
         proxies.extend(parts.proxies);
         groups.extend(parts.group);
 
-        if let ExitKind::Group { strategy: GroupStrategy::Select, selected: Some(sel), .. } = &exit.kind {
+        if let ExitKind::Group {
+            strategy: GroupStrategy::Select,
+            selected: Some(sel),
+            ..
+        } = &exit.kind
+        {
             if h.effective_members.contains(sel) {
                 let member = match resolve(model, sel) {
                     Some(Resolved::Copyable { base_name, raw }) if raw.is_object() => {
@@ -363,6 +415,7 @@ pub fn generate(input: &GenInput) -> Generated {
         }
     }
 
+    let mut sub_rules = Mapping::new();
     let mut listeners = Vec::new();
     let mut plan = BTreeMap::new();
     for l in &model.listeners {
@@ -372,25 +425,43 @@ pub fn generate(input: &GenInput) -> Generated {
         let Some(exit) = l.exit.as_ref().and_then(|id| model.exits.iter().find(|e| &e.id == id)) else {
             continue;
         };
-        let Some(&fp) = fingerprints.get(&exit.id) else { continue };
+        let Some(&fp) = fingerprints.get(&exit.id) else {
+            continue;
+        };
         let ty = match l.listener_type {
             ListenerType::Mixed => "mixed",
             ListenerType::Http => "http",
             ListenerType::Socks => "socks",
         };
-        let mut own = vec![
-            ("type", s(ty)),
-            ("listen", s(&l.listen)),
-            ("port", Value::from(l.port)),
-        ];
+        let mut own = vec![("type", s(ty)), ("listen", s(&l.listen)), ("port", Value::from(l.port))];
         if let Some(a) = &l.auth {
             let user = map(vec![("username", s(&a.username)), ("password", s(&a.password))]);
             own.push(("users", Value::Sequence(vec![user])));
         }
-        let listener_fingerprint = hash_yaml(&map(own.clone()));
+        let mut fingerprint_fields = own.clone();
+        fingerprint_fields.push(("routing", json_to_yaml(&serde_json::to_value(&l.routing).expect("routing"))));
+        let listener_fingerprint = hash_yaml(&map(fingerprint_fields));
         let mut entries = vec![("name", s(&l.name))];
         entries.extend(own.drain(..3));
-        entries.push(("proxy", s(&exit.name)));
+        if let Some(routing) = &l.routing {
+            let alias = format!("__port_{}", l.id.0);
+            let target_alias = format!("__target_{}", l.id.0);
+            groups.push(map(vec![("name", s(&target_alias)), ("type", s("select")), ("proxies", Value::Sequence(vec![s(&exit.name)]))]));
+            let direct_alias = format!("__direct_{}", l.id.0);
+            let mut direct = vec![("name", s(&direct_alias)), ("type", s("direct"))];
+            if let Some(nic) = input.health.exits.get(&exit.id).and_then(|h| h.interface.as_ref()) { direct.push(("interface-name", s(&nic.mihomo_name))); }
+            proxies.push(map(direct));
+            let action = |a: &RuleAction| match a { RuleAction::Proxy => target_alias.as_str(), RuleAction::Direct => direct_alias.as_str(), RuleAction::Reject => "REJECT" };
+            let mut rules: Vec<Value> = routing.rules.iter().map(|r| {
+                let ty = match r.matcher { RuleMatch::Domain => "DOMAIN", RuleMatch::DomainSuffix => "DOMAIN-SUFFIX", RuleMatch::Ipv4Cidr => "IP-CIDR" };
+                s(&format!("{},{},{}", ty, r.value, action(&r.action)))
+            }).collect();
+            rules.push(s(&format!("MATCH,{}", action(&routing.unmatched))));
+            sub_rules.insert(s(&alias), Value::Sequence(rules));
+            entries.push(("rule", s(&alias)));
+        } else {
+            entries.push(("proxy", s(&exit.name)));
+        }
         entries.extend(own);
         listeners.push(map(entries));
         plan.insert(
@@ -406,24 +477,88 @@ pub fn generate(input: &GenInput) -> Generated {
     }
 
     for (exit_id, port) in input.fetch_listeners {
+        let selected = model.subscriptions.iter().find(|s| s.fallback_exit.as_ref() == Some(exit_id)).and_then(|s| s.fallback_listener.as_ref());
+        if selected.is_some_and(|id| input.health.listeners.get(id) != Some(&ListenerStatus::Active)) { continue; }
         if !fingerprints.contains_key(exit_id) {
             continue;
         }
-        let Some(exit) = model.exits.iter().find(|e| &e.id == exit_id) else { continue };
+        let Some(exit) = model.exits.iter().find(|e| &e.id == exit_id) else {
+            continue;
+        };
+        let routed = model.listeners.iter().find(|l| l.exit.as_ref() == Some(exit_id) && l.routing.is_some());
+        let destination = routed.map(|l| ("rule", s(&format!("__port_{}", l.id.0)))).filter(|(_, name)| sub_rules.contains_key(name)).unwrap_or(("proxy", s(&exit.name)));
         listeners.push(map(vec![
             ("name", s(&format!("__fetch__{}", exit_id.0))),
             ("type", s("mixed")),
             ("listen", s("127.0.0.1")),
             ("port", Value::from(*port)),
-            ("proxy", s(&exit.name)),
+            destination,
         ]));
     }
 
+    let mut root: Value = serde_yaml_ng::from_str(&base_config(model.settings.controller_port, input.secret, proxies, groups, listeners)).expect("generated config");
+    if !sub_rules.is_empty() { root["sub-rules"] = Value::Mapping(sub_rules); }
     Generated {
-        yaml: base_config(model.settings.controller_port, input.secret, proxies, groups, listeners),
+        yaml: serde_yaml_ng::to_string(&root).expect("routing config"),
         plan: EffectivePlan { listeners: plan },
         selects,
     }
+}
+
+/// TUN has its own explicit exit. User listeners keep their per-listener proxy.
+/// An invalid exit is rejected rather than falling back to DIRECT.
+pub fn generate_for_capture(input: &GenInput, tun_exit: Option<&ExitId>) -> Generated {
+    let mut generated = generate(input);
+    let Some(id) = tun_exit else { return generated };
+    let mut root: Value = serde_yaml_ng::from_str(&generated.yaml).expect("generated yaml");
+    let target = input
+        .model
+        .exits
+        .iter()
+        .find(|e| &e.id == id)
+        .filter(|e| {
+            input
+                .health
+                .exits
+                .get(&e.id)
+                .is_some_and(|h| h.status == ExitStatus::Ok)
+        })
+        .map(|e| e.name.as_str())
+        .unwrap_or("REJECT");
+    // A reserved alias keeps user names (including commas) out of the rule grammar.
+    root["proxy-groups"]
+        .as_sequence_mut()
+        .expect("proxy groups")
+        .push(map(vec![
+            ("name", s("__routa_tun__")),
+            ("type", s("select")),
+            ("proxies", Value::Sequence(vec![s(target)])),
+        ]));
+    root["rules"] = Value::Sequence(vec![s("MATCH,__routa_tun__")]);
+    if let Some(l) = input.model.listeners.iter().find(|l| l.exit.as_ref() == Some(id) && l.routing.is_some()) {
+        if let Some(rules) = root.get("sub-rules").and_then(|v| v.get(format!("__port_{}", l.id.0))).cloned() { root["rules"] = rules; }
+    }
+    root["auto-detect-interface"] = Value::Bool(true);
+    root["tun"] = map(vec![
+        ("enable", Value::Bool(true)),
+        ("device", s("RoutaTun")),
+        ("stack", s("gvisor")),
+        ("auto-route", Value::Bool(true)),
+        ("strict-route", Value::Bool(true)),
+        ("auto-detect-interface", Value::Bool(true)),
+        ("dns-hijack", Value::Sequence(vec![s("any:53"), s("tcp://any:53")])),
+    ]);
+    root["dns"] = map(vec![
+        ("enable", Value::Bool(true)),
+        ("enhanced-mode", s("fake-ip")),
+        ("fake-ip-range", s("198.18.0.1/16")),
+        (
+            "nameserver",
+            Value::Sequence(vec![s("https://1.1.1.1/dns-query"), s("https://8.8.8.8/dns-query")]),
+        ),
+    ]);
+    generated.yaml = serde_yaml_ng::to_string(&root).expect("capture yaml");
+    generated
 }
 
 #[cfg(test)]
@@ -456,10 +591,13 @@ mod tests {
         }
     }
     fn nref(n: &str) -> NodeRef {
-        NodeRef::Subscription { subscription_id: SubscriptionId("s1".into()), name: n.into() }
+        NodeRef::Subscription { subscription_id: SubscriptionId("s1".into()),
+            name: n.into(),
+        }
     }
     fn base() -> Model {
         let sub = Subscription {
+            fallback_listener: None,
             id: SubscriptionId("s1".into()),
             name: "机场".into(),
             url: "https://x".into(),
@@ -468,7 +606,9 @@ mod tests {
             last_updated: None,
             last_result: None,
             nodes: vec![
-                node(json!({"name":"HK 01","type":"ss","server":"1.1.1.1","port":443,"cipher":"aes-128-gcm","password":"pw"})),
+                node(
+                    json!({"name":"HK 01","type":"ss","server":"1.1.1.1","port":443,"cipher":"aes-128-gcm","password":"pw"}),
+                ),
                 node(json!({"name":"JP 01","type":"trojan","server":"jp.example.com","port":443,"password":"pw2"})),
             ],
         };
@@ -479,6 +619,7 @@ mod tests {
             interface: Some(InterfaceGuid(g.into())),
         };
         let lis = |id: &str, name: &str, t, listen: &str, port, auth, e: &str| Listener {
+            routing: None,
             id: ListenerId(id.into()),
             name: name.into(),
             listener_type: t,
@@ -505,7 +646,18 @@ mod tests {
                 exit("ec", "出口C", ExitKind::Direct, "{G3}"),
             ],
             listeners: vec![
-                lis("la", "入口A", ListenerType::Mixed, "0.0.0.0", 7891, Some(Auth { username: "u".into(), password: "p".into() }), "ea"),
+                lis(
+                    "la",
+                    "入口A",
+                    ListenerType::Mixed,
+                    "0.0.0.0",
+                    7891,
+                    Some(Auth {
+                        username: "u".into(),
+                        password: "p".into(),
+                    }),
+                    "ea",
+                ),
                 lis("lb", "入口B", ListenerType::Http, "127.0.0.1", 7892, None, "eb"),
                 lis("lc", "入口C", ListenerType::Socks, "0.0.0.0", 7893, None, "ec"),
             ],
@@ -517,7 +669,13 @@ mod tests {
     }
     fn gen_with(m: &Model, nics: &[NetInterface], fetch: &[(ExitId, u16)]) -> Generated {
         let h = evaluate(m, nics);
-        generate(&GenInput { model: m, health: &h, secret: "sekret", fetch_listeners: fetch, nics })
+        generate(&GenInput {
+            model: m,
+            health: &h,
+            secret: "sekret",
+            fetch_listeners: fetch,
+            nics,
+        })
     }
     fn gen(m: &Model) -> Generated {
         gen_with(m, &nics(), &[])
@@ -526,13 +684,146 @@ mod tests {
         serde_yaml_ng::from_str(y).unwrap()
     }
     fn names(v: &serde_yaml_ng::Value, key: &str) -> Vec<String> {
-        v[key].as_sequence().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect()
+        v[key]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn per_port_rules_checked_by_bundled_core_and_isolated_from_forwarding() {
+        let mut m = Model::default();
+        let e = Exit { name: "outbound".into(), ..Exit::default() };
+        let free = || std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        m.settings.controller_port = free();
+        let rules_port=free(); let forward_port=free();
+        let mut l = Listener::new_default("rules-port".into(), rules_port);
+        l.exit = Some(e.id.clone());
+        l.routing = Some(ListenerRouting { rules: vec![PortRule { matcher: RuleMatch::DomainSuffix, value: "example.com".into(), action: RuleAction::Reject }, PortRule {matcher:RuleMatch::Domain,value:"localhost".into(),action:RuleAction::Direct}, PortRule {matcher:RuleMatch::Ipv4Cidr,value:"127.0.0.0/8".into(),action:RuleAction::Proxy}], unmatched: RuleAction::Direct });
+        let mut forward = Listener::new_default("forward-port".into(), forward_port);
+        forward.exit = Some(e.id.clone());
+        m.exits.push(e); m.listeners = vec![l, forward];
+        let h = evaluate(&m, &[]);
+        let g = generate(&GenInput { model: &m, health: &h, secret: "test", fetch_listeners: &[], nics: &[] });
+        let v: Value = serde_yaml_ng::from_str(&g.yaml).unwrap();
+        assert!(v["listeners"][0].get("proxy").is_none());
+        assert!(v["listeners"][0].get("rule").is_some());
+        assert_eq!(v["listeners"][1]["proxy"], "outbound");
+        let td = tempfile::tempdir().unwrap();
+        let config = td.path().join("config.yaml"); std::fs::write(&config, &g.yaml).unwrap();
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries/mihomo-x86_64-pc-windows-msvc.exe");
+        let result = std::process::Command::new(bin).arg("-t").arg("-d").arg(td.path()).arg("-f").arg(&config).output().unwrap();
+        assert!(result.status.success(), "{} {}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+        // Real loopback HTTP traffic through both generated listeners.
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let origin = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin_port = origin.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                loop {
+                    let Ok((mut socket, _)) = origin.accept().await else { break; };
+                    tokio::spawn(async move { let mut buf = [0;4096]; let _ = socket.read(&mut buf).await; let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nrouta-ok").await; });
+                }
+            });
+            struct ChildGuard(std::process::Child);
+            impl Drop for ChildGuard { fn drop(&mut self) { let _=self.0.kill(); let _=self.0.wait(); } }
+            let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries/mihomo-x86_64-pc-windows-msvc.exe");
+            let _child = ChildGuard(std::process::Command::new(bin).arg("-d").arg(td.path()).arg("-f").arg(&config).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap());
+            let mut ready = false;
+            for _ in 0..100 { if tokio::net::TcpStream::connect(("127.0.0.1",rules_port)).await.is_ok() { ready=true; break; } tokio::time::sleep(std::time::Duration::from_millis(50)).await; }
+            assert!(ready, "bundled core did not start");
+            let routed = reqwest::Client::builder().proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{rules_port}")).unwrap()).timeout(std::time::Duration::from_secs(3)).build().unwrap();
+            let forwarded = reqwest::Client::builder().proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{forward_port}")).unwrap()).timeout(std::time::Duration::from_secs(3)).build().unwrap();
+            let body = routed.get(format!("http://127.0.0.1:{origin_port}/")).send().await.unwrap().text().await.unwrap(); assert_eq!(body,"routa-ok");
+            let direct = routed.get(format!("http://localhost:{origin_port}/")).send().await.unwrap().text().await.unwrap(); assert_eq!(direct,"routa-ok");
+            let blocked = routed.get("http://example.com/").send().await;
+            assert!(blocked.is_err() || !blocked.unwrap().status().is_success());
+            let body = forwarded.get(format!("http://127.0.0.1:{origin_port}/")).send().await.unwrap().text().await.unwrap(); assert_eq!(body,"routa-ok");
+            server.abort();
+        });
+        let before = g.plan.listeners["rules-port"].listener_fingerprint;
+        m.listeners[0].routing.as_mut().unwrap().unmatched = RuleAction::Reject;
+        let after = generate(&GenInput { model: &m, health: &h, secret: "test", fetch_listeners: &[], nics: &[] });
+        assert_ne!(before, after.plan.listeners["rules-port"].listener_fingerprint);
+        assert_eq!(g.plan.listeners["forward-port"], after.plan.listeners["forward-port"]);
     }
 
     #[test]
     fn basic_matches_fixture() {
         let expected = include_str!("../../tests/fixtures/gen_expected_basic.yaml").replace("\r\n", "\n");
         assert_eq!(gen(&base()).yaml, expected);
+    }
+
+    #[test]
+    fn tun_uses_reserved_alias_and_rejects_a_missing_exit() {
+        let mut m = base();
+        m.exits[0].name = "出口,包含逗号".into();
+        let adapters = nics();
+        let h = evaluate(&m, &adapters);
+        let input = GenInput {
+            model: &m,
+            health: &h,
+            secret: "test",
+            fetch_listeners: &[],
+            nics: &adapters,
+        };
+        let enabled = parse(&generate_for_capture(&input, Some(&m.exits[0].id)).yaml);
+        assert_eq!(enabled["tun"]["enable"], true);
+        assert_eq!(enabled["rules"][0], "MATCH,__routa_tun__");
+        let alias = enabled["proxy-groups"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|g| g["name"] == "__routa_tun__")
+            .unwrap();
+        assert_eq!(alias["proxies"][0], "出口,包含逗号");
+        let missing = parse(&generate_for_capture(&input, Some(&ExitId("missing".into()))).yaml);
+        let alias = missing["proxy-groups"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|g| g["name"] == "__routa_tun__")
+            .unwrap();
+        assert_eq!(alias["proxies"][0], "REJECT");
+        assert_eq!(generate_for_capture(&input, None), generate(&input));
+    }
+
+    #[test]
+    #[ignore = "requires MIHOMO_BIN; validates YAML only, does not start networking"]
+    fn real_core_accepts_tun_capture_config() {
+        let mut m = base();
+        for e in &mut m.exits {
+            e.interface = None;
+        }
+        let h = evaluate(&m, &[]);
+        let g = generate_for_capture(
+            &GenInput {
+                model: &m,
+                health: &h,
+                secret: "test",
+                fetch_listeners: &[],
+                nics: &[],
+            },
+            Some(&m.exits[0].id),
+        );
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("tun.yaml");
+        std::fs::write(&path, g.yaml).unwrap();
+        let output = std::process::Command::new(std::env::var("MIHOMO_BIN").expect("MIHOMO_BIN"))
+            .args(["-t", "-f"])
+            .arg(&path)
+            .arg("-d")
+            .arg(td.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -575,7 +866,10 @@ mod tests {
         let mut m = base();
         m.subscriptions[0].nodes.remove(1); // JP 01 gone
         let v = parse(&gen(&m).yaml);
-        assert_eq!(v["proxy-groups"][0]["proxies"], serde_yaml_ng::to_value(["出口B/机场/HK 01"]).unwrap());
+        assert_eq!(
+            v["proxy-groups"][0]["proxies"],
+            serde_yaml_ng::to_value(["出口B/机场/HK 01"]).unwrap()
+        );
         let ps = names(&v, "proxies");
         assert!(!ps.contains(&"出口B/机场/JP 01".to_string()));
         assert!(ps.contains(&"出口B/机场/HK 01".to_string()));
@@ -613,7 +907,16 @@ mod tests {
         m.exits[0].interface = None; // no-NIC node exit
         let h = evaluate(&m, &nics());
         let n = nics();
-        let v = parse(&generate(&GenInput { model: &m, health: &h, secret: "s", fetch_listeners: &[], nics: &n }).yaml);
+        let v = parse(
+            &generate(&GenInput {
+                model: &m,
+                health: &h,
+                secret: "s",
+                fetch_listeners: &[],
+                nics: &n,
+            })
+            .yaml,
+        );
         let ps = v["proxies"].as_sequence().unwrap();
         let get = |n: &str| ps.iter().find(|p| p["name"].as_str() == Some(n)).unwrap();
         for n in ["机场/HK 01", "出口A"] {
@@ -624,7 +927,15 @@ mod tests {
         let member = get("出口B/机场/HK 01");
         assert_eq!(member["interface-name"], "WLAN");
         assert!(member.get("routing-mark").is_none() && member.get("dialer-proxy").is_none());
-        assert_eq!(member.as_mapping().unwrap().keys().filter(|k| *k == "interface-name").count(), 1);
+        assert_eq!(
+            member
+                .as_mapping()
+                .unwrap()
+                .keys()
+                .filter(|k| *k == "interface-name")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -638,7 +949,10 @@ mod tests {
         assert!(!ps.contains(&"出口A".to_string()));
         assert!(!ps.contains(&"出口B/机场/HK 01".to_string()));
         assert!(ps.contains(&"出口B/机场/JP 01".to_string()));
-        assert_eq!(v["proxy-groups"][0]["proxies"], serde_yaml_ng::to_value(["出口B/机场/JP 01"]).unwrap());
+        assert_eq!(
+            v["proxy-groups"][0]["proxies"],
+            serde_yaml_ng::to_value(["出口B/机场/JP 01"]).unwrap()
+        );
         assert_eq!(names(&v, "listeners"), ["入口B", "入口C"]);
         assert!(!g.plan.listeners.contains_key("入口A"));
     }
@@ -690,7 +1004,10 @@ mod tests {
         assert_eq!(fp(&before, "入口A"), fp(&after, "入口A"));
         assert_eq!(fp(&before, "入口C"), fp(&after, "入口C"));
         let p = &before.plan.listeners["入口B"];
-        assert_eq!((p.exit_name.as_str(), p.port, &p.id), ("出口B", 7892, &ListenerId("lb".into())));
+        assert_eq!(
+            (p.exit_name.as_str(), p.port, &p.id),
+            ("出口B", 7892, &ListenerId("lb".into()))
+        );
     }
 
     #[test]
@@ -780,7 +1097,9 @@ mod tests {
     }
 
     fn mref(id: &str) -> NodeRef {
-        NodeRef::Manual { manual_id: ManualNodeId(id.into()) }
+        NodeRef::Manual {
+            manual_id: ManualNodeId(id.into()),
+        }
     }
     fn proxy_manual(id: &str, name: &str, groups: &[&str]) -> ManualNode {
         ManualNode {
@@ -804,25 +1123,43 @@ mod tests {
         }
     }
     fn custom(gid: &str) -> ExitMember {
-        ExitMember::Group { group: GroupRef::Custom(NodeGroupId(gid.into())) }
+        ExitMember::Group {
+            group: GroupRef::Custom(NodeGroupId(gid.into())),
+        }
     }
     fn group_kind(members: Vec<ExitMember>) -> ExitKind {
-        ExitKind::Group { strategy: GroupStrategy::Fallback, members, selected: None }
+        ExitKind::Group {
+            strategy: GroupStrategy::Fallback,
+            members,
+            selected: None,
+        }
     }
     fn find<'v>(v: &'v serde_yaml_ng::Value, key: &str, name: &str) -> Option<&'v serde_yaml_ng::Value> {
-        v[key].as_sequence().unwrap().iter().find(|p| p["name"].as_str() == Some(name))
+        v[key]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"].as_str() == Some(name))
     }
     fn seq(xs: &[&str]) -> serde_yaml_ng::Value {
         serde_yaml_ng::to_value(xs).unwrap()
     }
     fn keys(p: &serde_yaml_ng::Value) -> Vec<String> {
-        p.as_mapping().unwrap().keys().map(|k| k.as_str().unwrap().to_string()).collect()
+        p.as_mapping()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str().unwrap().to_string())
+            .collect()
     }
     /// 出口B (Group, G2) holds custom group g1.
     fn with_group_exit(nodes: Vec<ManualNode>) -> Model {
         let mut m = base();
         m.manual_nodes = nodes;
-        m.node_groups = vec![NodeGroup { id: NodeGroupId("g1".into()), name: "组".into() }];
+        m.node_groups = vec![NodeGroup {
+            members: vec![],
+            id: NodeGroupId("g1".into()),
+            name: "组".into(),
+        }];
         m.exits[1].kind = group_kind(vec![custom("g1")]);
         m
     }
@@ -836,7 +1173,10 @@ mod tests {
         assert!(ps.contains(&"出口B/手动/a".to_string()), "{ps:?}");
         assert!(find(&v, "proxies", "手动/a").unwrap().get("interface-name").is_none());
         assert_eq!(find(&v, "proxies", "出口B/手动/a").unwrap()["interface-name"], "WLAN");
-        assert_eq!(find(&v, "proxy-groups", "出口B").unwrap()["proxies"], seq(&["出口B/手动/a"]));
+        assert_eq!(
+            find(&v, "proxy-groups", "出口B").unwrap()["proxies"],
+            seq(&["出口B/手动/a"])
+        );
     }
 
     #[test]
@@ -844,7 +1184,10 @@ mod tests {
         let mut m = with_group_exit(vec![proxy_manual("m1", "a", &["g1"])]);
         m.manual_nodes[0].name = "b".into();
         let ps = names(&parse(&gen(&m).yaml), "proxies");
-        assert!(ps.contains(&"手动/b".to_string()) && ps.contains(&"出口B/手动/b".to_string()), "{ps:?}");
+        assert!(
+            ps.contains(&"手动/b".to_string()) && ps.contains(&"出口B/手动/b".to_string()),
+            "{ps:?}"
+        );
         assert!(!ps.iter().any(|p| p.ends_with("手动/a")), "{ps:?}");
     }
 
@@ -859,8 +1202,12 @@ mod tests {
             interface: None,
         });
         let v = parse(&gen(&m).yaml);
-        let ts: Vec<_> =
-            v["proxies"].as_sequence().unwrap().iter().filter(|p| p["type"] == "tailscale").collect();
+        let ts: Vec<_> = v["proxies"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .filter(|p| p["type"] == "tailscale")
+            .collect();
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0]["name"], "手动/ts");
         assert_eq!(ts[0]["state-dir"], "tailscale/t1");
@@ -868,9 +1215,16 @@ mod tests {
         assert_eq!(ts[0]["exit-node"], "100.64.0.9");
         assert_eq!(ts[0]["udp"], true);
         assert_eq!(ts[0]["ephemeral"], false);
-        assert_eq!(keys(ts[0]), ["name", "type", "hostname", "state-dir", "ephemeral", "udp", "exit-node"]);
+        assert_eq!(
+            keys(ts[0]),
+            ["name", "type", "hostname", "state-dir", "ephemeral", "udp", "exit-node"]
+        );
         for g in ["出口B", "出口D"] {
-            assert_eq!(find(&v, "proxy-groups", g).unwrap()["proxies"], seq(&["手动/ts"]), "{g}");
+            assert_eq!(
+                find(&v, "proxy-groups", g).unwrap()["proxies"],
+                seq(&["手动/ts"]),
+                "{g}"
+            );
         }
     }
 
@@ -929,7 +1283,11 @@ mod tests {
         assert_eq!(h.exits[&ExitId("ea".into())].status, ExitStatus::InterfaceUnavailable);
         let g = gen(&m);
         let v = parse(&g.yaml);
-        assert!(!v["proxies"].as_sequence().unwrap().iter().any(|p| p["type"] == "tailscale"));
+        assert!(!v["proxies"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|p| p["type"] == "tailscale"));
         assert!(find(&v, "proxy-groups", "出口A").is_none());
         assert!(find(&v, "listeners", "入口A").is_none());
         assert!(!g.plan.listeners.contains_key("入口A"));
@@ -953,7 +1311,10 @@ mod tests {
         ]);
         m.exits[1].interface = None;
         let v = parse(&gen(&m).yaml);
-        assert_eq!(find(&v, "proxy-groups", "出口B").unwrap()["proxies"], seq(&["出口B/手动/a"]));
+        assert_eq!(
+            find(&v, "proxy-groups", "出口B").unwrap()["proxies"],
+            seq(&["出口B/手动/a"])
+        );
         // Only the missing instance: the exit is not emitted at all.
         let mut m = with_group_exit(vec![ts_manual("t1", "ts", &["g1"], Some("{GONE}"))]);
         m.exits[1].interface = None;
@@ -968,7 +1329,9 @@ mod tests {
         let mut m = base();
         m.exits[1].kind = group_kind(vec![
             ExitMember::Node(nref("HK 01")),
-            ExitMember::Group { group: GroupRef::Subscription(SubscriptionId("s1".into())) },
+            ExitMember::Group {
+                group: GroupRef::Subscription(SubscriptionId("s1".into())),
+            },
         ]);
         let v = parse(&gen(&m).yaml);
         assert_eq!(
@@ -1000,7 +1363,10 @@ mod tests {
 
     #[test]
     fn select_tailscale_member_uses_shared_name() {
-        let mut m = with_group_exit(vec![ts_manual("t1", "ts", &["g1"], None), proxy_manual("m1", "a", &["g1"])]);
+        let mut m = with_group_exit(vec![
+            ts_manual("t1", "ts", &["g1"], None),
+            proxy_manual("m1", "a", &["g1"]),
+        ]);
         m.exits[1].interface = None;
         m.exits[1].kind = ExitKind::Group {
             strategy: GroupStrategy::Select,

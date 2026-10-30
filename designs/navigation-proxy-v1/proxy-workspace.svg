@@ -1,0 +1,206 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+<title>Routa 代理工作区设计稿：监听器与进程左右分栏，设置固定底部</title>
+<g font-family="Segoe UI,Microsoft YaHei UI,Microsoft YaHei,sans-serif">
+<rect x="0" y="0" width="1440" height="900" rx="10" fill="#202020" stroke="none"/>
+<rect x="0" y="0" width="1440" height="34" rx="0" fill="#1c1c1c" stroke="none"/>
+<rect x="14" y="10" width="14" height="14" rx="3" fill="#4cc2ff" stroke="none"/>
+<text x="37" y="22" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">Routa</text>
+<path d="M1311 17L1321 17" fill="none" stroke="#bcbcbc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1361" y="12" width="10" height="10" rx="0" fill="none" stroke="#bcbcbc"/>
+<path d="M1410 12l10 10m0-10-10 10" fill="none" stroke="#bcbcbc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="0" y="34" width="204" height="866" rx="0" fill="#202020" stroke="none"/>
+<rect x="22" y="60" width="28" height="28" rx="7" fill="#4cc2ff" stroke="none"/>
+<path d="M30 66v10q0 4 4 4h8M40 66v9m-3-3 3 3 3-3" fill="none" stroke="#17222b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="62" y="81" font-size="18" fill="#f3f3f3" font-weight="600" text-anchor="start">Routa</text>
+<rect x="26" y="128" width="6" height="6" rx="1" fill="none" stroke="#bcbcbc"/>
+<rect x="36" y="128" width="6" height="6" rx="1" fill="none" stroke="#bcbcbc"/>
+<rect x="26" y="138" width="6" height="6" rx="1" fill="none" stroke="#bcbcbc"/>
+<rect x="36" y="138" width="6" height="6" rx="1" fill="none" stroke="#bcbcbc"/>
+<text x="59" y="142" font-size="14" fill="#bcbcbc" font-weight="400" text-anchor="start">概览</text>
+<rect x="10" y="164" width="184" height="40" rx="6" fill="#303030" stroke="none"/>
+<rect x="10" y="175" width="3" height="18" rx="1.5" fill="#4cc2ff" stroke="none"/>
+<path d="M26 181h16m-4-4 4 4-4 4M42 189H26m4-4-4 4 4 4" fill="none" stroke="#f3f3f3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="59" y="190" font-size="14" fill="#f3f3f3" font-weight="600" text-anchor="start">代理</text>
+<path d="M34 241v-7l-6-7m0 5V227h5M34 234l6-7m-5 0h5v5" fill="none" stroke="#bcbcbc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="59" y="238" font-size="14" fill="#bcbcbc" font-weight="400" text-anchor="start">出口</text>
+<path d="M34 280L27 275" fill="none" stroke="#bcbcbc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="27" cy="275" r="2" fill="#bcbcbc"/>
+<path d="M34 280L41 275" fill="none" stroke="#bcbcbc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="41" cy="275" r="2" fill="#bcbcbc"/>
+<path d="M34 280L34 288" fill="none" stroke="#bcbcbc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="34" cy="288" r="2" fill="#bcbcbc"/>
+<circle cx="34" cy="280" r="2.5" fill="#bcbcbc"/>
+<text x="59" y="286" font-size="14" fill="#bcbcbc" font-weight="400" text-anchor="start">订阅与节点</text>
+<path d="M22 794L182 794" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="34" cy="827" r="6.5" fill="none" stroke="#bcbcbc" stroke-width="3" stroke-dasharray="3 3"/>
+<circle cx="34" cy="827" r="2.7" fill="none" stroke="#bcbcbc" stroke-width="1.4"/>
+<text x="59" y="833" font-size="14" fill="#bcbcbc" font-weight="400" text-anchor="start">设置</text>
+<text x="24" y="878" font-size="11" fill="#929292" font-weight="400" text-anchor="start">v0.2.0</text>
+<text x="236" y="103" font-size="28" fill="#f3f3f3" font-weight="600" text-anchor="start">代理</text>
+<circle cx="1280" cy="95" r="3" fill="#82cd8c"/>
+<text x="1292" y="100" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">内核运行中</text>
+<text x="236" y="137" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">监听器</text>
+<text x="286" y="137" font-size="12" fill="#f3f3f3" font-weight="600" text-anchor="start">3</text>
+<text x="314" y="137" font-size="12" fill="#929292" font-weight="400" text-anchor="start">·</text>
+<text x="332" y="137" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">进程规则</text>
+<text x="395" y="137" font-size="12" fill="#f3f3f3" font-weight="600" text-anchor="start">3</text>
+<text x="1408" y="137" font-size="11" fill="#929292" font-weight="400" text-anchor="end">设计预览 · 示例数据</text>
+<rect x="236" y="164" width="516" height="648" rx="8" fill="#272727" stroke="#3b3b3b"/>
+<path d="M262 188h10v16H262M256 196h10m-3-3 3 3-3 3" fill="none" stroke="#f3f3f3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="282" y="202" font-size="17" fill="#f3f3f3" font-weight="600" text-anchor="start">监听器</text>
+<circle cx="351" cy="196" r="7" fill="none" stroke="#929292"/>
+<text x="351" y="200" font-size="10" fill="#bcbcbc" font-weight="500" text-anchor="middle">i</text>
+<rect x="618" y="180" width="114" height="34" rx="5" fill="#333333" stroke="#454545"/>
+<text x="675.0" y="202" font-size="12" fill="#f3f3f3" font-weight="500" text-anchor="middle">＋ 新建监听器</text>
+<path d="M236 220L752 220" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="252" y="236" width="484" height="158" rx="6" fill="#2d2d2d" stroke="#3e3e3e"/>
+<text x="270" y="265" font-size="22" fill="#f3f3f3" font-weight="600" text-anchor="start">7881</text>
+<rect x="336" y="247" width="43" height="23" rx="4" fill="#3a3a3a" stroke="none"/>
+<text x="357.5" y="263" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="middle">混合</text>
+<text x="391" y="264" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">监听器 01</text>
+<rect x="655" y="251" width="34" height="18" rx="9" fill="#4cc2ff" stroke="none"/>
+<circle cx="680" cy="260" r="6" fill="#202020"/>
+<circle cx="708" cy="260" r="1" fill="#bcbcbc"/>
+<circle cx="712" cy="260" r="1" fill="#bcbcbc"/>
+<circle cx="716" cy="260" r="1" fill="#bcbcbc"/>
+<text x="270" y="291" font-size="11" fill="#929292" font-weight="400" text-anchor="start">127.0.0.1</text>
+<rect x="349" y="283" width="8" height="10" rx="1" fill="none" stroke="#929292"/>
+<path d="M353 280H345v10" fill="none" stroke="#929292" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="384" cy="287" r="2.5" fill="#82cd8c"/>
+<text x="395" y="291" font-size="11" fill="#82cd8c" font-weight="400" text-anchor="start">运行中</text>
+<text x="270" y="322" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">出口</text>
+<text x="718" y="322" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="end">2 个进程</text>
+<rect x="270" y="335" width="220" height="34" rx="5" fill="#313131" stroke="#484848"/>
+<text x="282" y="357" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">日常出口</text>
+<path d="M468 349l4 4 4-4" fill="none" stroke="#bcbcbc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="508" y="349" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">香港 01</text>
+<text x="508" y="368" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">42 ms</text>
+<rect x="252" y="410" width="484" height="158" rx="6" fill="#2d2d2d" stroke="#3e3e3e"/>
+<text x="270" y="439" font-size="22" fill="#f3f3f3" font-weight="600" text-anchor="start">7882</text>
+<rect x="336" y="421" width="43" height="23" rx="4" fill="#3a3a3a" stroke="none"/>
+<text x="357.5" y="437" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="middle">混合</text>
+<text x="391" y="438" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">监听器 02</text>
+<rect x="655" y="425" width="34" height="18" rx="9" fill="#4cc2ff" stroke="none"/>
+<circle cx="680" cy="434" r="6" fill="#202020"/>
+<circle cx="708" cy="434" r="1" fill="#bcbcbc"/>
+<circle cx="712" cy="434" r="1" fill="#bcbcbc"/>
+<circle cx="716" cy="434" r="1" fill="#bcbcbc"/>
+<text x="270" y="465" font-size="11" fill="#929292" font-weight="400" text-anchor="start">127.0.0.1</text>
+<rect x="349" y="457" width="8" height="10" rx="1" fill="none" stroke="#929292"/>
+<path d="M353 454H345v10" fill="none" stroke="#929292" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="384" cy="461" r="2.5" fill="#82cd8c"/>
+<text x="395" y="465" font-size="11" fill="#82cd8c" font-weight="400" text-anchor="start">运行中</text>
+<text x="270" y="496" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">出口</text>
+<text x="718" y="496" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="end">1 个进程</text>
+<rect x="270" y="509" width="220" height="34" rx="5" fill="#313131" stroke="#484848"/>
+<text x="282" y="531" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">开发出口</text>
+<path d="M468 523l4 4 4-4" fill="none" stroke="#bcbcbc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="508" y="523" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">新加坡 02</text>
+<text x="508" y="542" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">86 ms</text>
+<rect x="252" y="584" width="484" height="158" rx="6" fill="#2d2d2d" stroke="#3e3e3e"/>
+<text x="270" y="613" font-size="22" fill="#f3f3f3" font-weight="600" text-anchor="start">7883</text>
+<rect x="336" y="595" width="43" height="23" rx="4" fill="#3a3a3a" stroke="none"/>
+<text x="357.5" y="611" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="middle">混合</text>
+<text x="391" y="612" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">监听器 03</text>
+<rect x="655" y="599" width="34" height="18" rx="9" fill="#4cc2ff" stroke="none"/>
+<circle cx="680" cy="608" r="6" fill="#202020"/>
+<circle cx="708" cy="608" r="1" fill="#bcbcbc"/>
+<circle cx="712" cy="608" r="1" fill="#bcbcbc"/>
+<circle cx="716" cy="608" r="1" fill="#bcbcbc"/>
+<text x="270" y="639" font-size="11" fill="#929292" font-weight="400" text-anchor="start">127.0.0.1</text>
+<rect x="349" y="631" width="8" height="10" rx="1" fill="none" stroke="#929292"/>
+<path d="M353 628H345v10" fill="none" stroke="#929292" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="384" cy="635" r="2.5" fill="#82cd8c"/>
+<text x="395" y="639" font-size="11" fill="#82cd8c" font-weight="400" text-anchor="start">运行中</text>
+<text x="270" y="670" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">出口</text>
+<text x="718" y="670" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="end">暂无进程</text>
+<rect x="270" y="683" width="220" height="34" rx="5" fill="#313131" stroke="#484848"/>
+<text x="282" y="705" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">备用出口</text>
+<path d="M468 697l4 4 4-4" fill="none" stroke="#bcbcbc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="508" y="697" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">日本 01</text>
+<text x="508" y="716" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">68 ms</text>
+<path d="M252 776L736 776" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="256" y="798" font-size="11" fill="#929292" font-weight="400" text-anchor="start">默认提供 3 个混合监听器</text>
+<rect x="776" y="164" width="632" height="648" rx="8" fill="#272727" stroke="#3b3b3b"/>
+<rect x="796" y="188" width="6" height="6" rx="1" fill="none" stroke="#f3f3f3"/>
+<rect x="796" y="197" width="6" height="6" rx="1" fill="none" stroke="#f3f3f3"/>
+<rect x="805" y="188" width="6" height="6" rx="1" fill="none" stroke="#f3f3f3"/>
+<rect x="805" y="197" width="6" height="6" rx="1" fill="none" stroke="#f3f3f3"/>
+<text x="822" y="202" font-size="17" fill="#f3f3f3" font-weight="600" text-anchor="start">进程</text>
+<circle cx="889" cy="196" r="2.5" fill="#82cd8c"/>
+<text x="900" y="201" font-size="11" fill="#82cd8c" font-weight="400" text-anchor="start">分流运行中</text>
+<rect x="1020" y="187" width="34" height="18" rx="9" fill="#4cc2ff" stroke="none"/>
+<circle cx="1045" cy="196" r="6" fill="#202020"/>
+<circle cx="1072" cy="196" r="7" fill="none" stroke="#929292"/>
+<text x="1072" y="200" font-size="10" fill="#bcbcbc" font-weight="500" text-anchor="middle">i</text>
+<rect x="1240" y="180" width="148" height="34" rx="5" fill="#4cc2ff" stroke="none"/>
+<text x="1314.0" y="202" font-size="12" fill="#14212a" font-weight="500" text-anchor="middle">＋ 添加进程</text>
+<path d="M776 220L1408 220" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="796" y="239" width="592" height="35" rx="5" fill="#242424" stroke="#424242"/>
+<circle cx="811" cy="254" r="4.5" fill="none" stroke="#929292" stroke-width="1.2"/>
+<path d="M814 257l4 4" fill="none" stroke="#929292" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="831" y="261" font-size="12" fill="#929292" font-weight="400" text-anchor="start">搜索进程名称或路径</text>
+<text x="796" y="306" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">进程</text>
+<text x="1042" y="306" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">监听器</text>
+<text x="1244" y="306" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">状态</text>
+<path d="M796 321L1388 321" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="796" y="345" width="34" height="34" rx="6" fill="#373737" stroke="none"/>
+<circle cx="813" cy="362" r="9" fill="none" stroke="#bcbcbc" stroke-width="1.3"/>
+<path d="M804 362h18M813 353c-5 5-5 13 0 18m0-18c5 5 5 13 0 18" fill="none" stroke="#bcbcbc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="842" y="358" font-size="14" fill="#f3f3f3" font-weight="500" text-anchor="start">chrome.exe</text>
+<text x="842" y="380" font-size="11" fill="#929292" font-weight="400" text-anchor="start">Google Chrome</text>
+<rect x="1042" y="346" width="178" height="34" rx="5" fill="#313131" stroke="#484848"/>
+<text x="1054" y="368" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">7881 · 监听器 01</text>
+<path d="M1198 360l4 4 4-4" fill="none" stroke="#bcbcbc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1250" cy="363" r="2.5" fill="#82cd8c"/>
+<text x="1260" y="368" font-size="11" fill="#82cd8c" font-weight="400" text-anchor="start">已代理</text>
+<rect x="1322" y="354" width="34" height="18" rx="9" fill="#4cc2ff" stroke="none"/>
+<circle cx="1347" cy="363" r="6" fill="#202020"/>
+<circle cx="1372" cy="363" r="1" fill="#bcbcbc"/>
+<circle cx="1376" cy="363" r="1" fill="#bcbcbc"/>
+<circle cx="1380" cy="363" r="1" fill="#bcbcbc"/>
+<path d="M796 411L1388 411" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="796" y="435" width="34" height="34" rx="6" fill="#373737" stroke="none"/>
+<path d="M808 447l-5 5 5 5m12-14-10 18m10-18v18" fill="none" stroke="#bcbcbc" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="842" y="448" font-size="14" fill="#f3f3f3" font-weight="500" text-anchor="start">Code.exe</text>
+<text x="842" y="470" font-size="11" fill="#929292" font-weight="400" text-anchor="start">Visual Studio Code</text>
+<rect x="1042" y="436" width="178" height="34" rx="5" fill="#313131" stroke="#484848"/>
+<text x="1054" y="458" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">7882 · 监听器 02</text>
+<path d="M1198 450l4 4 4-4" fill="none" stroke="#bcbcbc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1250" cy="453" r="2.5" fill="#82cd8c"/>
+<text x="1260" y="458" font-size="11" fill="#82cd8c" font-weight="400" text-anchor="start">已代理</text>
+<rect x="1322" y="444" width="34" height="18" rx="9" fill="#4cc2ff" stroke="none"/>
+<circle cx="1347" cy="453" r="6" fill="#202020"/>
+<circle cx="1372" cy="453" r="1" fill="#bcbcbc"/>
+<circle cx="1376" cy="453" r="1" fill="#bcbcbc"/>
+<circle cx="1380" cy="453" r="1" fill="#bcbcbc"/>
+<path d="M796 501L1388 501" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="796" y="525" width="34" height="34" rx="6" fill="#373737" stroke="none"/>
+<path d="M803 541l20-7-6 18-5-7-9-4m9 4 7-7" fill="none" stroke="#bcbcbc" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="842" y="538" font-size="14" fill="#f3f3f3" font-weight="500" text-anchor="start">Telegram.exe</text>
+<text x="842" y="560" font-size="11" fill="#929292" font-weight="400" text-anchor="start">Telegram Desktop</text>
+<rect x="1042" y="526" width="178" height="34" rx="5" fill="#313131" stroke="#484848"/>
+<text x="1054" y="548" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">7881 · 监听器 01</text>
+<path d="M1198 540l4 4 4-4" fill="none" stroke="#bcbcbc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="1250" cy="543" r="2.5" fill="#82cd8c"/>
+<text x="1260" y="548" font-size="11" fill="#82cd8c" font-weight="400" text-anchor="start">已代理</text>
+<rect x="1322" y="534" width="34" height="18" rx="9" fill="#4cc2ff" stroke="none"/>
+<circle cx="1347" cy="543" r="6" fill="#202020"/>
+<circle cx="1372" cy="543" r="1" fill="#bcbcbc"/>
+<circle cx="1376" cy="543" r="1" fill="#bcbcbc"/>
+<circle cx="1380" cy="543" r="1" fill="#bcbcbc"/>
+<path d="M796 591L1388 591" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="796" y="624" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">3 条规则已启用</text>
+<text x="1388" y="624" font-size="11" fill="#4cc2ff" font-weight="400" text-anchor="end">查看连接 →</text>
+<path d="M796 699L1388 699" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="808" cy="729" r="6.5" fill="none" stroke="#bcbcbc" stroke-width="3" stroke-dasharray="3 3"/>
+<circle cx="808" cy="729" r="2.7" fill="none" stroke="#bcbcbc" stroke-width="1.4"/>
+<text x="828" y="735" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">分流设置</text>
+<text x="1359" y="735" font-size="20" fill="#bcbcbc" font-weight="400" text-anchor="start">›</text>
+<text x="828" y="758" font-size="11" fill="#929292" font-weight="400" text-anchor="start">退出行为、故障策略与组件管理</text>
+<path d="M796 776L1388 776" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="802" cy="794" r="2.5" fill="#82cd8c"/>
+<text x="814" y="798" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="start">所有规则已生效</text>
+<text x="236" y="858" font-size="11" fill="#929292" font-weight="400" text-anchor="start">代理</text>
+<text x="270" y="858" font-size="11" fill="#929292" font-weight="400" text-anchor="start">/  监听器与进程</text>
+</g></svg>

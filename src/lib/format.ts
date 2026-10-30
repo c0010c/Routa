@@ -94,20 +94,20 @@ export function applyOutcomeMessages(o: ApplyOutcome): string[] {
   return ["已保存，但未生效，内核已停止，请检查配置后手动重试"];
 }
 
-/** Colour band for a delay result: < 200 ms good, 200–500 ms slow, worse or timed out bad. */
+/** Shared by node cards, candidate pickers and current-proxy results. */
 export function delayColor(ms: number | null): "success" | "warning" | "error" {
-  if (ms === null || ms > 500) return "error";
-  return ms < 200 ? "success" : "warning";
+  if (ms === null || ms > 600) return "error";
+  return ms <= 300 ? "success" : "warning";
 }
 
 /** Short label and explanation for a delay test that produced no number. */
 export function delayFailure(error: DelayError | null | undefined): { text: string; detail: string } {
-  if (error == null || error === "Timeout") return { text: "超时", detail: "在超时时间内没有收到测速地址的响应" };
-  if (error === "Failed") return { text: "连接失败", detail: "节点连不上测速地址：连接被拒绝、域名解析失败或握手出错" };
+  if (error == null || error === "Timeout") return { text: "超时", detail: "在超时时间内没有收到延迟测试地址的响应" };
+  if (error === "Failed") return { text: "连接失败", detail: "节点连不上延迟测试地址：连接被拒绝、域名解析失败或握手出错" };
   if (error === "NotFound") return { text: "未生效", detail: "内核中还没有这个节点，配置可能尚未应用" };
-  if (error === "NoCore") return { text: "内核未运行", detail: "内核未运行，无法测速" };
+  if (error === "NoCore") return { text: "内核未运行", detail: "内核未运行，无法测延迟" };
   if ("CoreUnreachable" in error) return { text: "内核无响应", detail: `无法访问内核控制接口：${error.CoreUnreachable}` };
-  return { text: "测速失败", detail: error.Other };
+  return { text: "测量失败", detail: error.Other };
 }
 
 /** `123 ms`, or the failure label. */

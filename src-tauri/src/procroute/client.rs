@@ -532,6 +532,7 @@ impl Link {
 // ---------------------------------------------------------------- 同步任务
 
 enum Command {
+    Pause(oneshot::Sender<()>),
     Goodbye(oneshot::Sender<()>),
     Cleanup(oneshot::Sender<Option<Result<(), String>>>),
     Reconnect,
@@ -539,14 +540,119 @@ enum Command {
 }
 
 static STATUS: LazyLock<Mutex<ProcRouteStatus>> = LazyLock::new(|| Mutex::new(ProcRouteStatus::initial()));
+static CONFIRMED: LazyLock<Mutex<Option<DesiredState>>> = LazyLock::new(|| Mutex::new(None));
 static COMMANDS: OnceLock<mpsc::Sender<Command>> = OnceLock::new();
 static RUNTIME_CHANGED: Notify = Notify::const_new();
 /// 已开始退出（调用过 [`goodbye`]）：之后不再启动同步任务。
 static EXITING: AtomicBool = AtomicBool::new(false);
 
+/// 安装、卸载和清理共用一把锁；维护标志必须先于暂停命令设置，避免下一轮自动启动。
+#[derive(Default)]
+struct ServiceOperations {
+    lock: tokio::sync::Mutex<()>,
+    paused: AtomicBool,
+}
+
+static OPERATIONS: LazyLock<ServiceOperations> = LazyLock::new(ServiceOperations::default);
+
+pub struct ServiceOperation<'a> {
+    operations: &'a ServiceOperations,
+    _lock: tokio::sync::MutexGuard<'a, ()>,
+    paused: bool,
+}
+
+impl ServiceOperations {
+    fn begin(&self) -> Result<ServiceOperation<'_>, String> {
+        let lock = self.lock.try_lock().map_err(|_| "分流服务操作正在进行，请稍后重试")?;
+        Ok(ServiceOperation { operations: self, _lock: lock, paused: false })
+    }
+}
+
+pub fn service_operation() -> Result<ServiceOperation<'static>, String> {
+    OPERATIONS.begin()
+}
+
+impl ServiceOperation<'_> {
+    /// 等同步任务确认已关闭管道后才允许运行提权助手。失败/取消也由 Drop 恢复同步。
+    pub async fn pause(&mut self) -> Result<(), String> {
+        self.pause_with(COMMANDS.get()).await
+    }
+
+    async fn pause_with(&mut self, tx: Option<&mpsc::Sender<Command>>) -> Result<(), String> {
+        self.operations.paused.store(true, Ordering::SeqCst);
+        self.paused = true;
+        let Some(tx) = tx else { return Ok(()) };
+        timeout(Duration::from_secs(20), async {
+            let (done, wait) = oneshot::channel();
+            tx.send(Command::Pause(done)).await.map_err(|_| "分流同步任务已结束")?;
+            wait.await.map_err(|_| "分流同步任务未确认暂停")
+        }).await.map_err(|_| "等待分流同步任务暂停超时，请重试".to_string())?
+            .map_err(str::to_string)
+    }
+}
+
+impl Drop for ServiceOperation<'_> {
+    fn drop(&mut self) {
+        if self.paused {
+            self.operations.paused.store(false, Ordering::SeqCst);
+            RUNTIME_CHANGED.notify_one();
+        }
+    }
+}
+
+struct ReconnectSchedule {
+    next: Instant,
+    start_tried: bool,
+    was_paused: bool,
+}
+
+impl Default for ReconnectSchedule {
+    fn default() -> Self {
+        Self { next: Instant::now(), start_tried: false, was_paused: false }
+    }
+}
+
+impl Link {
+    fn pause_for_maintenance(&mut self, done: oneshot::Sender<()>) {
+        self.disconnect(ComponentState::Stopped);
+        *CONFIRMED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let _ = done.send(());
+    }
+
+    async fn reconnect_if_due<C, F>(
+        &mut self, schedule: &mut ReconnectSchedule, paused: bool,
+        connect: C, start: impl FnOnce() -> Result<(), String>,
+    ) where C: FnOnce() -> F, F: std::future::Future<Output = Result<Box<dyn SvcConn>, ComponentState>> {
+        if schedule.was_paused && !paused {
+            schedule.next = Instant::now();
+            schedule.start_tried = false;
+        }
+        schedule.was_paused = paused;
+        if paused || self.connected() || Instant::now() < schedule.next { return; }
+        schedule.next = Instant::now() + RECONNECT;
+        let res = connect().await;
+        match &res {
+            Ok(_) => schedule.start_tried = false,
+            Err(ComponentState::Stopped) if !schedule.start_tried => {
+                schedule.start_tried = true;
+                if let Err(e) = start() { eprintln!("procroute: {e}"); }
+            }
+            Err(_) => {}
+        }
+        self.attach(res);
+    }
+}
+
 /// 最近一次推送给前端的状态。
 pub fn status() -> ProcRouteStatus {
     STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The service acknowledged exactly the current targets, not a stale Proxy view.
+pub fn current_rules_confirmed(rt: &Runtime) -> bool {
+    let desired = decide(&rt.model(), &rt.status(), std::process::id());
+    matches!(status().component, ComponentState::Running)
+        && CONFIRMED.lock().unwrap_or_else(|e|e.into_inner()).as_ref() == Some(&desired)
 }
 
 /// 运行状态或模型变了：让同步任务立即重算并下发。
@@ -609,9 +715,7 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
     let mut link = Link::default();
     let mut tick = interval(TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut next_connect = Instant::now();
-    // 发现服务已停止时只尝试启动一次，连上后复位。
-    let mut start_tried = false;
+    let mut reconnect = ReconnectSchedule::default();
     let mut emitted_flows: Option<Vec<Flow>> = None;
     loop {
         let mut retry_done = None;
@@ -625,17 +729,23 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
                     let _ = done.send(());
                     return;
                 }
+                Some(Command::Pause(done)) => {
+                    // ack 发送时唯一管道会话已经释放；后续循环由维护标志阻止重连。
+                    reconnect.was_paused = true;
+                    link.pause_for_maintenance(done);
+                    false
+                }
                 Some(Command::Cleanup(done)) => {
                     let _ = done.send(link.cleanup().await);
                     false
                 }
                 Some(Command::Retry(done)) => {
                     retry_done = Some(done);
-                    next_connect = Instant::now();
+                    reconnect.next = Instant::now();
                     true
                 }
                 Some(Command::Reconnect) => {
-                    next_connect = Instant::now();
+                    reconnect.next = Instant::now();
                     false
                 }
             },
@@ -650,21 +760,8 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
             continue;
         }
 
-        if !link.connected() && Instant::now() >= next_connect {
-            next_connect = Instant::now() + RECONNECT;
-            let res = connect().await;
-            match &res {
-                Ok(_) => start_tried = false,
-                Err(ComponentState::Stopped) if !start_tried => {
-                    start_tried = true;
-                    if let Err(e) = start_service() {
-                        eprintln!("procroute: {e}");
-                    }
-                }
-                Err(_) => {}
-            }
-            link.attach(res);
-        }
+        let paused = OPERATIONS.paused.load(Ordering::SeqCst);
+        link.reconnect_if_due(&mut reconnect, paused, connect, start_service).await;
 
         let (model, st) = (rt.model(), rt.status());
         // 全局开关关闭时 decide 不含任何规则：照样下发，服务据此撤掉全部规则。
@@ -684,12 +781,16 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
             let _ = app.emit("procroute-status", pending);
         }
         let was_connected = link.connected();
-        link.sync(desired.clone(), poll).await;
+        if !paused {
+            link.sync(desired.clone(), poll).await;
+        }
         if was_connected && !link.connected() {
-            next_connect = Instant::now() + RECONNECT;
+            reconnect.next = Instant::now() + RECONNECT;
         }
 
         let view = link.view(&desired, &decide::reasons(&model, &st));
+        *CONFIRMED.lock().unwrap_or_else(|e|e.into_inner()) =
+            (link.connected() && link.syncer.errors().is_empty() && link.syncer.last_sent.as_ref() == Some(&desired)).then_some(desired.clone());
         let changed = {
             let mut cur = STATUS.lock().unwrap_or_else(|e| e.into_inner());
             let changed = *cur != view;
@@ -774,6 +875,93 @@ mod tests {
 
     fn applies(sent: &Mutex<Vec<Request>>) -> usize {
         sent.lock().unwrap().iter().filter(|r| matches!(r, Request::Apply(_))).count()
+    }
+
+    #[tokio::test]
+    async fn maintenance_waits_for_pipe_release_and_serializes_operations() {
+        struct DropConn(FakeConn, Arc<AtomicBool>);
+        #[async_trait]
+        impl SvcConn for DropConn {
+            async fn call(&mut self, req: Request) -> Result<Response, String> { self.0.call(req).await }
+        }
+        impl Drop for DropConn {
+            fn drop(&mut self) { self.1.store(true, Ordering::SeqCst); }
+        }
+        let operations = ServiceOperations::default();
+        let mut operation = operations.begin().unwrap();
+        assert!(operations.begin().is_err(), "install/uninstall/cleanup cannot overlap");
+        let (tx, mut rx) = mpsc::channel(8);
+        let (conn, _) = FakeConn::new(vec![]);
+        let mut link = Link::default();
+        let dropped = Arc::new(AtomicBool::new(false));
+        link.attach(Ok(Box::new(DropConn(conn, dropped.clone()))));
+        {
+            let pause = operation.pause_with(Some(&tx));
+            tokio::pin!(pause);
+            tokio::select! {
+                result = &mut pause => panic!("pause must await worker acknowledgement: {result:?}"),
+                cmd = rx.recv() => {
+                    assert!(operations.paused.load(Ordering::SeqCst));
+                    let Command::Pause(done) = cmd.unwrap() else { panic!("expected Pause") };
+                    link.pause_for_maintenance(done);
+                }
+            }
+            pause.await.unwrap();
+            assert!(!link.connected());
+            assert!(dropped.load(Ordering::SeqCst), "acknowledgement guarantees the pipe was dropped");
+        }
+        drop(operation);
+        assert!(!operations.paused.load(Ordering::SeqCst));
+        assert!(operations.begin().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn maintenance_timeout_and_cancellation_leave_operation_retryable() {
+        let operations = ServiceOperations::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        {
+            let mut operation = operations.begin().unwrap();
+            assert!(operation.pause_with(Some(&tx)).await.unwrap_err().contains("超时"));
+            assert!(operations.paused.load(Ordering::SeqCst));
+        }
+        assert!(!operations.paused.load(Ordering::SeqCst));
+        // 丢弃未被处理的暂停消息（模拟原命令已取消/等待方已离开）。
+        drop(rx.recv().await);
+        {
+            let mut operation = operations.begin().unwrap();
+            let pause = operation.pause_with(Some(&tx));
+            tokio::pin!(pause);
+            tokio::select! {
+                _ = &mut pause => panic!("worker has not acknowledged"),
+                _ = rx.recv() => {}
+            }
+        }
+        assert!(!operations.paused.load(Ordering::SeqCst));
+        assert!(operations.begin().is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn maintenance_blocks_reconnect_and_auto_start_then_resets_start_attempt() {
+        use std::cell::Cell;
+        let mut link = Link::default();
+        let mut schedule = ReconnectSchedule::default();
+        let connections = Cell::new(0);
+        let starts = Cell::new(0);
+        let connect = || {
+            connections.set(connections.get() + 1);
+            async { Err(ComponentState::Stopped) }
+        };
+        let start = || { starts.set(starts.get() + 1); Ok(()) };
+        link.reconnect_if_due(&mut schedule, false, connect, start).await;
+        assert_eq!(starts.get(), 1);
+        for _ in 0..10 {
+            tokio::time::advance(RECONNECT).await;
+            link.reconnect_if_due(&mut schedule, true, connect, start).await;
+        }
+        assert_eq!((connections.get(), starts.get()), (1, 1));
+        // 成功、取消或失败都走同一个恢复路径：立即重试连接，并允许再次启动服务。
+        link.reconnect_if_due(&mut schedule, false, connect, start).await;
+        assert_eq!((connections.get(), starts.get()), (2, 2));
     }
 
     #[tokio::test]

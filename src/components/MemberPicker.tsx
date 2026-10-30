@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { useModel, useStatus } from "../api/client";
 import type { ExitMember } from "../bindings";
 import { delayText } from "../lib/format";
-import { isGroupMember, memberKey, nodeLabel, proxyNameOf } from "../lib/refs";
+import { expandMembers, isGroupMember, memberKey, nodeLabel, proxyNameOf } from "../lib/refs";
 
 interface Option {
   member: ExitMember;
@@ -46,7 +46,7 @@ export function MemberPicker({
       });
     }
     for (const g of m.node_groups) {
-      const count = m.manual_nodes.filter((n) => n.groups.includes(g.id)).length;
+      const count = expandMembers(m,[{group:{Custom:g.id}}]).length;
       list.push({ member: { group: { Custom: g.id } }, group: CUSTOM_GROUPS, label: `${g.name}（整组 · ${count}）` });
     }
     for (const s of m.subscriptions) {

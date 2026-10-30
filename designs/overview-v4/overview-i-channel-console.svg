@@ -1,0 +1,262 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="832" viewBox="0 0 1200 832">
+<defs>
+    <linearGradient id="mica" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e9f0fc"/><stop offset=".55" stop-color="#f3f4f8"/><stop offset="1" stop-color="#f5f0f8"/></linearGradient>
+    <linearGradient id="bluewash" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#eef5ff"/><stop offset="1" stop-color="#fafbfe"/></linearGradient>
+    <linearGradient id="graphwash" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#60cdff" stop-opacity=".18"/><stop offset="1" stop-color="#60cdff" stop-opacity="0"/></linearGradient>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="10" cy="10" r=".7" fill="#dce2ea"/></pattern>
+    <filter id="shadow" x="-10%" y="-15%" width="120%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#172749" flood-opacity=".06"/></filter>
+    </defs>
+<g font-family="Microsoft YaHei UI,Microsoft YaHei,Segoe UI,sans-serif">
+<rect x="0" y="0" width="1200" height="832" rx="8" fill="#202122" stroke="#3e3e3e" />
+<rect x="10" y="9" width="14" height="14" rx="2" fill="#60cdff" stroke="none" />
+<text x="30" y="20" font-size="12" fill="#ddd" font-weight="400" text-anchor="start">Routa</text>
+<path d="M1080 16L1090 16" fill="none" stroke="#ccc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1127" y="11" width="9" height="9" rx="0" fill="none" stroke="#ccc" />
+<path d="M1173 11l9 9m0-9-9 9" fill="none" stroke="#ccc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1" y="33" width="71" height="798" rx="0" fill="#242526" stroke="none" />
+<rect x="22" y="53" width="28" height="28" rx="7" fill="#e0b575" stroke="none" />
+<path d="M30 60v10q0 3 4 3h6M39 60v8m-3-3 3 3 3-3" fill="none" stroke="#202020" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="10" y="109" width="52" height="52" rx="7" fill="#363a3d" stroke="none" />
+<rect x="10" y="120" width="3" height="24" rx="1.5" fill="#e0b575" stroke="none" />
+<rect x="28" y="117" width="6" height="9" rx="0.6" fill="none" stroke="#e0b575" />
+<rect x="38" y="117" width="6" height="5" rx="0.6" fill="none" stroke="#e0b575" />
+<rect x="28" y="130" width="6" height="3" rx="0.6" fill="none" stroke="#e0b575" />
+<rect x="38" y="126" width="6" height="7" rx="0.6" fill="none" stroke="#e0b575" />
+<text x="36" y="152" font-size="9" fill="#e0b575" font-weight="500" text-anchor="middle">概览</text>
+<path d="M34 182h10v16H34M28 190h10m-3-3 3 3-3 3" fill="none" stroke="#aaaeb2" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<text x="36" y="217" font-size="9" fill="#aaaeb2" font-weight="400" text-anchor="middle">监听器</text>
+<rect x="28" y="247" width="3" height="3" rx="0.5" fill="#aaaeb2" stroke="none" />
+<rect x="28" y="253" width="3" height="3" rx="0.5" fill="#aaaeb2" stroke="none" />
+<rect x="28" y="259" width="3" height="3" rx="0.5" fill="#aaaeb2" stroke="none" />
+<rect x="34" y="247" width="3" height="3" rx="0.5" fill="#aaaeb2" stroke="none" />
+<rect x="34" y="253" width="3" height="3" rx="0.5" fill="#aaaeb2" stroke="none" />
+<rect x="34" y="259" width="3" height="3" rx="0.5" fill="#aaaeb2" stroke="none" />
+<rect x="40" y="247" width="3" height="3" rx="0.5" fill="#aaaeb2" stroke="none" />
+<rect x="40" y="253" width="3" height="3" rx="0.5" fill="#aaaeb2" stroke="none" />
+<rect x="40" y="259" width="3" height="3" rx="0.5" fill="#aaaeb2" stroke="none" />
+<text x="36" y="282" font-size="9" fill="#aaaeb2" font-weight="400" text-anchor="middle">分流</text>
+<path d="M36 328V321L30 315m0 5V315h5M36 321l6-6m-5 0h5v5" fill="none" stroke="#aaaeb2" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<text x="36" y="347" font-size="9" fill="#aaaeb2" font-weight="400" text-anchor="middle">出口</text>
+<path d="M36 385L36 378" fill="none" stroke="#aaaeb2" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="36" cy="378" r="2" fill="#f3f3f3" stroke="#aaaeb2" stroke-width="1.4"/>
+<path d="M36 385L29 384" fill="none" stroke="#aaaeb2" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="29" cy="384" r="2" fill="#f3f3f3" stroke="#aaaeb2" stroke-width="1.4"/>
+<path d="M36 385L43 384" fill="none" stroke="#aaaeb2" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="43" cy="384" r="2" fill="#f3f3f3" stroke="#aaaeb2" stroke-width="1.4"/>
+<path d="M36 385L32 392" fill="none" stroke="#aaaeb2" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="32" cy="392" r="2" fill="#f3f3f3" stroke="#aaaeb2" stroke-width="1.4"/>
+<path d="M36 385L40 392" fill="none" stroke="#aaaeb2" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="40" cy="392" r="2" fill="#f3f3f3" stroke="#aaaeb2" stroke-width="1.4"/>
+<circle cx="36" cy="385" r="2" fill="#aaaeb2"/>
+<text x="36" y="412" font-size="9" fill="#aaaeb2" font-weight="400" text-anchor="middle">节点</text>
+<circle cx="36" cy="450" r="7.5" fill="none" stroke="#aaaeb2" stroke-width="1.4"/>
+<path d="M29 450h14M36 442c-5 5-5 11 0 16m0-16c5 5 5 11 0 16" fill="none" stroke="#aaaeb2" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<text x="36" y="477" font-size="9" fill="#aaaeb2" font-weight="400" text-anchor="middle">组网</text>
+<circle cx="36" cy="771" r="5.5" fill="none" stroke="#aaaeb2" stroke-width="2.5" stroke-dasharray="3 2"/>
+<circle cx="36" cy="771" r="2.3" fill="none" stroke="#aaaeb2"/>
+<text x="36" y="798" font-size="9" fill="#aaaeb2" font-weight="400" text-anchor="middle">设置</text>
+<text x="100" y="82" font-size="26" fill="#e6e6e6" font-weight="600" text-anchor="start">连接控制台</text>
+<circle cx="1035" cy="74" r="3" fill="#83b996"/>
+<text x="1048" y="79" font-size="11" fill="#9d9fa3" font-weight="400" text-anchor="start">内核运行中</text>
+<circle cx="1159" cy="75" r="1.1" fill="#9d9fa3"/>
+<circle cx="1163" cy="75" r="1.1" fill="#9d9fa3"/>
+<circle cx="1167" cy="75" r="1.1" fill="#9d9fa3"/>
+<rect x="100" y="110" width="1068" height="89" rx="5" fill="#2a2c2e" stroke="#3b3d3f" />
+<text x="120" y="138" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">总下载</text>
+<text x="120" y="176" font-size="28" fill="#e6e6e6" font-weight="600" text-anchor="start">444</text>
+<text x="194" y="174" font-size="12" fill="#9d9fa3" font-weight="400" text-anchor="start">B/s</text>
+<text x="279" y="138" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">总上传</text>
+<text x="279" y="174" font-size="22" fill="#e6e6e6" font-weight="500" text-anchor="start">0 B/s</text>
+<path d="M425 129L425 181" fill="none" stroke="#454749" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="449" y="138" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">累计流量</text>
+<text x="449" y="174" font-size="22" fill="#e6e6e6" font-weight="500" text-anchor="start">317.3 MB</text>
+<text x="702" y="138" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">监听器</text>
+<text x="702" y="173" font-size="22" fill="#83b996" font-weight="600" text-anchor="start">3 / 3</text>
+<text x="983" y="145" font-size="11" fill="#9d9fa3" font-weight="400" text-anchor="start">所有配置已生效</text>
+<text x="983" y="174" font-size="11" fill="#e0b575" font-weight="400" text-anchor="start">内核操作</text>
+<circle cx="1141" cy="169" r="1.1" fill="#9d9fa3"/>
+<circle cx="1145" cy="169" r="1.1" fill="#9d9fa3"/>
+<circle cx="1149" cy="169" r="1.1" fill="#9d9fa3"/>
+<text x="100" y="242" font-size="15" fill="#e6e6e6" font-weight="600" text-anchor="start">监听器</text>
+<text x="185" y="242" font-size="11" fill="#9d9fa3" font-weight="400" text-anchor="start">3 条连接</text>
+<rect x="1048" y="220" width="120" height="32" rx="4" fill="#e0b575" stroke="none" />
+<text x="1108" y="241" font-size="12" fill="#242424" font-weight="500" text-anchor="middle">＋ 新建监听器</text>
+<text x="120" y="282" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">入口</text>
+<text x="333" y="282" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">出口</text>
+<text x="518" y="282" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">节点</text>
+<text x="735" y="282" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">网卡</text>
+<text x="928" y="282" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">实时流量</text>
+<rect x="100" y="299" width="1068" height="123" rx="5" fill="#2c2e30" stroke="#45413a" />
+<rect x="100" y="299" width="4" height="123" rx="2" fill="#e0b575" stroke="none" />
+<text x="120" y="324" font-size="10" fill="#e0b575" font-weight="600" text-anchor="start">01</text>
+<text x="147" y="329" font-size="17" fill="#e6e6e6" font-weight="600" text-anchor="start">机场</text>
+<text x="120" y="356" font-size="11" fill="#9d9fa3" font-weight="400" text-anchor="start">7893 · SOCKS5</text>
+<rect x="120" y="379" width="32" height="17" rx="8.5" fill="#e0b575" stroke="none" />
+<circle cx="144" cy="387.5" r="5.5" fill="#fff"/>
+<text x="162" y="392" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">启用</text>
+<path d="M309 349L333 349" fill="none" stroke="#66625c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M492 349L518 349" fill="none" stroke="#66625c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M708 349L735 349" fill="none" stroke="#66625c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="333" y="327" width="159" height="43" rx="3" fill="#232527" stroke="#4d5053" />
+<text x="345" y="354" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">机场出口</text>
+<path d="M472 346l3.5 3.5 3.5-3.5" fill="none" stroke="#9d9fa3" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="518" y="327" width="190" height="43" rx="3" fill="#232527" stroke="#4d5053" />
+<text x="530" y="354" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">SG 新加坡01</text>
+<path d="M688 346l3.5 3.5 3.5-3.5" fill="none" stroke="#9d9fa3" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="735" y="327" width="148" height="43" rx="3" fill="#232527" stroke="#4d5053" />
+<text x="747" y="354" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">系统默认</text>
+<text x="333" y="395" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">共用 · 2 个入口</text>
+<text x="518" y="395" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">手动选择</text>
+<circle cx="740" cy="390" r="3" fill="#83b996"/>
+<text x="750" y="395" font-size="11" fill="#83b996" font-weight="400" text-anchor="start">182 ms</text>
+<text x="928" y="327" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">↓ 359 B/s</text>
+<text x="1131" y="327" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="end">↑ 0 B/s</text>
+<rect x="928" y="374" width="3" height="5" rx="1" fill="#e0b575" stroke="none" />
+<rect x="935" y="373" width="3" height="6" rx="1" fill="#e0b575" stroke="none" />
+<rect x="942" y="374" width="3" height="5" rx="1" fill="#e0b575" stroke="none" />
+<rect x="949" y="372" width="3" height="7" rx="1" fill="#e0b575" stroke="none" />
+<rect x="956" y="369" width="3" height="10" rx="1" fill="#e0b575" stroke="none" />
+<rect x="963" y="372" width="3" height="7" rx="1" fill="#e0b575" stroke="none" />
+<rect x="970" y="373" width="3" height="6" rx="1" fill="#e0b575" stroke="none" />
+<rect x="977" y="371" width="3" height="8" rx="1" fill="#e0b575" stroke="none" />
+<rect x="984" y="368" width="3" height="11" rx="1" fill="#e0b575" stroke="none" />
+<rect x="991" y="363" width="3" height="16" rx="1" fill="#e0b575" stroke="none" />
+<rect x="998" y="369" width="3" height="10" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1005" y="366" width="3" height="13" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1012" y="358" width="3" height="21" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1019" y="364" width="3" height="15" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1026" y="366" width="3" height="13" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1033" y="369" width="3" height="10" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1040" y="372" width="3" height="7" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1047" y="371" width="3" height="8" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1054" y="373" width="3" height="6" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1061" y="372" width="3" height="7" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1068" y="374" width="3" height="5" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1075" y="373" width="3" height="6" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1082" y="374" width="3" height="5" rx="1" fill="#e0b575" stroke="none" />
+<rect x="1089" y="372" width="3" height="7" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1096" y="373" width="3" height="6" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1103" y="374" width="3" height="5" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1110" y="373" width="3" height="6" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1117" y="374" width="3" height="5" rx="1" fill="#585b5e" stroke="none" />
+<circle cx="1140" cy="395" r="1.1" fill="#9d9fa3"/>
+<circle cx="1144" cy="395" r="1.1" fill="#9d9fa3"/>
+<circle cx="1148" cy="395" r="1.1" fill="#9d9fa3"/>
+<rect x="100" y="438" width="1068" height="123" rx="5" fill="#2c2e30" stroke="#393c3f" />
+<rect x="100" y="438" width="4" height="123" rx="2" fill="#8babc1" stroke="none" />
+<text x="120" y="463" font-size="10" fill="#8babc1" font-weight="600" text-anchor="start">02</text>
+<text x="147" y="468" font-size="17" fill="#e6e6e6" font-weight="600" text-anchor="start">浏览器</text>
+<text x="120" y="495" font-size="11" fill="#9d9fa3" font-weight="400" text-anchor="start">7894 · 混合</text>
+<rect x="120" y="518" width="32" height="17" rx="8.5" fill="#8babc1" stroke="none" />
+<circle cx="144" cy="526.5" r="5.5" fill="#fff"/>
+<text x="162" y="531" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">启用</text>
+<path d="M309 488L333 488" fill="none" stroke="#66625c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M492 488L518 488" fill="none" stroke="#66625c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M708 488L735 488" fill="none" stroke="#66625c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="333" y="466" width="159" height="43" rx="3" fill="#232527" stroke="#4d5053" />
+<text x="345" y="493" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">机场出口</text>
+<path d="M472 485l3.5 3.5 3.5-3.5" fill="none" stroke="#9d9fa3" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="518" y="466" width="190" height="43" rx="3" fill="#232527" stroke="#4d5053" />
+<text x="530" y="493" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">SG 新加坡01</text>
+<path d="M688 485l3.5 3.5 3.5-3.5" fill="none" stroke="#9d9fa3" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="735" y="466" width="148" height="43" rx="3" fill="#232527" stroke="#4d5053" />
+<text x="747" y="493" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">系统默认</text>
+<text x="333" y="534" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">共用 · 2 个入口</text>
+<text x="518" y="534" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">手动选择</text>
+<circle cx="740" cy="529" r="3" fill="#83b996"/>
+<text x="750" y="534" font-size="11" fill="#83b996" font-weight="400" text-anchor="start">182 ms</text>
+<text x="928" y="466" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">↓ 0 B/s</text>
+<text x="1131" y="466" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="end">↑ 0 B/s</text>
+<rect x="928" y="514.36" width="3" height="3.64" rx="1" fill="#8babc1" stroke="none" />
+<rect x="935" y="514.04" width="3" height="3.96" rx="1" fill="#8babc1" stroke="none" />
+<rect x="942" y="514.36" width="3" height="3.64" rx="1" fill="#8babc1" stroke="none" />
+<rect x="949" y="513.72" width="3" height="4.28" rx="1" fill="#8babc1" stroke="none" />
+<rect x="956" y="512.76" width="3" height="5.24" rx="1" fill="#8babc1" stroke="none" />
+<rect x="963" y="513.72" width="3" height="4.28" rx="1" fill="#8babc1" stroke="none" />
+<rect x="970" y="514.04" width="3" height="3.96" rx="1" fill="#8babc1" stroke="none" />
+<rect x="977" y="513.4" width="3" height="4.6" rx="1" fill="#8babc1" stroke="none" />
+<rect x="984" y="512.44" width="3" height="5.5600000000000005" rx="1" fill="#8babc1" stroke="none" />
+<rect x="991" y="510.84" width="3" height="7.16" rx="1" fill="#8babc1" stroke="none" />
+<rect x="998" y="512.76" width="3" height="5.24" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1005" y="511.8" width="3" height="6.2" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1012" y="509.24" width="3" height="8.76" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1019" y="511.16" width="3" height="6.84" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1026" y="511.8" width="3" height="6.2" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1033" y="512.76" width="3" height="5.24" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1040" y="513.72" width="3" height="4.28" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1047" y="513.4" width="3" height="4.6" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1054" y="514.04" width="3" height="3.96" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1061" y="513.72" width="3" height="4.28" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1068" y="514.36" width="3" height="3.64" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1075" y="514.04" width="3" height="3.96" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1082" y="514.36" width="3" height="3.64" rx="1" fill="#8babc1" stroke="none" />
+<rect x="1089" y="513.72" width="3" height="4.28" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1096" y="514.04" width="3" height="3.96" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1103" y="514.36" width="3" height="3.64" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1110" y="514.04" width="3" height="3.96" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1117" y="514.36" width="3" height="3.64" rx="1" fill="#585b5e" stroke="none" />
+<circle cx="1140" cy="534" r="1.1" fill="#9d9fa3"/>
+<circle cx="1144" cy="534" r="1.1" fill="#9d9fa3"/>
+<circle cx="1148" cy="534" r="1.1" fill="#9d9fa3"/>
+<rect x="100" y="577" width="1068" height="123" rx="5" fill="#2c2e30" stroke="#393c3f" />
+<rect x="100" y="577" width="4" height="123" rx="2" fill="#9caf94" stroke="none" />
+<text x="120" y="602" font-size="10" fill="#9caf94" font-weight="600" text-anchor="start">03</text>
+<text x="147" y="607" font-size="17" fill="#e6e6e6" font-weight="600" text-anchor="start">下载器</text>
+<text x="120" y="634" font-size="11" fill="#9d9fa3" font-weight="400" text-anchor="start">7895 · SOCKS5</text>
+<rect x="120" y="657" width="32" height="17" rx="8.5" fill="#9caf94" stroke="none" />
+<circle cx="144" cy="665.5" r="5.5" fill="#fff"/>
+<text x="162" y="670" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">启用</text>
+<path d="M309 627L333 627" fill="none" stroke="#66625c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M492 627L518 627" fill="none" stroke="#66625c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M708 627L735 627" fill="none" stroke="#66625c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="333" y="605" width="159" height="43" rx="3" fill="#232527" stroke="#4d5053" />
+<text x="345" y="632" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">下载专用</text>
+<path d="M472 624l3.5 3.5 3.5-3.5" fill="none" stroke="#9d9fa3" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="518" y="605" width="190" height="43" rx="3" fill="#232527" stroke="#4d5053" />
+<text x="530" y="632" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">JP 东京02</text>
+<path d="M688 624l3.5 3.5 3.5-3.5" fill="none" stroke="#9d9fa3" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="735" y="605" width="148" height="43" rx="3" fill="#232527" stroke="#4d5053" />
+<text x="747" y="632" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">系统默认</text>
+<text x="333" y="673" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">独立出口</text>
+<text x="518" y="673" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="start">手动选择</text>
+<circle cx="740" cy="668" r="3" fill="#83b996"/>
+<text x="750" y="673" font-size="11" fill="#83b996" font-weight="400" text-anchor="start">96 ms</text>
+<text x="928" y="605" font-size="13" fill="#e6e6e6" font-weight="400" text-anchor="start">↓ 85 B/s</text>
+<text x="1131" y="605" font-size="10" fill="#9d9fa3" font-weight="400" text-anchor="end">↑ 0 B/s</text>
+<rect x="928" y="652.6" width="3" height="4.4" rx="1" fill="#9caf94" stroke="none" />
+<rect x="935" y="651.9" width="3" height="5.1" rx="1" fill="#9caf94" stroke="none" />
+<rect x="942" y="652.6" width="3" height="4.4" rx="1" fill="#9caf94" stroke="none" />
+<rect x="949" y="651.2" width="3" height="5.8" rx="1" fill="#9caf94" stroke="none" />
+<rect x="956" y="649.1" width="3" height="7.8999999999999995" rx="1" fill="#9caf94" stroke="none" />
+<rect x="963" y="651.2" width="3" height="5.8" rx="1" fill="#9caf94" stroke="none" />
+<rect x="970" y="651.9" width="3" height="5.1" rx="1" fill="#9caf94" stroke="none" />
+<rect x="977" y="650.5" width="3" height="6.5" rx="1" fill="#9caf94" stroke="none" />
+<rect x="984" y="648.4" width="3" height="8.6" rx="1" fill="#9caf94" stroke="none" />
+<rect x="991" y="644.9" width="3" height="12.1" rx="1" fill="#9caf94" stroke="none" />
+<rect x="998" y="649.1" width="3" height="7.8999999999999995" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1005" y="647.0" width="3" height="10.0" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1012" y="641.4" width="3" height="15.6" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1019" y="645.6" width="3" height="11.399999999999999" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1026" y="647.0" width="3" height="10.0" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1033" y="649.1" width="3" height="7.8999999999999995" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1040" y="651.2" width="3" height="5.8" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1047" y="650.5" width="3" height="6.5" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1054" y="651.9" width="3" height="5.1" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1061" y="651.2" width="3" height="5.8" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1068" y="652.6" width="3" height="4.4" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1075" y="651.9" width="3" height="5.1" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1082" y="652.6" width="3" height="4.4" rx="1" fill="#9caf94" stroke="none" />
+<rect x="1089" y="651.2" width="3" height="5.8" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1096" y="651.9" width="3" height="5.1" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1103" y="652.6" width="3" height="4.4" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1110" y="651.9" width="3" height="5.1" rx="1" fill="#585b5e" stroke="none" />
+<rect x="1117" y="652.6" width="3" height="4.4" rx="1" fill="#585b5e" stroke="none" />
+<circle cx="1140" cy="673" r="1.1" fill="#9d9fa3"/>
+<circle cx="1144" cy="673" r="1.1" fill="#9d9fa3"/>
+<circle cx="1148" cy="673" r="1.1" fill="#9d9fa3"/>
+<path d="M100 747L1168 747" fill="none" stroke="#383b3e" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="100" y="780" font-size="11" fill="#9d9fa3" font-weight="400" text-anchor="start">机场   ·   127.0.0.1:7893</text>
+<rect x="314" y="770" width="9" height="11" rx="1.5" fill="none" stroke="#9d9fa3" />
+<path d="M319 767H311v10" fill="none" stroke="#9d9fa3" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="1168" y="780" font-size="11" fill="#9d9fa3" font-weight="400" text-anchor="end">仅本机访问</text>
+</g></svg>

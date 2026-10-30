@@ -15,7 +15,7 @@ use crate::procroute;
 use crate::procroute::client::ProcRouteStatus;
 use crate::procroute::elevate::ElevatedCmd;
 use crate::procroute::processes::RunningProcess;
-use crate::runtime::{Runtime, RuntimeStatus};
+use crate::runtime::{Runtime, RuntimeStatus, SettingsSaveError};
 use crate::stats::delay::DelayResult;
 
 type Rt<'a> = State<'a, Arc<Runtime>>;
@@ -40,8 +40,40 @@ pub mod ops {
         .await
     }
 
+    /// Listener and its private outbound commit together, with one validation/reload.
+    pub async fn save_proxy(rt: &Runtime, mut l: Listener, mut target: Exit) -> CmdResult {
+        rt.mutate(|m| {
+            target.id = ExitId(format!("proxy-{}", l.id.0));
+            target.name = format!("代理-{}", l.id.0);
+            l.exit = Some(target.id.clone());
+            let old = m.listeners.iter().find(|other| other.id == l.id).and_then(|other| other.exit.clone());
+            let eid = target.id.clone();
+            let lid = l.id.clone();
+            upsert(&mut m.exits, target, |x| x.id == eid);
+            upsert(&mut m.listeners, l, |x| x.id == lid);
+            if let Some(old) = old.filter(|old| old != &eid) {
+                if !m.listeners.iter().any(|l| l.exit.as_ref() == Some(&old)) {
+                    for s in &mut m.subscriptions { if s.fallback_exit.as_ref() == Some(&old) { s.fallback_exit = Some(eid.clone()); } }
+                    m.exits.retain(|e| e.id != old);
+                }
+            }
+        }).await
+    }
+
     pub async fn delete_listener(rt: &Runtime, id: ListenerId) -> CmdResult {
-        rt.mutate(|m| m.listeners.retain(|l| l.id != id)).await
+        rt.mutate(|m| {
+            let eid = m.listeners.iter().find(|l| l.id == id).and_then(|l| l.exit.clone());
+            m.listeners.retain(|l| l.id != id);
+            for sub in &mut m.subscriptions { if sub.fallback_listener.as_ref() == Some(&id) { sub.fallback_listener = None; sub.fallback_exit = None; } }
+            if let Some(eid) = eid {
+                if !m.listeners.iter().any(|l| l.exit.as_ref() == Some(&eid)) {
+                    for sub in &mut m.subscriptions {
+                        if sub.fallback_exit.as_ref() == Some(&eid) { sub.fallback_exit = None; }
+                    }
+                    m.exits.retain(|e| e.id != eid);
+                }
+            }
+        }).await
     }
 
     pub async fn save_exit(rt: &Runtime, e: Exit) -> CmdResult {
@@ -111,13 +143,16 @@ pub mod ops {
         .map(|(outcome, ())| outcome)
     }
 
-    pub async fn save_settings(rt: &Runtime, s: Settings) -> CmdResult {
-        rt.mutate(|m| m.settings = s).await
+    pub async fn save_settings(rt: &Runtime, s: Settings) -> Result<ApplyOutcome, SettingsSaveError> {
+        rt.save_settings(s, |_| Ok(())).await
     }
 
     pub async fn save_manual_node(rt: &Runtime, n: ManualNode) -> CmdResult {
         rt.mutate(|m| {
             let id = n.id.clone();
+            for g in &mut m.node_groups {
+                g.members.retain(|r| r != &NodeRef::Manual { manual_id: id.clone() });
+            }
             upsert(&mut m.manual_nodes, n, |x| x.id == id)
         })
         .await
@@ -159,7 +194,14 @@ pub mod ops {
 
     pub async fn save_node_group(rt: &Runtime, g: NodeGroup) -> CmdResult {
         rt.mutate(|m| {
+            let mut g = g;
             let id = g.id.clone();
+            // Membership edits replace legacy manual memberships atomically.
+            for n in &mut m.manual_nodes {
+                n.groups.retain(|v| v != &id);
+                if g.members.contains(&NodeRef::Manual { manual_id: n.id.clone() }) { n.groups.push(id.clone()); }
+            }
+            g.members.retain(|r| !matches!(r, NodeRef::Manual { .. }));
             upsert(&mut m.node_groups, g, |x| x.id == id)
         })
         .await
@@ -205,10 +247,29 @@ pub mod ops {
     /// Through the connected service when there is one, else an elevated
     /// one-shot `--cleanup` (works without the service running).
     pub async fn procroute_cleanup() -> Result<(), String> {
-        match procroute::client::cleanup().await {
-            Some(res) => res,
-            None => procroute::elevate::run_elevated(ElevatedCmd::Cleanup).await,
-        }
+        tauri::async_runtime::spawn(async {
+            let mut operation = procroute::client::service_operation()?;
+            match procroute::client::cleanup().await {
+                Some(res) => res,
+                None => {
+                    operation.pause().await?;
+                    procroute::elevate::run_elevated(ElevatedCmd::Cleanup).await
+                }
+            }
+        }).await.map_err(|e| format!("分流清理没有完成：{e}"))?
+    }
+
+    pub fn parse_proxy_yaml_batch(text: String) -> Result<Vec<ParsedProxy>, String> {
+        let value: serde_json::Value = serde_yaml_ng::from_str(&text).map_err(|e| format!("YAML 解析失败：{e}"))?;
+        let value = value.get("proxies").cloned().unwrap_or(value);
+        let items = match value { serde_json::Value::Array(items) => items, other => vec![other] };
+        if items.is_empty() { return Err("没有找到节点".into()); }
+        items.into_iter().map(|item| parse_proxy_yaml(serde_json::to_string(&item).map_err(|e| e.to_string())?)).collect()
+    }
+    pub async fn save_manual_nodes(rt: &Runtime, nodes: Vec<ManualNode>) -> CmdResult {
+        rt.mutate(|m| {
+            for n in nodes { let id = n.id.clone(); upsert(&mut m.manual_nodes, n, |x| x.id == id); }
+        }).await
     }
 
     /// Keys a pasted proxy must not carry: the exit decides the interface,
@@ -264,6 +325,12 @@ pub fn get_model(rt: Rt<'_>) -> Model {
 #[specta::specta]
 pub fn get_status(rt: Rt<'_>) -> RuntimeStatus {
     rt.status()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_proxy(rt: Rt<'_>, l: Listener, target: Exit) -> CmdResult {
+    ops::save_proxy(&rt, l, target).await
 }
 
 #[tauri::command]
@@ -331,20 +398,16 @@ pub async fn test_delays(rt: Rt<'_>, proxy_names: Vec<String>) -> Result<Vec<(St
 
 #[tauri::command]
 #[specta::specta]
-pub async fn save_settings(app: AppHandle, rt: Rt<'_>, s: Settings) -> CmdResult {
-    let want_autostart = s.autostart;
-    let outcome = ops::save_settings(&rt, s).await?;
-    // The setting is saved either way; a failing autostart toggle is only logged.
-    let mgr = app.autolaunch();
-    let res = match mgr.is_enabled() {
-        Ok(on) if on == want_autostart => Ok(()),
-        _ if want_autostart => mgr.enable(),
-        _ => mgr.disable(),
-    };
-    if let Err(e) = res {
-        eprintln!("autostart: {e}");
-    }
-    Ok(outcome)
+pub async fn save_settings(app: AppHandle, rt: Rt<'_>, s: Settings) -> Result<ApplyOutcome, SettingsSaveError> {
+    rt.save_settings(s, |enabled| {
+        let mgr = app.autolaunch();
+        let result = match mgr.is_enabled() {
+            Ok(on) if on == enabled => Ok(()),
+            _ if enabled => mgr.enable(),
+            _ => mgr.disable(),
+        };
+        result.map_err(|e| e.to_string())
+    }).await
 }
 
 #[tauri::command]
@@ -370,6 +433,13 @@ pub async fn save_node_group(rt: Rt<'_>, g: NodeGroup) -> CmdResult {
 pub async fn delete_node_group(rt: Rt<'_>, id: NodeGroupId) -> CmdResult {
     ops::delete_node_group(&rt, id).await
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn parse_proxy_yaml_batch(text: String) -> Result<Vec<ParsedProxy>, String> { ops::parse_proxy_yaml_batch(text) }
+#[tauri::command]
+#[specta::specta]
+pub async fn save_manual_nodes(rt: Rt<'_>, nodes: Vec<ManualNode>) -> CmdResult { ops::save_manual_nodes(&rt, nodes).await }
 
 #[tauri::command]
 #[specta::specta]
@@ -400,7 +470,8 @@ pub async fn core_start(rt: Rt<'_>) -> Result<(), ()> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn core_stop(rt: Rt<'_>) -> Result<(), ()> {
+pub async fn core_stop(rt: Rt<'_>, desktop: State<'_, Arc<crate::desktop::Desktop>>) -> Result<(), ()> {
+    desktop.shutdown(&rt).await;
     rt.stop_core().await;
     Ok(())
 }
@@ -490,17 +561,13 @@ pub async fn procroute_retry() -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn procroute_install() -> Result<(), String> {
-    procroute::elevate::run_elevated(ElevatedCmd::Install).await?;
-    procroute::client::reconnect_now();
-    Ok(())
+    procroute::service_command(ElevatedCmd::Install).await
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn procroute_uninstall() -> Result<(), String> {
-    procroute::elevate::run_elevated(ElevatedCmd::Uninstall).await?;
-    procroute::client::reconnect_now();
-    Ok(())
+    procroute::service_command(ElevatedCmd::Uninstall).await
 }
 
 #[tauri::command]
@@ -570,6 +637,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn private_proxy_and_subscription_reference_lifecycle() {
+        let td = tempfile::tempdir().unwrap(); let rt=runtime(&td);
+        let l=Listener::new_default("独立代理".into(),7881);
+        let target=Exit { name:"ignored".into(), ..Default::default() };
+        ops::save_proxy(&rt,l.clone(),target.clone()).await.unwrap();
+        let eid=ExitId(format!("proxy-{}",l.id.0));
+        assert_eq!(rt.model().listeners[0].exit,Some(eid.clone()));
+        let sub=Subscription { name:"sub".into(),url:"https://example.test/sub".into(), fallback_listener:Some(l.id.clone()),..Default::default() };
+        ops::save_subscription(&rt,sub).await.unwrap();
+        assert_eq!(rt.model().subscriptions[0].fallback_exit,Some(eid));
+        let mut invalid=l.clone(); invalid.port=rt.model().settings.controller_port;
+        let before=rt.model(); assert!(ops::save_proxy(&rt,invalid,target).await.is_err()); assert_eq!(rt.model(),before);
+        ops::delete_listener(&rt,l.id).await.unwrap();
+        let m=rt.model();assert!(m.listeners.is_empty());assert!(m.exits.is_empty());
+        assert!(m.subscriptions[0].fallback_listener.is_none());assert!(m.subscriptions[0].fallback_exit.is_none());
+    }
+    #[test]
+    fn batch_yaml_preserves_nested_values_and_rejects_partial_invalid_input() {
+        let parsed=ops::parse_proxy_yaml_batch("proxies:\n - {name: a, type: vless, ws-opts: {headers: {Host: example.test}}}\n - {name: b, type: http}".into()).unwrap();
+        assert_eq!(parsed.len(),2);assert_eq!(parsed[0].raw["ws-opts"]["headers"]["Host"],"example.test");
+        assert!(ops::parse_proxy_yaml_batch("[{name: a, type: http}, {name: broken}]".into()).is_err());
+    }
+    #[tokio::test]
     async fn delete_exit_in_use_is_rejected() {
         let td = tempfile::tempdir().unwrap();
         let rt = runtime(&td);
@@ -633,6 +723,7 @@ mod tests {
         let sub_id = SubscriptionId::new();
         let node = NodeRef::Subscription { subscription_id: sub_id.clone(), name: "n1".into() };
         let sub = Subscription {
+            fallback_listener: None,
             id: sub_id,
             name: "s".into(),
             url: "http://127.0.0.1:1/x".into(),
@@ -668,6 +759,7 @@ mod tests {
 
     fn sub(url: &str) -> Subscription {
         Subscription {
+            fallback_listener: None,
             id: SubscriptionId::new(),
             name: "s".into(),
             url: url.into(),
@@ -804,8 +896,8 @@ mod tests {
     async fn delete_group_removes_membership() {
         let td = tempfile::tempdir().unwrap();
         let rt = runtime(&td);
-        let g = NodeGroup { id: NodeGroupId::new(), name: "家".into() };
-        let keep = NodeGroup { id: NodeGroupId::new(), name: "留".into() };
+        let g = NodeGroup {members: vec![],  id: NodeGroupId::new(), name: "家".into() };
+        let keep = NodeGroup {members: vec![],  id: NodeGroupId::new(), name: "留".into() };
         ops::save_node_group(&rt, g.clone()).await.unwrap();
         ops::save_node_group(&rt, keep.clone()).await.unwrap();
         ops::save_manual_node(&rt, proxy_node("a", vec![g.id.clone(), keep.id.clone()])).await.unwrap();
@@ -822,7 +914,7 @@ mod tests {
     async fn delete_referenced_group_rejected() {
         let td = tempfile::tempdir().unwrap();
         let rt = runtime(&td);
-        let g = NodeGroup { id: NodeGroupId::new(), name: "家".into() };
+        let g = NodeGroup {members: vec![],  id: NodeGroupId::new(), name: "家".into() };
         ops::save_node_group(&rt, g.clone()).await.unwrap();
         let exit = Exit {
             id: ExitId::new(),

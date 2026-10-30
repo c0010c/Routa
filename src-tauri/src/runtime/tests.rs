@@ -21,6 +21,34 @@ use crate::netif::{FakeInterfaces, NetInterface};
 use crate::store::{Bytes, Store};
 
 const PID: u32 = 4242;
+
+#[tokio::test]
+async fn desktop_initialization_creates_one_loopback_listener_and_keeps_its_identity() {
+    let h=harness_with(None, |_|{});
+    let ui=crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    ui.initialize(&h.rt).await.unwrap();
+    let first=ui.state(&h.rt).preferences;
+    ui.initialize(&h.rt).await.unwrap();
+    let second=ui.state(&h.rt).preferences;
+    assert_eq!(first.listener_id,second.listener_id);
+    assert_eq!(h.rt.model().listeners.len(),1);
+    let l=&h.rt.model().listeners[0];assert_eq!(l.port,7881);assert_eq!(l.listen,"127.0.0.1");assert_eq!(l.listener_type,ListenerType::Mixed);
+    assert!(first.mode.is_none());
+}
+
+#[tokio::test]
+async fn simple_node_selection_does_not_overwrite_existing_user_exit_or_listener() {
+    let original=model_with_listener(false);
+    let h=harness(&original);
+    let ui=crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    ui.bind(&h.rt,None).await.unwrap();
+    let n=ManualNode{id:ManualNodeId("simple-node".into()),name:"用户节点".into(),groups:vec![],kind:ManualNodeKind::Proxy{raw:serde_json::json!({"name":"用户节点","type":"socks5","server":"127.0.0.1","port":1080})}};
+    h.rt.mutate(|m|m.manual_nodes.push(n.clone())).await.unwrap();
+    ui.select_node(&h.rt,NodeRef::Manual{manual_id:n.id}).await.unwrap();
+    let after=h.rt.model();assert_eq!(after.listeners[0],original.listeners[0]);assert_eq!(after.exits[0],original.exits[0]);
+    assert_ne!(after.listeners[0].exit,after.listeners[1].exit);
+    assert_eq!(ui.state(&h.rt).preferences.mode,Some(crate::desktop::InterfaceMode::Full));
+}
 const PORT: u16 = 7891;
 const NIC_GUID: &str = "{11111111-0000-0000-0000-000000000001}";
 /// What `FakeLauncher` reports as the binary it launches.
@@ -192,10 +220,65 @@ fn last_reload(api: &FakeApi) -> String {
 fn conn(id: &str, inbound: &str, up: u64, down: u64) -> Conn {
     Conn {
         id: id.into(),
+        chains: vec![],
         upload: up,
         download: down,
-        metadata: ConnMeta { inbound_name: inbound.into() },
+        metadata: ConnMeta { inbound_name: inbound.into(), ..Default::default() },
     }
+}
+
+#[test]
+fn connection_details_use_recorded_leaf_route_and_preserve_slashes_in_node_names() {
+    let mut m = model_with_listener(false);
+    m.manual_nodes.push(ManualNode {
+        id: ManualNodeId("m1".into()), name: "香港/家宽01".into(), groups: vec![],
+        kind: ManualNodeKind::Proxy { raw: serde_json::json!({"name":"香港/家宽01","type":"socks5","server":"127.0.0.1","port":1080}) },
+    });
+    m.exits[0].name = "机场".into();
+    m.exits[0].kind = ExitKind::Group {
+        strategy: GroupStrategy::Select,
+        members: vec![ExitMember::Node(NodeRef::Manual { manual_id: ManualNodeId("m1".into()) })],
+        selected: None,
+    };
+    let names = connection_node_names(&m);
+    let mut c = conn("c1", "代理", 1024, 2048);
+    c.chains = vec!["机场/手动/香港/家宽01".into(), "机场".into()];
+    c.metadata.process = "chrome.exe".into();
+    c.metadata.network = "tcp".into();
+    c.metadata.destination_ip = "2001:db8::1".into();
+    c.metadata.destination_port = "443".into();
+    let info = connection_info(c.clone(), &names);
+    assert_eq!(info.node, "香港/家宽01");
+    assert_eq!(info.listener, "代理");
+    assert_eq!(info.process, "chrome.exe");
+    assert_eq!(info.protocol, "TCP");
+    assert_eq!(info.target, "[2001:db8::1]:443");
+    assert_eq!(info.uploaded, 1024);
+    c.chains = vec!["已删除订阅/旧节点".into(), "机场".into()];
+    assert_eq!(connection_info(c.clone(), &names).node, "已删除订阅/旧节点");
+    c.chains.clear();
+    assert!(connection_info(c, &names).node.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn connection_details_keep_the_applied_fixed_node_after_a_rejected_save() {
+    let mut m = model_with_listener(false);
+    m.manual_nodes.push(ManualNode {
+        id: ManualNodeId("m1".into()), name: "原节点".into(), groups: vec![],
+        kind: ManualNodeKind::Proxy { raw: serde_json::json!({"name":"原节点","type":"socks5","server":"127.0.0.1","port":1080}) },
+    });
+    m.exits[0].kind = ExitKind::Node { node: NodeRef::Manual { manual_id: ManualNodeId("m1".into()) } };
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    let mut c = conn("c1", "L1", 10, 20);
+    c.chains = vec![m.exits[0].name.clone()];
+    h.api.set_connections(ConnectionsSnapshot { connections: vec![c], ..Default::default() });
+    assert_eq!(h.rt.connection_details().await.unwrap()[0].node, "原节点");
+    h.api.reload_results.lock().unwrap().push_back(Err(crate::core::api::ApiError::Rejected { status: 400, message: "bad".into() }));
+    let out = h.rt.mutate(|m| m.manual_nodes[0].name = "新节点".into()).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::FailedKeptPrevious { .. }), "{out:?}");
+    assert_eq!(h.rt.model().manual_nodes[0].name, "新节点");
+    assert_eq!(h.rt.connection_details().await.unwrap()[0].node, "原节点");
 }
 
 fn drain(rx: &mut mpsc::Receiver<RuntimeEvent>) -> Vec<RuntimeEvent> {
@@ -463,6 +546,7 @@ async fn subscription_due_is_fetched_and_applied() {
         node: NodeRef::Subscription { subscription_id: sub_id.clone(), name: "a".into() },
     };
     m.subscriptions.push(Subscription {
+        fallback_listener: None,
         id: sub_id.clone(),
         name: "订阅".into(),
         url: format!("{}/sub", server.uri()),
@@ -662,6 +746,62 @@ async fn delay_test_records_results() {
     h.rt.shutdown().await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn delay_results_follow_node_selection_and_nic_but_not_listener_metadata() {
+    let mut m = model_with_listener(false);
+    m.manual_nodes = [("node-a", "甲"), ("node-b", "乙")].iter().map(|(id, name)| ManualNode {
+        id: ManualNodeId((*id).into()), name: (*name).into(), groups: vec![],
+        kind: ManualNodeKind::Proxy { raw: serde_json::json!({"name":name,"type":"socks5","server":"127.0.0.1","port":1080}) },
+    }).collect();
+    let a = NodeRef::Manual { manual_id: ManualNodeId("node-a".into()) };
+    let b = NodeRef::Manual { manual_id: ManualNodeId("node-b".into()) };
+    m.exits[0].kind = ExitKind::Group { strategy: GroupStrategy::Select, members: vec![ExitMember::Node(a.clone()), ExitMember::Node(b.clone())], selected: Some(a) };
+    let h = harness(&m);
+    h.rt.start().await.unwrap();
+    h.api.set_delay("直连出口", Ok(170));
+    h.api.set_delay("手动/甲", Ok(487));
+    h.rt.test_delays(vec!["直连出口".into(), "手动/甲".into()]).await;
+    assert!(!h.rt.status().delays.get("直连出口").unwrap().stale);
+    h.rt.mutate(|m| m.listeners[0].name = "新名称".into()).await.unwrap();
+    assert!(!h.rt.status().delays.get("直连出口").unwrap().stale);
+    h.rt.mutate(|m| { if let ExitKind::Group { selected, .. } = &mut m.exits[0].kind { *selected = Some(b); } }).await.unwrap();
+    assert!(h.rt.status().delays.get("直连出口").unwrap().stale);
+    assert_eq!(h.rt.status().delays.get("直连出口").unwrap().ms, Some(170));
+    assert!(!h.rt.status().delays.get("手动/甲").unwrap().stale);
+    h.rt.test_delays(vec!["直连出口".into()]).await;
+    h.rt.mutate(|m| m.exits[0].interface = Some(InterfaceGuid(NIC_GUID.into()))).await.unwrap();
+    assert!(h.rt.status().delays.get("直连出口").unwrap().stale);
+    assert!(!h.rt.status().delays.get("手动/甲").unwrap().stale);
+    let mut settings = h.rt.model().settings;
+    settings.delay_test_url = "https://example.test/check".into();
+    h.rt.save_settings(settings, |_| Ok(())).await.unwrap();
+    assert!(h.rt.status().delays.get("手动/甲").unwrap().stale);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn late_delay_cannot_replace_a_fresh_result_even_after_a_path_changes_back() {
+    let h = harness(&model_with_listener(false));
+    h.rt.start().await.unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *h.api.delay_gate.lock().unwrap() = Some((entered.clone(), release.clone()));
+    h.api.set_delay("直连出口", Ok(999));
+    let pending_runtime = Runtime { inner: h.rt.inner.clone() };
+    let pending = tokio::spawn(async move { pending_runtime.test_delays(vec!["直连出口".into()]).await });
+    entered.notified().await;
+    h.rt.mutate(|m| m.exits[0].interface = Some(InterfaceGuid(NIC_GUID.into()))).await.unwrap();
+    h.rt.mutate(|m| m.exits[0].interface = None).await.unwrap();
+    h.api.set_delay("直连出口", Ok(80));
+    h.rt.test_delays(vec!["直连出口".into()]).await;
+    release.notify_one();
+    let old = pending.await.unwrap();
+    assert!(old[0].1.stale);
+    assert_eq!(h.rt.status().delays.get("直连出口").unwrap().ms, Some(80));
+    assert!(!h.rt.status().delays.get("直连出口").unwrap().stale);
+    h.rt.shutdown().await;
+}
+
 /// Task 14 awaits these from Tauri commands, which require `Send` futures.
 #[allow(dead_code)]
 fn runtime_futures_are_send(rt: &Runtime) {
@@ -754,6 +894,7 @@ async fn stale_fetch_discarded_when_url_changed() {
     let sub_id = SubscriptionId("sub-1".into());
     let mut m = model_with_listener(false);
     m.subscriptions.push(Subscription {
+        fallback_listener: None,
         id: sub_id.clone(),
         name: "订阅".into(),
         url: format!("{}/old", server.uri()),
@@ -829,6 +970,7 @@ async fn invalid_nodes_rejected_by_core_keep_old_nodes() {
     };
     let mut m = model_with_listener(false);
     m.subscriptions.push(Subscription {
+        fallback_listener: None,
         id: sub_id.clone(),
         name: "订阅".into(),
         url: format!("{}/sub", server.uri()),
@@ -986,6 +1128,98 @@ async fn mutate_without_core_is_saved_but_not_running() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn settings_preferences_save_without_check_reload_or_restart() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    let reloads = h.api.reloads.lock().unwrap().len();
+    let checks = h.launcher.checks.lock().unwrap().len();
+    let toggles = Mutex::new(vec![]);
+    let mut settings = m.settings.clone();
+    settings.autostart = true;
+    settings.delay_test_interval_mins = Some(15);
+    settings.delay_test_url = "https://example.test/204".into();
+    let outcome = h.rt.save_settings(settings.clone(), |on| { toggles.lock().unwrap().push(on); Ok(()) }).await.unwrap();
+    assert!(matches!(outcome, ApplyOutcome::Reloaded { .. }));
+    assert_eq!(*toggles.lock().unwrap(), vec![true]);
+    assert_eq!(h.rt.model().settings, settings);
+    assert_eq!(Store::open(h.data.clone()).unwrap().load_model().unwrap().settings, settings);
+    settings.delay_test_interval_mins = None;
+    h.rt.save_settings(settings, |_| panic!("unchanged autostart must not touch the OS")).await.unwrap();
+    assert_eq!(h.launcher.count(), 1);
+    assert_eq!(h.launcher.checks.lock().unwrap().len(), checks);
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn settings_autostart_failure_keeps_model_and_file_unchanged() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    let before = std::fs::read_to_string(h.data.join("state.json")).unwrap();
+    let mut settings = m.settings.clone();
+    settings.autostart = true;
+    let error = h.rt.save_settings(settings, |_| Err("fake OS error".into())).await.unwrap_err();
+    assert!(matches!(error, SettingsSaveError::Operation(_)));
+    assert_eq!(h.rt.model(), m);
+    assert_eq!(std::fs::read_to_string(h.data.join("state.json")).unwrap(), before);
+    assert_eq!(h.launcher.count(), 0);
+    assert!(h.api.reloads.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn settings_disk_failure_rolls_back_autostart_and_allows_retry() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    let state = h.data.join("state.json");
+    std::fs::remove_file(&state).unwrap();
+    std::fs::create_dir(&state).unwrap();
+    let toggles = Mutex::new(vec![]);
+    let mut settings = m.settings.clone();
+    settings.autostart = true;
+    let error = h.rt.save_settings(settings.clone(), |on| { toggles.lock().unwrap().push(on); Ok(()) }).await.unwrap_err();
+    assert!(matches!(error, SettingsSaveError::Operation(_)));
+    assert_eq!(*toggles.lock().unwrap(), vec![true, false]);
+    assert_eq!(h.rt.model(), m);
+    assert!(h.rt.status().save_error.is_some());
+    assert!(h.api.reloads.lock().unwrap().is_empty());
+    std::fs::remove_dir(&state).unwrap();
+    h.rt.save_settings(settings.clone(), |_| Ok(())).await.unwrap();
+    assert!(h.rt.status().save_error.is_none());
+    assert_eq!(Store::open(h.data.clone()).unwrap().load_model().unwrap().settings, settings);
+}
+
+#[tokio::test(start_paused = true)]
+async fn settings_core_save_validates_then_restarts_once_and_preserves_preferences() {
+    let m = model_with_listener(false);
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    h.ports.0.lock().unwrap().insert(19100, PID);
+    let mut settings = m.settings.clone();
+    settings.autostart = true;
+    settings.delay_test_url = "https://example.test/204".into();
+    h.rt.save_settings(settings.clone(), |_| Ok(())).await.unwrap();
+    settings.controller_port = 19100;
+    h.launcher.push_check(Err(CheckError::Rejected("fake rejection".into())));
+    let before = h.rt.model();
+    let error = h.rt.save_settings(settings.clone(), |_| panic!("unchanged autostart")).await.unwrap_err();
+    assert!(matches!(error, SettingsSaveError::Validation(_)));
+    assert_eq!(h.rt.model(), before);
+    assert_eq!(h.launcher.count(), 1);
+    let outcome = h.rt.save_settings(settings.clone(), |_| panic!("unchanged autostart")).await.unwrap();
+    assert!(matches!(outcome, ApplyOutcome::Reloaded { .. }));
+    assert_eq!(h.launcher.count(), 2);
+    assert_eq!(h.rt.model().settings, settings);
+    h.rt.stop_core().await;
+    settings.controller_port = 19097;
+    let outcome = h.rt.save_settings(settings.clone(), |_| Ok(())).await.unwrap();
+    assert!(matches!(outcome, ApplyOutcome::NotRunning { .. }));
+    assert_eq!(h.launcher.count(), 2);
+    h.rt.shutdown().await;
+    assert!(h.rt.save_settings(settings, |_| Ok(())).await.is_err());
+}
+
+#[tokio::test(start_paused = true)]
 async fn controller_port_or_core_path_change_restarts_core() {
     let m = model_with_listener(false);
     let h = harness(&m);
@@ -1028,6 +1262,7 @@ async fn fallback_fetch_only_through_a_port_our_core_owns() {
     let sub_id = SubscriptionId("sub-1".into());
     let mut m = model_with_listener(false);
     m.subscriptions.push(Subscription {
+        fallback_listener: None,
         id: sub_id.clone(),
         name: "订阅".into(),
         url: format!("{}/sub?token=x", server.uri()),
@@ -1380,7 +1615,7 @@ async fn process_routing_change_does_not_reload_core() {
 #[tokio::test(start_paused = true)]
 async fn process_routing_rejects_forbidden_and_invalid_rules() {
     let mut m = model_with_listener(false);
-    m.settings.core_path = Some(r"C:\Custom\mihomo-alpha.exe".into());
+    m.settings.core_path = None;
     let h = harness(&m);
     let before = std::fs::read_to_string(h.data.join("state.json")).unwrap();
     let own = std::env::current_exe().unwrap().to_string_lossy().into_owned();
@@ -1390,7 +1625,7 @@ async fn process_routing_rejects_forbidden_and_invalid_rules() {
         .to_string_lossy()
         .into_owned();
 
-    for exe in [own.as_str(), BUNDLED_CORE, r"c:\custom\MIHOMO-ALPHA.exe", helper.as_str(), installed.as_str()] {
+    for exe in [own.as_str(), BUNDLED_CORE, helper.as_str(), installed.as_str()] {
         let errs = h
             .rt
             .mutate_process_routing(|pr| pr.rules.push(process_rule(exe)))

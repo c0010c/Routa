@@ -5,9 +5,10 @@
 // the externalBin to target/<profile>/routa-procsvc.exe, which would otherwise be the same file
 // we copy from here.
 import { execFileSync } from "node:child_process";
-import { copyFileSync } from "node:fs";
+import { copyFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { serviceReceipt, serviceSources, sha256, readBuildInfo, protocolVersion, assertMatch } from "./build-artifacts.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tauriDir = join(root, "src-tauri");
@@ -32,4 +33,7 @@ execFileSync(
 
 const target = join(tauriDir, "binaries", "routa-procsvc-x86_64-pc-windows-msvc.exe");
 copyFileSync(join(targetDir, "release", "routa-procsvc.exe"), target);
+const info = readBuildInfo(target);
+assertMatch(info.protocolVersion, protocolVersion(), "新分流服务的协议版本不匹配");
+writeFileSync(serviceReceipt, JSON.stringify({ sourceSha256: serviceSources(), exeSha256: sha256(target), ...info }, null, 2));
 console.log(`copied to ${target}`);

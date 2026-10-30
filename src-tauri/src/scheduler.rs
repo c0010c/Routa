@@ -30,6 +30,7 @@ mod tests {
 
     fn sub(interval: Option<u32>, last: Option<i64>) -> Subscription {
         Subscription {
+            fallback_listener: None,
             id: SubscriptionId::new(),
             name: "s".into(),
             url: "http://x/".into(),

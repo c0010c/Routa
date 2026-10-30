@@ -264,6 +264,17 @@ fn validate_manual(model: &Model, errors: &mut Vec<ValidationError>) {
 
 pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
+    for l in &model.listeners {
+        if let Some(routing) = &l.routing {
+            for r in &routing.rules {
+                let valid = match r.matcher {
+                    RuleMatch::Domain | RuleMatch::DomainSuffix => !r.value.is_empty() && r.value.len() <= 253 && r.value.split('.').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')),
+                    RuleMatch::Ipv4Cidr => r.value.split_once('/').is_some_and(|(ip, bits)| ip.parse::<std::net::Ipv4Addr>().is_ok() && bits.parse::<u8>().is_ok_and(|n| n <= 32)),
+                };
+                if !valid { errors.push(ValidationError::InvalidProxy { name: l.name.clone(), reason: format!("无效的域名 / IPv4 CIDR 规则：{}", r.value) }); }
+            }
+        }
+    }
 
     check_unique("subscription", model.subscriptions.iter().map(|s| s.name.as_str()), &mut errors);
     check_unique("exit", model.exits.iter().map(|e| e.name.as_str()), &mut errors);
@@ -343,6 +354,9 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
         }
     }
     for s in &model.subscriptions {
+        if let Some(id) = &s.fallback_listener {
+            if !model.listeners.iter().any(|l| &l.id == id) { errors.push(ValidationError::DanglingRef { what: format!("订阅 {} 的备用代理不存在", s.name) }); }
+        }
         if let Some(id) = &s.fallback_exit {
             if !exit_ids.contains(id) {
                 errors.push(ValidationError::DanglingRef {
@@ -376,6 +390,7 @@ mod tests {
     }
     fn sub(name: &str) -> Subscription {
         Subscription {
+            fallback_listener: None,
             id: SubscriptionId::new(),
             name: name.into(),
             url: "https://x".into(),
@@ -681,8 +696,8 @@ mod tests {
         let mut m = Model::default();
         m.manual_nodes.push(mnode("a", "x", ss()));
         m.manual_nodes.push(mnode("b", "x", ss()));
-        m.node_groups.push(NodeGroup { id: NodeGroupId("g1".into()), name: "g".into() });
-        m.node_groups.push(NodeGroup { id: NodeGroupId("g2".into()), name: "g".into() });
+        m.node_groups.push(NodeGroup {members: vec![],  id: NodeGroupId("g1".into()), name: "g".into() });
+        m.node_groups.push(NodeGroup {members: vec![],  id: NodeGroupId("g2".into()), name: "g".into() });
         let e = errs(&m);
         assert!(e.contains(&ValidationError::DuplicateName { kind: "manual node", name: "x".into() }), "{e:?}");
         assert!(e.contains(&ValidationError::DuplicateName { kind: "node group", name: "g".into() }), "{e:?}");
@@ -736,14 +751,14 @@ mod tests {
     #[test]
     fn node_group_ids_validated() {
         let mut m = Model::default();
-        m.node_groups.push(NodeGroup { id: NodeGroupId("".into()), name: "g0".into() });
-        m.node_groups.push(NodeGroup { id: NodeGroupId("g1".into()), name: "g1".into() });
-        m.node_groups.push(NodeGroup { id: NodeGroupId("g1".into()), name: "g2".into() });
+        m.node_groups.push(NodeGroup {members: vec![],  id: NodeGroupId("".into()), name: "g0".into() });
+        m.node_groups.push(NodeGroup {members: vec![],  id: NodeGroupId("g1".into()), name: "g1".into() });
+        m.node_groups.push(NodeGroup {members: vec![],  id: NodeGroupId("g1".into()), name: "g2".into() });
         let e = errs(&m);
         assert!(e.contains(&ValidationError::InvalidName { name: "g0".into(), reason: "分组 id 无效".into() }), "{e:?}");
         assert!(e.contains(&ValidationError::InvalidName { name: "g2".into(), reason: "分组 id 重复".into() }), "{e:?}");
         let mut m = Model::default();
-        m.node_groups.push(NodeGroup { id: NodeGroupId::new(), name: "g".into() });
+        m.node_groups.push(NodeGroup {members: vec![],  id: NodeGroupId::new(), name: "g".into() });
         assert!(validate(&m).is_ok(), "{:?}", errs(&m));
     }
 

@@ -7,3 +7,5 @@ pub mod validate;
 pub use resolve::*;
 pub use types::*;
 pub use validate::{validate, ValidationError};
+
+pub mod migrate;

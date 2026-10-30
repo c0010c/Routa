@@ -82,8 +82,28 @@ describe("ProcessRoutingPage", () => {
 
   it("needs update shows update button", async () => {
     renderPage({ ...base, component: "NeedsUpdate" });
-    expect(await screen.findByRole("button", { name: "更新组件" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "更新分流服务" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "启用进程分流" })).not.toBeInTheDocument();
+  });
+
+  it("failed update keeps a retryable button and reports the actual error", async () => {
+    let finish: (result: { status: "error"; error: string }) => void = () => {};
+    vi.mocked(commands.procrouteInstall).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderPage({ ...base, component: "NeedsUpdate" });
+    const button = await screen.findByRole("button", { name: "更新分流服务" });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    act(() => finish({ status: "error", error: "旧服务进程未退出，请稍后重试" }));
+    expect(await screen.findByText("旧服务进程未退出，请稍后重试")).toBeInTheDocument();
+    await waitFor(() => expect(button).toBeEnabled());
+    vi.mocked(commands.procrouteInstall).mockResolvedValueOnce({ status: "ok", data: null });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it.each(["Stopped", { Error: { message: "服务启动失败" } }] as const)("offers service repair after a failed installation: %s", async (component) => {
+    renderPage({ ...base, component });
+    expect(await screen.findByRole("button", { name: "修复分流服务" })).toBeInTheDocument();
   });
 
   it("shows the error of a failed component and apply errors", async () => {

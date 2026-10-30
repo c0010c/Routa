@@ -17,7 +17,8 @@ import {
 } from "../components/TailscaleState";
 import { expandMembers } from "../lib/refs";
 import { exitNodeText, isAutoExitNode, useTailnetPeers } from "../lib/tailnet";
-import { ExitDialog, newExit } from "./ExitDialog";
+import { newExit } from "./ExitDialog";
+import { ListenerDialog, newListener } from "./ListenerDialog";
 import { TailscaleDialog, newTailscaleNode } from "./TailscaleDialog";
 
 export const TAILSCALE_EMPTY_HELP = "通过 tailnet 中的出口节点访问网络，或直接访问 tailnet 内的设备。点击「新建实例」开始。";
@@ -129,7 +130,7 @@ function InstanceCard({
             测速
           </Button>
           <Button size="small" onClick={onCreateExit}>
-            用它新建出口
+            用于新代理
           </Button>
         </Box>
       </CardContent>
@@ -170,7 +171,7 @@ export function Tailscale() {
         />
       ))}
       {editing && <TailscaleDialog key={editing.id} node={editing} onClose={() => setEditing(null)} />}
-      {creatingExit && <ExitDialog key={creatingExit.id} exit={creatingExit} onClose={() => setCreatingExit(null)} />}
+      {creatingExit && typeof creatingExit.kind === "object" && "Node" in creatingExit.kind && <ListenerDialog key={creatingExit.id} listener={{...newListener(m.listeners),name:creatingExit.name}} initialNode={creatingExit.kind.Node.node} onClose={() => setCreatingExit(null)} />}
       {deleting && (
         <ConfirmDeleteDialog
           text={`确定删除实例「${deleting.name}」吗？登录状态也会一并删除。`}

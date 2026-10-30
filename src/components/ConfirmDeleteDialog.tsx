@@ -30,7 +30,7 @@ export function ConfirmDeleteDialog({ text, onConfirm, onClose, title = "确认�
     }
   };
   return (
-    <Dialog open onClose={onClose}>
+    <Dialog open onClose={onClose} sx={{"& .MuiDialog-paper":{height:340,maxHeight:"calc(100dvh - 40px)",display:"flex",flexDirection:"column"},"& .MuiDialogTitle-root, & .MuiDialogActions-root":{flexShrink:0},"& .MuiDialogContent-root":{flex:1,overflowY:"auto"}}}>
       <DialogTitle>{title}</DialogTitle>
       <DialogContent>
         {text}

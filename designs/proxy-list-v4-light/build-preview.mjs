@@ -1,0 +1,18 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import {fileURLToPath} from 'node:url';
+const dir=path.dirname(fileURLToPath(import.meta.url));
+const base=fs.readFileSync(path.join(dir,'base.html'),'utf8'),css=fs.readFileSync(path.join(dir,'workspace.css'),'utf8'),extension=fs.readFileSync(path.join(dir,'workspace.js'),'utf8'),tips=fs.readFileSync(path.join(dir,'tooltip-runtime.js'),'utf8');
+const yaml=fs.readFileSync(path.join(dir,'yaml-browser.js'),'utf8').replace(/<\/script/gi,'<\\/script');
+const marker='render();hydrate(window.openai?.widgetState);';
+if(!base.includes(marker))throw new Error('Missing V4 insertion point');
+let source=base.replace('</style>',()=>css+'\n</style>').replace('<script>',()=>'<script>'+yaml+'</script>\n<script>').replace(marker,()=>extension+'\n'+marker);
+for(const [,script]of source.matchAll(/<script>([\s\S]*?)<\/script>/g))new vm.Script(script);
+new vm.Script(tips);
+fs.writeFileSync(path.join(dir,'prototype.html'),source);
+const tipCss='#routa-list-prototype .l-prototype-tooltip{position:fixed;inset:auto;margin:0;width:max-content;max-width:min(308px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;border:1px solid #cbd5e2;border-radius:7px;background:#fff;color:#34445a;box-shadow:0 5px 20px #18355324;padding:11px 13px;font:12px/1.65 "Segoe UI","Microsoft YaHei UI",sans-serif;white-space:pre-line;overflow-wrap:anywhere;z-index:1000}';
+const html='<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Routa · 代理列表 · 直接关闭编辑 V4.3</title><style>body{margin:0;background:#e9edf3}#routa-list-prototype{max-width:1440px;margin:auto;border-radius:0!important;border:0!important;min-height:100vh}'+tipCss+'</style></head><body>\n'+source+'\n<script>'+tips+'</script></body></html>';
+fs.writeFileSync(path.join(dir,'index.html'),html);
+const inline='C:/Users/Q/.codex/visualizations/2026/10/29/01a18855-63c0-7b11-86f1-28889f7599c6/proxy-list-light.html';fs.writeFileSync(inline,source);
+console.log(JSON.stringify({syntax:'pass',bytes:Buffer.byteLength(source),index:path.join(dir,'index.html'),inline}));

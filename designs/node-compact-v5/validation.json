@@ -1,0 +1,55 @@
+{
+  "node": {
+    "card": {
+      "height": 64,
+      "width": 225
+    },
+    "delay": {
+      "font": "16px",
+      "scrollWidth": 60,
+      "text": "1280ms",
+      "weight": "600",
+      "width": 60
+    },
+    "more": {
+      "font": "16px",
+      "height": 26,
+      "width": 26
+    },
+    "name": {
+      "font": "14px",
+      "height": 20,
+      "weight": "600"
+    },
+    "protocolBackground": "rgb(244, 244, 244)",
+    "sourceFont": "12px",
+    "titleDelayGap": 6,
+    "unit": {
+      "color": "rgb(97, 97, 97)",
+      "font": "11px"
+    }
+  },
+  "selected": {
+    "cardHeight": 64,
+    "checkWidth": 12,
+    "failedFont": "12px",
+    "failedScrollWidth": 60,
+    "failedWidth": 60,
+    "height": 720,
+    "markMoreGap": 4,
+    "selectedFill": "rgb(229, 241, 252)",
+    "width": 1008
+  },
+  "dialog": {
+    "cardHeight": 64,
+    "footerTop": 757,
+    "height": 720
+  },
+  "empty": {
+    "footerTop": 757,
+    "height": 720
+  },
+  "fourDigitFits": true,
+  "stableHeight": true,
+  "stableFooter": true
+}

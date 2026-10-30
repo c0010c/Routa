@@ -1,0 +1,298 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Routa · 操作归属对应行</title><style>
+:root{font:14px "Segoe UI","Microsoft YaHei UI",sans-serif;background:#e9edf2;color:#1b1b1b;color-scheme:light}*{box-sizing:border-box}body{margin:0}main{max-width:1360px;margin:auto;padding:24px 32px}h1{margin:0 0 8px;font-size:23px;font-weight:600}p{font-size:12px;color:#616161;line-height:1.8;margin:0}button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:default;opacity:.5}button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid #0067c0;outline-offset:3px}.tools{display:flex;align-items:center;gap:10px;margin:16px 0;color:#616161;font-size:12px}.tools select{font-size:12px;background:white;border:1px solid #ccd2d9;border-radius:4px;padding:6px 10px}#stage{position:relative}#stage>svg{display:block;width:100%;height:auto;border-radius:8px;box-shadow:0 8px 30px #23364c12}#stage [data-row]:hover>[data-row-bg]{fill:#fafcfe}#stage [data-action-hit]{transition:fill .1s}#stage [data-edit]:hover>[data-action-hit],#stage [data-switch]:hover>[data-action-hit],#stage [data-more-row]:hover>[data-action-hit]{fill:#e7f1fc}.foot{display:flex;justify-content:space-between;gap:20px;margin-top:16px;color:#616161;font-size:12px}a{color:#0067c0;text-decoration:none}dialog{border:1px solid #c7cfd9;border-radius:7px;padding:0;background:white;box-shadow:0 10px 40px #172a4530;color:#1b1b1b;overflow:hidden}dialog::backdrop{background:transparent}#picker{position:fixed;margin:0;width:366px;height:364px;max-width:calc(100vw - 40px);max-height:calc(100dvh - 40px)}#picker[open]{display:flex;flex-direction:column}.picker-head{height:64px;flex-shrink:0;padding:16px 20px 0;position:relative}.picker-head h2{font-size:17px;font-weight:600;margin:0 28px 6px 0}.picker-head p{font-size:11px}.close-icon{position:absolute;right:12px;top:12px;width:28px;height:28px;background:transparent;border:0;border-radius:4px;color:#616161;font-size:20px}.close-icon:hover{background:#f3f3f3}.picker-tools{height:44px;flex-shrink:0;padding:6px 20px}.picker-tools input{width:100%;height:30px;border:1px solid #d6d6d6;border-radius:4px;padding:5px 10px;font-size:12px}.nodes{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:5px 20px;display:flex;flex-direction:column;gap:8px}.node{flex-shrink:0;width:100%;height:40px;border:1px solid #e1e4e8;border-radius:4px;display:flex;align-items:center;justify-content:space-between;background:white;text-align:left;padding:0 13px;font-size:12px}.node[aria-checked=true]{border-color:#0067c0;background:#edf5fd}.node small{color:#616161;font-size:11px}.empty{margin:auto;text-align:center;font-size:12px;color:#616161}.feedback{height:44px;flex-shrink:0;padding:3px 20px}.feedback>div{height:38px;padding:7px 10px;border-radius:4px;font-size:11px;line-height:1.8;display:flex;gap:8px;align-items:center}.feedback>div.pending{color:#0067c0;background:#edf5fd}.feedback>div.error{color:#b22b1c;background:#fdf0ee}.spinner{width:12px;height:12px;flex-shrink:0;border:2px solid #0067c033;border-top-color:#0067c0;border-radius:50%;animation:spin .8s linear infinite}.picker-footer{height:54px;flex-shrink:0;padding:11px 20px;border-top:1px solid #e5e5e5;display:flex;align-items:center;justify-content:space-between;gap:8px}.picker-footer small{font-size:11px;color:#616161}.btn{height:30px;padding:0 18px;border:1px solid #d1d1d1;border-radius:4px;background:white;font-size:12px}.btn.primary{background:#0067c0;border-color:#0067c0;color:white;min-width:108px}#menu{position:absolute;z-index:4;width:160px;padding:5px;background:white;border:1px solid #d0d4da;border-radius:6px;box-shadow:0 5px 24px #1d304422}#menu button{display:block;border:0;background:white;text-align:left;width:100%;padding:9px 12px;border-radius:4px;font-size:12px}#menu button:hover{background:#edf5fd}#menu hr{border:0;border-top:1px solid #e5e5e5;margin:4px}#menu button.danger{color:#c42b1c}#menu button.danger:hover{background:#fdf0ee}#menu[hidden],#toast[hidden]{display:none}#toast{position:absolute;z-index:5;right:24px;bottom:50px;max-width:85%;padding:12px 18px;border:1px solid #cbdccf;border-radius:5px;background:#edf7ed;color:#0f7b0f;font-size:12px;box-shadow:0 4px 16px #0001;animation:fade .16s ease-out}#contextDialog{width:480px;height:246px;max-width:calc(100vw - 40px);max-height:calc(100dvh - 40px)}#contextDialog::backdrop{background:#0003}#contextDialog[open]{display:flex;flex-direction:column}#contextDialog h2{font-size:20px;font-weight:600;margin:0;padding:22px 24px 14px}#contextDialog>p{padding:0 24px 12px}.context{flex:1;margin:0 24px 16px;padding:14px;border-radius:4px;background:#f3f6f9;font-size:13px;line-height:1.8}#contextDialog footer{flex-shrink:0;border-top:1px solid #e5e5e5;padding:13px 24px;text-align:right}@keyframes spin{to{transform:rotate(360deg)}}@keyframes fade{from{opacity:0}to{opacity:1}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}@media(max-width:760px){main{padding:20px 14px}.foot{display:block}}
+</style></head><body><main><h1>代理列表 · 操作归属对应行</h1><p>可体验每行切换节点、启停、编辑及更多菜单。演示数据和反馈仅保存在内存中；搜索等其他控件为视觉占位。</p><div class="tools"><label for="outcome">节点切换结果</label><select id="outcome"><option value="success">成功</option><option value="failure">请求失败</option><option value="unapplied">已保存未生效</option></select></div><div id="stage"><svg xmlns="http://www.w3.org/2000/svg" width="1280" height="768" viewBox="0 0 1280 768" role="img" aria-label="Routa 代理列表：全部操作归属对应行">
+<title>Routa 代理列表：全部操作归属对应行</title>
+<defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="10" flood-color="#243244" flood-opacity=".09"/></filter></defs>
+<g font-family="Segoe UI,Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-variant-numeric="tabular-nums">
+<rect x="0" y="0" width="1280" height="768" rx="8" fill="#f3f3f3" stroke="#d8d8d8" />
+<rect x="1" y="1" width="1278" height="31" rx="7" fill="#fafafa" />
+<path d="M0 32H1280" stroke="#e8e8e8" stroke-width="1" />
+<rect x="15" y="10" width="12" height="12" rx="3" fill="#0067c0" />
+<text x="36" y="22" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >Routa</text>
+<path d="M1159 16H1169" stroke="#616161" stroke-width="1" />
+<rect x="1202" y="11" width="9" height="9" rx="0" fill="none" stroke="#616161" />
+<path d="M1247 11l9 9m0-9-9 9" fill="none" stroke="#616161" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="20" y="56" width="26" height="26" rx="6" fill="#0067c0" />
+<g transform="translate(25 61) scale(0.6666666666666666)" fill="white">
+<path d="M19 15.18V7c0-2.21-1.79-4-4-4s-4 1.79-4 4v10c0 1.1-.9 2-2 2s-2-.9-2-2V8.82C8.16 8.4 9 7.3 9 6c0-1.66-1.34-3-3-3S3 4.34 3 6c0 1.3.84 2.4 2 2.82V17c0 2.21 1.79 4 4 4s4-1.79 4-4V7c0-1.1.9-2 2-2s2 .9 2 2v8.18c-1.16.41-2 1.51-2 2.82 0 1.66 1.34 3 3 3s3-1.34 3-3c0-1.3-.84-2.4-2-2.82M6 7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1m12 12c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1"/>
+</g>
+<text x="57" y="75" font-size="17" fill="#1b1b1b" font-weight="600" text-anchor="start" >Routa</text>
+<g transform="translate(24 119) scale(0.8333333333333334)" fill="#616161">
+<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2M5 19V5h6v14zm14 0h-6v-7h6zm0-9h-6V5h6z"/>
+</g>
+<text x="60" y="135" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >概览</text>
+<rect x="8" y="155" width="168" height="40" rx="5" fill="#e5e9ed" />
+<rect x="8" y="166" width="3" height="18" rx="1.5" fill="#0067c0" />
+<g transform="translate(24 165) scale(0.8333333333333334)" fill="#1b1b1b">
+<path d="M6.99 11 3 15l3.99 4v-3H14v-2H6.99zM21 9l-3.99-4v3H10v2h7.01v3z"/>
+</g>
+<text x="60" y="181" font-size="14" fill="#1b1b1b" font-weight="600" text-anchor="start" >代理</text>
+<g transform="translate(24 211) scale(0.8333333333333334)" fill="#616161">
+<path d="m9.78 11.16-1.42 1.42c-.68-.69-1.34-1.58-1.79-2.94l1.94-.49c.32.89.77 1.5 1.27 2.01M11 6 7 2 3 6h3.02c.02.81.08 1.54.19 2.17l1.94-.49C8.08 7.2 8.03 6.63 8.02 6zm10 0-4-4-4 4h2.99c-.1 3.68-1.28 4.75-2.54 5.88-.5.44-1.01.92-1.45 1.55-.34-.49-.73-.88-1.13-1.24L9.46 13.6c.93.85 1.54 1.54 1.54 3.4v5h2v-5c0-2.02.71-2.66 1.79-3.63 1.38-1.24 3.08-2.78 3.2-7.37z"/>
+</g>
+<text x="60" y="227" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >进程分流</text>
+<g transform="translate(24 257) scale(0.8333333333333334)" fill="#616161">
+<path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2m6.93 6h-2.95c-.32-1.25-.78-2.45-1.38-3.56 1.84.63 3.37 1.91 4.33 3.56M12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96M4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2s.06 1.34.14 2zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56-1.84-.63-3.37-1.9-4.33-3.56m2.95-8H5.08c.96-1.66 2.49-2.93 4.33-3.56C8.81 5.55 8.35 6.75 8.03 8M12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96M14.34 14H9.66c-.09-.66-.16-1.32-.16-2s.07-1.35.16-2h4.68c.09.65.16 1.32.16 2s-.07 1.34-.16 2m.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95c-.96 1.65-2.49 2.93-4.33 3.56M16.36 14c.08-.66.14-1.32.14-2s-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2z"/>
+</g>
+<text x="60" y="273" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >订阅</text>
+<g transform="translate(24 303) scale(0.8333333333333334)" fill="#616161">
+<path d="M19 15v4H5v-4zm1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1M7 18.5c-.82 0-1.5-.67-1.5-1.5s.68-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5M19 5v4H5V5zm1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1M7 8.5c-.82 0-1.5-.67-1.5-1.5S6.18 5.5 7 5.5s1.5.68 1.5 1.5S7.83 8.5 7 8.5"/>
+</g>
+<text x="60" y="319" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >节点</text>
+<g transform="translate(24 683) scale(0.8333333333333334)" fill="#616161">
+<path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.09-.16-.26-.25-.44-.25-.06 0-.12.01-.17.03l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1q-.09-.03-.18-.03c-.17 0-.34.09-.43.25l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.09.16.26.25.44.25.06 0 .12-.01.17-.03l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1q.09.03.18.03c.17 0 .34-.09.43-.25l2-3.46c.12-.22.07-.49-.12-.64zm-1.98-1.71c.04.31.05.52.05.73s-.02.43-.05.73l-.14 1.13.89.7 1.08.84-.7 1.21-1.27-.51-1.04-.42-.9.68c-.43.32-.84.56-1.25.73l-1.06.43-.16 1.13-.2 1.35h-1.4l-.19-1.35-.16-1.13-1.06-.43c-.43-.18-.83-.41-1.23-.71l-.91-.7-1.06.43-1.27.51-.7-1.21 1.08-.84.89-.7-.14-1.13c-.03-.31-.05-.54-.05-.74s.02-.43.05-.73l.14-1.13-.89-.7-1.08-.84.7-1.21 1.27.51 1.04.42.9-.68c.43-.32.84-.56 1.25-.73l1.06-.43.16-1.13.2-1.35h1.39l.19 1.35.16 1.13 1.06.43c.43.18.83.41 1.23.71l.91.7 1.06-.43 1.27-.51.7 1.21-1.07.85-.89.7zM12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4m0 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2"/>
+</g>
+<text x="60" y="699" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >设置</text>
+<text x="24" y="744" font-size="11" fill="#858585" font-weight="400" text-anchor="start" >v0.2.0</text>
+<text x="216" y="88" font-size="26" fill="#1b1b1b" font-weight="600" text-anchor="start" >代理</text>
+<circle cx="1015" cy="78" r="3" fill="#0f7b0f"/>
+<text x="1027" y="82" font-size="12" fill="#616161" font-weight="400" text-anchor="start" >内核运行中</text>
+<rect x="1136" y="61" width="112" height="34" rx="4" fill="#0067c0" />
+<g transform="translate(1147 70.0) scale(0.6666666666666666)" fill="white">
+<path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/>
+</g>
+<text x="1170" y="82.5" font-size="13" fill="white" font-weight="500" text-anchor="start" >新增代理</text>
+<rect x="216" y="124" width="700" height="40" rx="5" fill="white" stroke="#c8cdd3" />
+<g transform="translate(230 134) scale(0.8333333333333334)" fill="#616161">
+<path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"/>
+</g>
+<text x="262" y="150" font-size="14" fill="#858585" font-weight="400" text-anchor="start" >搜索代理、端口或节点</text>
+<rect x="844" y="132" width="58" height="24" rx="4" fill="#f2f3f4" />
+<text x="873" y="149" font-size="11" fill="#616161" font-weight="400" text-anchor="middle" >Ctrl K</text>
+<rect x="930" y="128" width="148" height="34" rx="4" fill="white" stroke="#d2d2d2" />
+<g transform="translate(941 137.0) scale(0.6666666666666666)" fill="#616161">
+<path d="M10 18h4v-2h-4zM3 6v2h18V6zm3 7h12v-2H6z"/>
+</g>
+<text x="964" y="149.5" font-size="13" fill="#1b1b1b" font-weight="500" text-anchor="start" >全部 6</text>
+<g data-action="test-all" tabindex="0" role="button" aria-label="全部测速" style="cursor:pointer">
+<rect x="1090" y="128" width="158" height="34" rx="4" fill="white" stroke="#d2d2d2" />
+<g transform="translate(1101 137.0) scale(0.6666666666666666)" fill="#616161">
+<path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"/>
+</g>
+<text x="1124" y="149.5" font-size="13" fill="#1b1b1b" font-weight="500" text-anchor="start" >全部测速</text>
+</g>
+<rect x="216" y="188" width="1032" height="448" rx="6" fill="white" stroke="#dedfe2" />
+<rect x="217" y="189" width="1030" height="39" rx="5" fill="#fafafa" />
+<rect x="217" y="216" width="1030" height="12" rx="0" fill="#fafafa" />
+<text x="240" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >端口 / 协议</text>
+<text x="344" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >代理</text>
+<text x="480" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >当前去向</text>
+<text x="780" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >延迟 / 速率</text>
+<text x="960" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >状态 / 启用</text>
+<text x="1120" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >编辑</text>
+<g data-row="0" data-name="机场">
+<rect x="217" y="228" width="1030" height="68" rx="0" fill="transparent" data-row-bg="true"/>
+<text x="240" y="257" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7893</text>
+<text x="240" y="278" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >SOCKS5</text>
+<text x="344" y="258" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" >机场</text>
+<text x="480" y="256" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" data-node="true">新加坡01</text>
+<g data-switch="0" tabindex="0" role="button" aria-label="切换 机场 的节点" style="cursor:pointer">
+<rect x="672" y="236" width="86" height="32" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="682" y="257" font-size="11" fill="#0067c0" font-weight="500" text-anchor="start" >切换节点</text>
+</g>
+<text x="480" y="280" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-meta="true">手动选择 · 系统默认网卡</text>
+<text x="780" y="256" font-size="13" fill="#616161" font-weight="400" text-anchor="start" data-delay="true">182 ms</text>
+<text x="780" y="279" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-rates="true">↑ 24 KB/s  ↓ 2.8 MB/s</text>
+<rect x="960" y="250" width="76" height="24" rx="12" fill="#edf7ed" data-state-bg="true"/>
+<circle cx="970" cy="262" r="2.5" fill="#0f7b0f"/>
+<text x="978" y="266" font-size="11" fill="#0f7b0f" font-weight="500" text-anchor="start" data-state="true">运行中</text>
+<g data-toggle="0" tabindex="0" role="switch" aria-label="启用 机场" aria-checked="true" style="cursor:pointer">
+<rect x="1049" y="242" width="48" height="40" rx="4" fill="transparent" />
+<rect x="1056" y="253" width="34" height="18" rx="9" fill="#0067c0" data-toggle-track="true"/>
+<circle cx="1081" cy="262" r="6" fill="white"/>
+</g>
+<g data-edit="0" tabindex="0" role="button" aria-label="编辑 机场 的配置" style="cursor:pointer">
+<rect x="1110" y="245" width="86" height="34" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="1120" y="267" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-more-row="0" tabindex="0" role="button" aria-label="机场 的更多操作" style="cursor:pointer">
+<rect x="1207" y="246" width="30" height="30" rx="4" fill="transparent" data-action-hit="true"/>
+<circle cx="1217" cy="261" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="261" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="261" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="1" data-name="开发工具">
+<rect x="217" y="296" width="1030" height="68" rx="0" fill="transparent" data-row-bg="true"/>
+<path d="M217 296H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="325" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7894</text>
+<text x="240" y="346" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >Mixed</text>
+<text x="344" y="326" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" >开发工具</text>
+<text x="480" y="324" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" data-node="true">新加坡01</text>
+<g data-switch="1" tabindex="0" role="button" aria-label="切换 开发工具 的节点" style="cursor:pointer">
+<rect x="672" y="304" width="86" height="32" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="682" y="325" font-size="11" fill="#0067c0" font-weight="500" text-anchor="start" >切换节点</text>
+</g>
+<text x="480" y="348" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-meta="true">手动选择 · 以太网</text>
+<text x="780" y="324" font-size="13" fill="#616161" font-weight="400" text-anchor="start" data-delay="true">182 ms</text>
+<text x="780" y="347" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-rates="true">↑ 8 KB/s  ↓ 420 KB/s</text>
+<rect x="960" y="318" width="76" height="24" rx="12" fill="#edf7ed" data-state-bg="true"/>
+<circle cx="970" cy="330" r="2.5" fill="#0f7b0f"/>
+<text x="978" y="334" font-size="11" fill="#0f7b0f" font-weight="500" text-anchor="start" data-state="true">运行中</text>
+<g data-toggle="1" tabindex="0" role="switch" aria-label="启用 开发工具" aria-checked="true" style="cursor:pointer">
+<rect x="1049" y="310" width="48" height="40" rx="4" fill="transparent" />
+<rect x="1056" y="321" width="34" height="18" rx="9" fill="#0067c0" data-toggle-track="true"/>
+<circle cx="1081" cy="330" r="6" fill="white"/>
+</g>
+<g data-edit="1" tabindex="0" role="button" aria-label="编辑 开发工具 的配置" style="cursor:pointer">
+<rect x="1110" y="313" width="86" height="34" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="1120" y="335" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-more-row="1" tabindex="0" role="button" aria-label="开发工具 的更多操作" style="cursor:pointer">
+<rect x="1207" y="314" width="30" height="30" rx="4" fill="transparent" data-action-hit="true"/>
+<circle cx="1217" cy="329" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="329" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="329" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="2" data-name="下载专用">
+<rect x="217" y="364" width="1030" height="68" rx="0" fill="transparent" data-row-bg="true"/>
+<path d="M217 364H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="393" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7895</text>
+<text x="240" y="414" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >HTTP</text>
+<text x="344" y="394" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" >下载专用</text>
+<text x="480" y="392" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" data-node="true">美国西部02</text>
+<text x="480" y="416" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-meta="true">自动测速 · 系统默认网卡</text>
+<text x="780" y="392" font-size="13" fill="#9d5d00" font-weight="400" text-anchor="start" data-delay="true">356 ms</text>
+<text x="780" y="415" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-rates="true">↑ 126 KB/s  ↓ 8.2 MB/s</text>
+<rect x="960" y="386" width="76" height="24" rx="12" fill="#edf7ed" data-state-bg="true"/>
+<circle cx="970" cy="398" r="2.5" fill="#0f7b0f"/>
+<text x="978" y="402" font-size="11" fill="#0f7b0f" font-weight="500" text-anchor="start" data-state="true">运行中</text>
+<g data-toggle="2" tabindex="0" role="switch" aria-label="启用 下载专用" aria-checked="true" style="cursor:pointer">
+<rect x="1049" y="378" width="48" height="40" rx="4" fill="transparent" />
+<rect x="1056" y="389" width="34" height="18" rx="9" fill="#0067c0" data-toggle-track="true"/>
+<circle cx="1081" cy="398" r="6" fill="white"/>
+</g>
+<g data-edit="2" tabindex="0" role="button" aria-label="编辑 下载专用 的配置" style="cursor:pointer">
+<rect x="1110" y="381" width="86" height="34" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="1120" y="403" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-more-row="2" tabindex="0" role="button" aria-label="下载专用 的更多操作" style="cursor:pointer">
+<rect x="1207" y="382" width="30" height="30" rx="4" fill="transparent" data-action-hit="true"/>
+<circle cx="1217" cy="397" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="397" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="397" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="3" data-name="浏览器">
+<rect x="217" y="432" width="1030" height="68" rx="0" fill="transparent" data-row-bg="true"/>
+<path d="M217 432H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="461" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7896</text>
+<text x="240" y="482" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >Mixed</text>
+<text x="344" y="462" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" >浏览器</text>
+<text x="480" y="460" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" data-node="true">东京01</text>
+<g data-switch="3" tabindex="0" role="button" aria-label="切换 浏览器 的节点" style="cursor:pointer">
+<rect x="672" y="440" width="86" height="32" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="682" y="461" font-size="11" fill="#0067c0" font-weight="500" text-anchor="start" >切换节点</text>
+</g>
+<text x="480" y="484" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-meta="true">手动选择 · 系统默认网卡</text>
+<text x="780" y="460" font-size="13" fill="#616161" font-weight="400" text-anchor="start" data-delay="true">58 ms</text>
+<text x="780" y="483" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-rates="true">↑ 12 KB/s  ↓ 1.4 MB/s</text>
+<rect x="960" y="454" width="76" height="24" rx="12" fill="#edf7ed" data-state-bg="true"/>
+<circle cx="970" cy="466" r="2.5" fill="#0f7b0f"/>
+<text x="978" y="470" font-size="11" fill="#0f7b0f" font-weight="500" text-anchor="start" data-state="true">运行中</text>
+<g data-toggle="3" tabindex="0" role="switch" aria-label="启用 浏览器" aria-checked="true" style="cursor:pointer">
+<rect x="1049" y="446" width="48" height="40" rx="4" fill="transparent" />
+<rect x="1056" y="457" width="34" height="18" rx="9" fill="#0067c0" data-toggle-track="true"/>
+<circle cx="1081" cy="466" r="6" fill="white"/>
+</g>
+<g data-edit="3" tabindex="0" role="button" aria-label="编辑 浏览器 的配置" style="cursor:pointer">
+<rect x="1110" y="449" width="86" height="34" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="1120" y="471" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-more-row="3" tabindex="0" role="button" aria-label="浏览器 的更多操作" style="cursor:pointer">
+<rect x="1207" y="450" width="30" height="30" rx="4" fill="transparent" data-action-hit="true"/>
+<circle cx="1217" cy="465" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="465" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="465" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="4" data-name="内网直连">
+<rect x="217" y="500" width="1030" height="68" rx="0" fill="transparent" data-row-bg="true"/>
+<path d="M217 500H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="529" font-size="19" fill="#858585" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7897</text>
+<text x="240" y="550" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >SOCKS5</text>
+<text x="344" y="530" font-size="14" fill="#858585" font-weight="500" text-anchor="start" >内网直连</text>
+<text x="480" y="528" font-size="14" fill="#858585" font-weight="500" text-anchor="start" data-node="true">直连</text>
+<text x="480" y="552" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-meta="true">直连 · Wi-Fi</text>
+<text x="780" y="528" font-size="13" fill="#616161" font-weight="400" text-anchor="start" data-delay="true">—</text>
+<text x="780" y="551" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-rates="true">↑ —  ↓ —</text>
+<rect x="960" y="522" width="76" height="24" rx="12" fill="#f0f0f0" data-state-bg="true"/>
+<circle cx="970" cy="534" r="2.5" fill="#616161"/>
+<text x="978" y="538" font-size="11" fill="#616161" font-weight="500" text-anchor="start" data-state="true">已关闭</text>
+<g data-toggle="4" tabindex="0" role="switch" aria-label="启用 内网直连" aria-checked="false" style="cursor:pointer">
+<rect x="1049" y="514" width="48" height="40" rx="4" fill="transparent" />
+<rect x="1056" y="525" width="34" height="18" rx="9" fill="white" stroke="#8a8a8a" data-toggle-track="true"/>
+<circle cx="1065" cy="534" r="6" fill="#8a8a8a"/>
+</g>
+<g data-edit="4" tabindex="0" role="button" aria-label="编辑 内网直连 的配置" style="cursor:pointer">
+<rect x="1110" y="517" width="86" height="34" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="1120" y="539" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-more-row="4" tabindex="0" role="button" aria-label="内网直连 的更多操作" style="cursor:pointer">
+<rect x="1207" y="518" width="30" height="30" rx="4" fill="transparent" data-action-hit="true"/>
+<circle cx="1217" cy="533" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="533" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="533" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="5" data-name="备用线路">
+<rect x="217" y="568" width="1030" height="68" rx="0" fill="transparent" data-row-bg="true"/>
+<path d="M217 568H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="597" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7898</text>
+<text x="240" y="618" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >Mixed</text>
+<text x="344" y="598" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" >备用线路</text>
+<text x="480" y="596" font-size="14" fill="#858585" font-weight="500" text-anchor="start" data-node="true">未生效</text>
+<g data-switch="5" tabindex="0" role="button" aria-label="切换 备用线路 的节点" style="cursor:pointer">
+<rect x="672" y="576" width="86" height="32" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="682" y="597" font-size="11" fill="#0067c0" font-weight="500" text-anchor="start" >切换节点</text>
+</g>
+<text x="480" y="620" font-size="10" fill="#c42b1c" font-weight="400" text-anchor="start" data-meta="true">端口被占用 · 配置：香港02</text>
+<text x="780" y="596" font-size="13" fill="#616161" font-weight="400" text-anchor="start" data-delay="true">—</text>
+<text x="780" y="619" font-size="10" fill="#616161" font-weight="400" text-anchor="start" data-rates="true">↑ —  ↓ —</text>
+<rect x="960" y="590" width="76" height="24" rx="12" fill="#fdf0ee" data-state-bg="true"/>
+<circle cx="970" cy="602" r="2.5" fill="#c42b1c"/>
+<text x="978" y="606" font-size="11" fill="#c42b1c" font-weight="500" text-anchor="start" data-state="true">启动失败</text>
+<g data-toggle="5" tabindex="0" role="switch" aria-label="启用 备用线路" aria-checked="true" style="cursor:pointer">
+<rect x="1049" y="582" width="48" height="40" rx="4" fill="transparent" />
+<rect x="1056" y="593" width="34" height="18" rx="9" fill="#0067c0" data-toggle-track="true"/>
+<circle cx="1081" cy="602" r="6" fill="white"/>
+</g>
+<g data-edit="5" tabindex="0" role="button" aria-label="编辑 备用线路 的配置" style="cursor:pointer">
+<rect x="1110" y="585" width="86" height="34" rx="4" fill="transparent" data-action-hit="true"/>
+<text x="1120" y="607" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-more-row="5" tabindex="0" role="button" aria-label="备用线路 的更多操作" style="cursor:pointer">
+<rect x="1207" y="586" width="30" height="30" rx="4" fill="transparent" data-action-hit="true"/>
+<circle cx="1217" cy="601" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="601" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="601" r="1.35" fill="#616161"/>
+</g>
+</g>
+<path d="M1104 189L1104 635" stroke="#edf0f3" stroke-width="1" />
+<text x="216" y="740" font-size="11" fill="#616161" font-weight="400" text-anchor="start" data-count="true">6 个代理 · 4 个运行中 · 1 个关闭 · 1 个异常</text>
+</g></svg><div id="menu" role="menu" hidden><button id="testRow" role="menuitem">测速</button><button id="copyRow" role="menuitem">复制地址</button><hr><button id="deleteRow" role="menuitem" class="danger">删除代理</button></div><div id="toast" role="status" hidden></div></div><div class="foot"><span>切换靠近节点，启停靠近状态，编辑直接对应行。每行“⋯”提供测速、复制与删除。</span><span><a href="01-row-actions.png" target="_blank">完整预览 ↗</a>　<a href="02-node-picker.png" target="_blank">节点面板预览 ↗</a></span></div></main>
+<dialog id="picker" aria-labelledby="pickerTitle"><div class="picker-head"><h2 id="pickerTitle">切换节点</h2><p id="currentNode"></p><button class="close-icon" id="closePicker" aria-label="关闭节点面板">×</button></div><div class="picker-tools"><input id="searchNode" aria-label="搜索节点" placeholder="搜索节点"></div><div class="nodes" id="nodes" role="radiogroup" aria-label="选择节点"></div><div class="feedback" aria-live="polite"><div id="feedback"></div></div><footer class="picker-footer"><small id="nodeCount"></small><button class="btn primary" id="confirmNode">确认切换</button></footer></dialog>
+<dialog id="contextDialog" aria-labelledby="contextTitle"><h2 id="contextTitle"></h2><p id="contextHint">操作入口归属演示</p><div class="context" id="contextContent"></div><footer><button class="btn primary" id="closeContext">关闭</button></footer></dialog>
+<script>
+const rows=[{"name": "机场", "port": "7893", "proto": "SOCKS5", "node": "新加坡01", "mode": "手动选择", "nic": "系统默认网卡", "delay": "182 ms", "up": "24 KB/s", "down": "2.8 MB/s", "state": "运行中", "kind": "green", "on": true}, {"name": "开发工具", "port": "7894", "proto": "Mixed", "node": "新加坡01", "mode": "手动选择", "nic": "以太网", "delay": "182 ms", "up": "8 KB/s", "down": "420 KB/s", "state": "运行中", "kind": "green", "on": true}, {"name": "下载专用", "port": "7895", "proto": "HTTP", "node": "美国西部02", "mode": "自动测速", "nic": "系统默认网卡", "delay": "356 ms", "up": "126 KB/s", "down": "8.2 MB/s", "state": "运行中", "kind": "green", "on": true}, {"name": "浏览器", "port": "7896", "proto": "Mixed", "node": "东京01", "mode": "手动选择", "nic": "系统默认网卡", "delay": "58 ms", "up": "12 KB/s", "down": "1.4 MB/s", "state": "运行中", "kind": "green", "on": true}, {"name": "内网直连", "port": "7897", "proto": "SOCKS5", "node": "直连", "mode": "直连", "nic": "Wi-Fi", "delay": "—", "up": "—", "down": "—", "state": "已关闭", "kind": "gray", "on": false}, {"name": "备用线路", "port": "7898", "proto": "Mixed", "node": "香港02", "mode": "手动选择", "nic": "系统默认网卡", "delay": "—", "up": "—", "down": "—", "state": "启动失败", "kind": "red", "on": true}];
+rows.forEach(r=>{r.sourceKind=r.kind;r.baseDelay=r.delay});
+const $=s=>document.querySelector(s),stage=$('#stage'),picker=$('#picker');
+let target=-1,menuTarget=-1,chosen='',busy=false,returnFocus=null,toastTimer=null,anchor=null;
+const rowEl=i=>stage.querySelector('[data-row="'+i+'"]');
+function notify(text){clearTimeout(toastTimer);$('#toast').textContent=text;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,2000)}
+function update(i,pending=false){const r=rows[i],el=rowEl(i),failed=r.sourceKind==='red'&&r.on,off=!r.on;const state=pending?'应用中':failed?'启动失败':off?'已关闭':'运行中',color=pending?'#0067c0':failed?'#c42b1c':off?'#616161':'#0f7b0f',bg=pending?'#edf5fd':failed?'#fdf0ee':off?'#f0f0f0':'#edf7ed';const pill=el.querySelector('[data-state-bg]');pill.setAttribute('fill',bg);pill.nextElementSibling.setAttribute('fill',color);el.querySelector('[data-state]').textContent=state;el.querySelector('[data-state]').setAttribute('fill',color);el.querySelector('[data-node]').textContent=failed?'未生效':r.node;el.querySelector('[data-node]').setAttribute('fill',failed||off?'#858585':'#1b1b1b');el.querySelector('[data-meta]').textContent=failed?'端口被占用 · 配置：'+r.node:r.mode+' · '+r.nic;el.querySelector('[data-meta]').setAttribute('fill',failed?'#c42b1c':'#616161');el.querySelector('[data-delay]').textContent=failed||off?'—':r.delay;el.querySelector('[data-rates]').textContent=failed||off?'↑ —  ↓ —':'↑ '+r.up+'  ↓ '+r.down;const toggle=el.querySelector('[data-toggle]'),track=toggle.querySelector('[data-toggle-track]'),thumb=toggle.querySelector('circle');toggle.setAttribute('aria-checked',String(r.on));toggle.setAttribute('aria-disabled',String(pending));track.setAttribute('fill',r.on?'#0067c0':'white');track.setAttribute('stroke',r.on?'none':'#8a8a8a');thumb.setAttribute('cx',r.on?'1081':'1065');thumb.setAttribute('fill',r.on?'white':'#8a8a8a');const running=rows.filter(x=>x.on&&x.sourceKind!=='red').length,closed=rows.filter(x=>!x.on).length,failedCount=rows.filter(x=>x.on&&x.sourceKind==='red').length;stage.querySelector('[data-count]').textContent=rows.length+' 个代理 · '+running+' 个运行中 · '+closed+' 个关闭 · '+failedCount+' 个异常';}
+function feedback(type,message){const box=$('#feedback');box.className=type;box.replaceChildren();if(type==='pending'){const s=document.createElement('span');s.className='spinner';box.append(s)}if(message){const t=document.createElement('span');t.textContent=message;box.append(t)}}
+function candidates(){return [...new Set([rows[target].node,'东京02','香港03'])]}
+function drawNodes(){const list=$('#nodes'),q=$('#searchNode').value.trim().toLowerCase(),names=candidates().filter(n=>n.toLowerCase().includes(q));list.replaceChildren();for(const name of names){const b=document.createElement('button');b.className='node';b.setAttribute('role','radio');b.setAttribute('aria-checked',String(name===chosen));b.disabled=busy;const text=document.createElement('span'),delay=document.createElement('small');text.textContent=name;delay.textContent=name==='东京02'?'58 ms':name==='香港03'?'76 ms':rows[target].baseDelay;b.append(text,delay);b.onclick=()=>{chosen=name;feedback('','');$('#confirmNode').textContent='确认切换';drawNodes()};list.append(b)}if(!names.length){const e=document.createElement('p');e.className='empty';e.textContent='未找到匹配节点';list.append(e)}$('#nodeCount').textContent=names.length+' / '+candidates().length+' 个节点';$('#confirmNode').disabled=busy||(chosen===rows[target].node&&rows[target].sourceKind!=='red');$('#searchNode').disabled=busy;$('#closePicker').disabled=busy;}
+function place(){if(!anchor)return;const r=anchor.getBoundingClientRect(),w=Math.min(366,innerWidth-40),h=Math.min(364,innerHeight-40);picker.style.left=Math.max(20,Math.min(innerWidth-w-20,r.right-w+16))+'px';picker.style.top=Math.max(20,Math.min(innerHeight-h-20,r.bottom+h+8>innerHeight-20?r.top-h-8:r.bottom+8))+'px'}
+function openPicker(i,element){target=i;anchor=element;returnFocus=element;busy=false;chosen=rows[i].node;$('#pickerTitle').textContent='切换节点 · '+rows[i].name;$('#currentNode').textContent=rows[i].sourceKind==='red'?'当前未生效 · 配置：'+rows[i].node:!rows[i].on?'代理已关闭 · 配置：'+rows[i].node:'当前生效：'+rows[i].node;$('#searchNode').value='';$('#confirmNode').textContent='确认切换';feedback('','');drawNodes();place();picker.showModal()}
+function closePicker(){if(busy)return;picker.close();returnFocus?.focus()}
+function submit(){if(busy||$('#confirmNode').disabled)return;busy=true;const i=target,outcome=$('#outcome').value,node=chosen;$('#confirmNode').textContent='切换中…';feedback('pending','正在切换到'+node+'…');drawNodes();setTimeout(()=>{busy=false;const r=rows[i];if(outcome==='success'&&r.on&&r.sourceKind!=='red'){r.node=node;r.delay=node==='东京02'?'58 ms':node==='香港03'?'76 ms':r.baseDelay;update(i);picker.close();returnFocus?.focus();notify(r.name+' 已切换到'+node)}else{feedback('error',r.sourceKind==='red'?'选择尚未生效，端口仍被占用。':!r.on?'选择尚未生效，代理当前已关闭。':outcome==='unapplied'?'选择已保存，尚未生效。请重试。':'未能保存节点选择，请重试。');$('#confirmNode').textContent='重试';drawNodes()}},1100)}
+function context(i,label){returnFocus=document.activeElement;$('#contextTitle').textContent=label+' · '+rows[i].name;$('#contextContent').textContent=rows[i].name+' · '+rows[i].proto+' :'+rows[i].port+' → '+rows[i].node;$('#contextDialog').showModal()}
+function test(i){const r=rows[i],el=rowEl(i).querySelector('[data-delay]');el.textContent=r.on&&r.sourceKind!=='red'?'测速中…':'—';setTimeout(()=>{update(i);notify('测速演示完成 · '+r.name)},800)}
+stage.addEventListener('click',event=>{const sw=event.target.closest('[data-switch]');if(sw){openPicker(Number(sw.dataset.switch),sw);return}const edit=event.target.closest('[data-edit]');if(edit){context(Number(edit.dataset.edit),'编辑配置');return}const toggle=event.target.closest('[data-toggle]');if(toggle){if(toggle.getAttribute('aria-disabled')==='true')return;const i=Number(toggle.dataset.toggle);rows[i].on=!rows[i].on;update(i,true);setTimeout(()=>update(i),600);return}const more=event.target.closest('[data-more-row]');if(more){menuTarget=Number(more.dataset.moreRow);const box=$('#menu'),r=more.getBoundingClientRect(),s=stage.getBoundingClientRect();box.hidden=!box.hidden;box.style.left=Math.max(8,Math.min(s.width-168,r.right-s.left-160))+'px';box.style.top=Math.max(8,Math.min(s.height-136,r.bottom-s.top+4))+'px';$('#testRow').focus();return}if(event.target.closest('[data-action="test-all"]'))rows.forEach((r,i)=>test(i))});
+stage.addEventListener('keydown',event=>{if(['Enter',' '].includes(event.key)&&event.target.matches('[data-switch],[data-edit],[data-toggle],[data-more-row],[data-action="test-all"]')){event.preventDefault();event.target.dispatchEvent(new MouseEvent('click',{bubbles:true}))}if(event.key==='Escape')$('#menu').hidden=true});
+$('#searchNode').oninput=drawNodes;$('#confirmNode').onclick=submit;$('#closePicker').onclick=closePicker;picker.addEventListener('cancel',event=>{if(busy)event.preventDefault()});picker.addEventListener('click',event=>{if(event.target===picker){const r=picker.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closePicker()}});window.addEventListener('resize',()=>{if(picker.open)place()});
+$('#testRow').onclick=()=>{$('#menu').hidden=true;test(menuTarget)};$('#copyRow').onclick=()=>{$('#menu').hidden=true;notify('复制地址演示 · 127.0.0.1:'+rows[menuTarget].port)};$('#deleteRow').onclick=()=>{$('#menu').hidden=true;context(menuTarget,'删除代理入口')};$('#closeContext').onclick=()=>{$('#contextDialog').close();returnFocus?.focus()};document.addEventListener('pointerdown',event=>{if(!event.target.closest('#menu,[data-more-row]'))$('#menu').hidden=true});
+</script></body></html>

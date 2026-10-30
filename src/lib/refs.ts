@@ -78,6 +78,7 @@ export function expandMembers(model: Model, members: ExitMember[]): NodeRef[] {
     } else {
       const id = m.group.Custom;
       if (!model.node_groups.some((g) => g.id === id)) continue;
+      for (const r of model.node_groups.find(g => g.id === id)?.members ?? []) if (resolves(model, r)) push(r);
       for (const n of model.manual_nodes) if (n.groups.includes(id)) push({ manual_id: n.id });
     }
   }

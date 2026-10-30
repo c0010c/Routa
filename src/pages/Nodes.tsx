@@ -480,7 +480,7 @@ function NodeTable({
                       </Box>
                     )}
                   </TableCell>
-                  <TableCell sx={ellipsis} title={r.server}>
+                  <TableCell sx={ellipsis} title={r.server} data-selectable="true">
                     {r.server}
                   </TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>

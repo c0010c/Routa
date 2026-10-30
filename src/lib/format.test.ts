@@ -138,10 +138,10 @@ describe("listenerNotEffective", () => {
 describe("delayColor", () => {
   it.each([
     [48, "success"],
-    [199, "success"],
-    [200, "warning"],
-    [500, "warning"],
-    [501, "error"],
+    [300, "success"],
+    [301, "warning"],
+    [600, "warning"],
+    [601, "error"],
     [null, "error"],
   ] as const)("%s ms -> %s", (ms, color) => expect(delayColor(ms)).toBe(color));
 });
@@ -153,7 +153,7 @@ describe("delayFailure", () => {
     ["NotFound", "未生效"],
     ["NoCore", "内核未运行"],
     [{ CoreUnreachable: "refused" }, "内核无响应"],
-    [{ Other: "400: bad" }, "测速失败"],
+    [{ Other: "400: bad" }, "测量失败"],
     [null, "超时"],
     [undefined, "超时"],
   ] as const)("%j -> %s", (error, text) => expect(delayFailure(error).text).toBe(text));

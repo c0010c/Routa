@@ -82,7 +82,10 @@ pub fn expand(model: &Model, members: &[ExitMember]) -> Expansion {
                 }
             }
             ExitMember::Group { group: GroupRef::Custom(gid) } => {
-                if model.node_groups.iter().any(|g| &g.id == gid) {
+                if let Some(g) = model.node_groups.iter().find(|g| &g.id == gid) {
+                    for r in &g.members {
+                        if resolve(model, r).is_some() { push_unique(&mut nodes, r.clone()); }
+                    }
                     for n in model.manual_nodes.iter().filter(|n| n.groups.contains(gid)) {
                         push_unique(&mut nodes, NodeRef::Manual { manual_id: n.id.clone() });
                     }
@@ -132,6 +135,7 @@ mod tests {
 
     fn sub(id: &str, names: &[&str]) -> Subscription {
         Subscription {
+            fallback_listener: None,
             id: SubscriptionId(id.into()),
             name: id.into(),
             url: "https://example.com".into(),
@@ -152,10 +156,26 @@ mod tests {
     }
 
     #[test]
+    fn custom_group_expands_across_subscription_and_manual_sources() {
+        let mut model = Model::default();
+        let sub = Subscription { name:"source".into(), nodes:vec![Node {name:"node".into(),proxy_type:"http".into(),server:"127.0.0.1".into(),raw:serde_json::json!({"name":"node","type":"http"})}], ..Default::default() };
+        let reference=NodeRef::Subscription {subscription_id:sub.id.clone(),name:"node".into()};
+        let group=NodeGroup {name:"cross source".into(),members:vec![reference.clone()],..Default::default()};
+        let manual=mnode("manual","manual",&[]);
+        let mut manual=manual;manual.groups.push(group.id.clone());
+        let manual_ref=NodeRef::Manual {manual_id:manual.id.clone()};
+        let group_ref=ExitMember::Group {group:GroupRef::Custom(group.id.clone())};
+        model.subscriptions.push(sub);model.manual_nodes.push(manual);model.node_groups.push(group);
+        assert_eq!(expand(&model,&[group_ref.clone(),ExitMember::Node(reference.clone())]).nodes,vec![reference,manual_ref]);
+        model.subscriptions[0].nodes.clear();
+        assert_eq!(expand(&model,&[group_ref]).nodes.len(),1);
+    }
+
+    #[test]
     fn expand_dedupes_node_also_in_group() {
         let m = Model {
             manual_nodes: vec![mnode("m1", "a", &["g1"]), mnode("m2", "b", &["g1"])],
-            node_groups: vec![NodeGroup { id: NodeGroupId("g1".into()), name: "g".into() }],
+            node_groups: vec![NodeGroup {members: vec![],  id: NodeGroupId("g1".into()), name: "g".into() }],
             ..Model::default()
         };
         let e = expand(

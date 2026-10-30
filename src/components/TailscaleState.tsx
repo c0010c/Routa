@@ -92,7 +92,8 @@ export function TailscaleStateChip({ node, compact = false }: { node: ManualNode
   const hostname = (node.kind as { Tailscale: TailscaleOpts }).Tailscale?.hostname ?? "";
   const ip = loggedIn && !compact ? (findSelf(peers, hostname)?.ips[0] ?? null) : null;
   const { label, color } = stateChip(compact && loggedIn ? { LoggedIn: { ip: null } } : s, ip);
-  return <Chip size="small" label={label} color={color} sx={{ alignSelf: "flex-start" }} />;
+  const copyable = color === "error" || (loggedIn && !compact && !!(s.LoggedIn.ip ?? ip));
+  return <Chip size="small" label={label} color={color} data-selectable={copyable} sx={{ alignSelf: "flex-start" }} />;
 }
 
 /** The authorization link with open/copy actions, while one is pending. */
@@ -153,7 +154,7 @@ export function TailscaleLoginLink({ node, hideChip = false }: { node: ManualNod
             )}
           </Stack>
           {openError && (
-            <Typography variant="body2" color="error">
+            <Typography variant="body2" color="error" data-selectable="true">
               {openError}，请复制链接后在浏览器中打开
             </Typography>
           )}

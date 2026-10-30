@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod config_gen;
 pub mod core;
+pub mod desktop;
 pub mod model;
 pub mod netif;
 pub mod portable;
@@ -10,14 +11,15 @@ pub mod scheduler;
 pub mod stats;
 pub mod store;
 pub mod subscription;
+pub mod system_proxy;
 pub mod tailnet;
 pub mod tailscale;
 pub mod tray;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_specta::{collect_commands, Builder};
@@ -50,7 +52,14 @@ fn fatal_dialog(msg: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
     let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
     let (text, caption) = (wide(msg), wide("Routa"));
-    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONERROR) };
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        )
+    };
 }
 
 /// `Some(data dir)` in portable mode, after making sure it is writable.
@@ -90,23 +99,16 @@ fn create_main_window(app: &tauri::App, portable: Option<&std::path::Path>) -> t
     Ok(())
 }
 
-fn build_runtime(
-    app: &tauri::AppHandle,
-    data_dir: PathBuf,
-) -> Result<Arc<Runtime>, Box<dyn std::error::Error>> {
+fn build_runtime(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<Arc<Runtime>, Box<dyn std::error::Error>> {
     let store = Store::open(data_dir)?;
     let workdir = store.core_workdir();
-    let launcher_for: LauncherFor = Arc::new(move |s: &Settings| {
-        let bin = s
-            .core_path
-            .as_deref()
-            .filter(|p| !p.trim().is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(sidecar_path);
-        Arc::new(ProcessLauncher { bin, workdir: workdir.clone() }) as Arc<dyn CoreLauncher>
+    let launcher_for: LauncherFor = Arc::new(move |_s: &Settings| {
+        Arc::new(ProcessLauncher {
+            bin: sidecar_path(),
+            workdir: workdir.clone(),
+        }) as Arc<dyn CoreLauncher>
     });
-    let api_for: ApiFor =
-        Box::new(|port, secret| Arc::new(HttpMihomoApi::new(port, secret)) as Arc<dyn MihomoApi>);
+    let api_for: ApiFor = Box::new(|port, secret| Arc::new(HttpMihomoApi::new(port, secret)) as Arc<dyn MihomoApi>);
     let (tx, mut rx) = mpsc::channel::<RuntimeEvent>(1024);
     let rt = Arc::new(Runtime::new(
         store,
@@ -142,6 +144,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::get_model,
             commands::get_status,
             commands::save_listener,
+            commands::save_proxy,
             commands::delete_listener,
             commands::save_exit,
             commands::delete_exit,
@@ -156,6 +159,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::save_node_group,
             commands::delete_node_group,
             commands::parse_proxy_yaml,
+            commands::parse_proxy_yaml_batch,
+            commands::save_manual_nodes,
             commands::group_now,
             commands::reset_traffic,
             commands::core_start,
@@ -174,6 +179,17 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::procroute_uninstall,
             commands::procroute_cleanup,
             commands::list_running_processes,
+            desktop::desktop_state,
+            desktop::save_ui_preferences,
+            desktop::bind_default_listener,
+            desktop::select_simple_node,
+            desktop::set_desktop_connection,
+            desktop::set_system_proxy_listener,
+            desktop::save_simple_app,
+            desktop::set_simple_port,
+            desktop::change_process_listener,
+            desktop::get_connection_details,
+            desktop::read_core_log,
         ])
         // Payload of the "procroute-flows" event (not returned by any command).
         .typ::<routa_procsvc_proto::Flow>()
@@ -233,11 +249,16 @@ pub fn run() {
                 Some(dir) => dir,
                 None => app.path().app_data_dir()?,
             };
+            let desktop = Arc::new(desktop::Desktop::open(data_dir.clone()).map_err(std::io::Error::other)?);
             let rt = build_runtime(app.handle(), data_dir)?;
+            app.manage(desktop.clone());
             app.manage(rt.clone());
             tray::setup(app.handle())?;
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                if let Err(e) = desktop.initialize(&rt).await {
+                    eprintln!("default proxy initialization: {e}");
+                }
                 match rt.start().await {
                     Ok(()) => eprintln!("runtime: started"),
                     Err(e) => eprintln!("runtime: start failed: {e}"),
@@ -245,14 +266,41 @@ pub fn run() {
                 // Only now: before the first start the core reads as Stopped
                 // (no reason), which would push Block to every rule. Until
                 // then the service keeps its own "Routa absent" fallback.
-                procroute::client::spawn(rt, handle);
+                procroute::client::spawn(rt.clone(), handle);
+                desktop.clone().spawn_monitor(rt.clone());
+                let preferences = desktop.state(&rt).preferences;
+                if preferences.auto_connect {
+                    let result = if preferences.mode == Some(desktop::InterfaceMode::Full)
+                        && preferences.capture_mode == desktop::CaptureMode::System
+                    {
+                        if let Some(id) = preferences.system_listener_id {
+                            desktop.system_for_listener(&rt, id).await
+                        } else {
+                            desktop.connect(&rt, Some(preferences.capture_mode)).await
+                        }
+                    } else {
+                        desktop.connect(&rt, Some(preferences.capture_mode)).await
+                    };
+                    if let Err(e) = result {
+                        eprintln!("auto connect: {e}");
+                    }
+                }
             });
             Ok(())
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                if window
+                    .app_handle()
+                    .try_state::<Arc<desktop::Desktop>>()
+                    .is_none_or(|d| d.close_to_tray())
+                {
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else {
+                    api.prevent_close();
+                    window.app_handle().exit(0);
+                }
             }
         })
         .build(tauri::generate_context!())
@@ -270,7 +318,10 @@ pub fn run() {
                 return;
             }
             api.prevent_exit();
-            if state.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            if state
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
                 return; // already shutting down
             }
             let app = app.clone();
@@ -281,6 +332,9 @@ pub fn run() {
                 procroute::client::goodbye().await;
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     let rt = Arc::clone(&*rt);
+                    if let Some(dt) = app.try_state::<Arc<desktop::Desktop>>() {
+                        dt.shutdown(&rt).await;
+                    }
                     // Spawned so a panic is caught; bounded so exit cannot hang.
                     let job = tauri::async_runtime::spawn(async move { rt.shutdown().await });
                     match tokio::time::timeout(Duration::from_secs(10), job).await {
@@ -297,6 +351,9 @@ pub fn run() {
             if state.swap(2, Ordering::SeqCst) == 0 {
                 tauri::async_runtime::block_on(procroute::client::goodbye());
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
+                    if let Some(dt) = app.try_state::<Arc<desktop::Desktop>>() {
+                        tauri::async_runtime::block_on(dt.shutdown(&rt));
+                    }
                     tauri::async_runtime::block_on(rt.shutdown());
                 }
             }

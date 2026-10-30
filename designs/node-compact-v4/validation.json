@@ -1,0 +1,52 @@
+{
+  "node": {
+    "clientWidth": 131,
+    "count": 23,
+    "fullName": "日本 · 东京 IPLC 专线 03 · 流媒体解锁 · 高倍率 · 长期备用线路 · Ultra Premium",
+    "height": 64,
+    "overflow": "hidden",
+    "scrollWidth": 482,
+    "textOverflow": "ellipsis",
+    "titleFont": "14px",
+    "titleHeight": 20,
+    "tooltip": true,
+    "whiteSpace": "nowrap",
+    "width": 225
+  },
+  "visibility": {
+    "total": 23,
+    "visible": 23
+  },
+  "dialog": {
+    "cardHeight": 64,
+    "footerTop": 757,
+    "height": 720
+  },
+  "empty": {
+    "count": "0 / 20 个候选节点",
+    "footerTop": 757,
+    "height": 720
+  },
+  "pending": {
+    "busy": 20,
+    "footerTop": 757,
+    "height": 64,
+    "titleHeight": 20
+  },
+  "selection": {
+    "cardHeight": 64,
+    "dialog": {
+      "height": 720,
+      "width": 1008
+    },
+    "footerTop": 837,
+    "metadataTop": 360,
+    "selectedColor": "rgb(196, 43, 28)",
+    "selectionFill": "rgb(229, 241, 252)",
+    "selectionMoreGap": 4,
+    "selectionTop": 360
+  },
+  "stableFooter": true,
+  "singleLine": true,
+  "ellipsis": true
+}

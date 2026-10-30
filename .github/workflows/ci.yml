@@ -76,6 +76,8 @@ jobs:
         run: pnpm build-proxybridge
       - name: Build the process-routing service
         run: pnpm build-procsvc --locked
+      - name: Build artifact regression tests
+        run: node --test scripts/build-artifacts.test.mjs
       - name: Rust tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
       - name: Real mihomo integration test
@@ -88,7 +90,7 @@ jobs:
       - name: Build Windows application
         run: pnpm tauri build --no-bundle -- --locked
       - name: Package portable build
-        run: pnpm pack:portable --skip-build
+        run: pnpm pack:portable --skip-build --out-dir src-tauri/target/release/bundle/portable
       - name: Verify portable archive contents
         run: |
           $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
@@ -99,7 +101,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Cannot read portable archive" }
           $required = @(
             "$name.exe", 'mihomo.exe', 'routa-procsvc.exe', 'procsvc/ProxyBridgeCore.dll',
-            'procsvc/WinDivert.dll', 'procsvc/WinDivert64.sys', 'portable', 'LICENSE'
+            'procsvc/WinDivert.dll', 'procsvc/WinDivert64.sys', 'portable', 'LICENSE', 'build-info.json'
           )
           foreach ($file in $required) {
             if ("$name/$file" -notin $entries) { throw "Missing archive entry: $name/$file" }

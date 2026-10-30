@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures_util::stream::{self, BoxStream, StreamExt};
@@ -30,6 +30,8 @@ pub struct FakeApi {
     pub delay_calls: Mutex<Vec<(String, String, u32)>>,
     /// Per-proxy delay result; unknown proxies are `Unreachable`.
     pub delay_results: Mutex<HashMap<String, Result<u32, ApiError>>>,
+    /// One delayed request: (entered, release), for path-change races.
+    pub delay_gate: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// Group name -> current member for `proxy_now`; unknown names are `Ok(None)`.
     pub proxy_nows: Mutex<HashMap<String, String>>,
     /// `None` behaves as `Ok("v1.19.33")`.
@@ -126,12 +128,18 @@ impl MihomoApi for FakeApi {
             .lock()
             .unwrap()
             .push((proxy.to_string(), url.to_string(), timeout_ms));
-        self.delay_results
+        let result = self.delay_results
             .lock()
             .unwrap()
             .get(proxy)
             .cloned()
-            .unwrap_or_else(|| Err(ApiError::Unreachable("no delay configured".into())))
+            .unwrap_or_else(|| Err(ApiError::Unreachable("no delay configured".into())));
+        let gate = self.delay_gate.lock().unwrap().take();
+        if let Some((entered, release)) = gate {
+            entered.notify_one();
+            release.notified().await;
+        }
+        result
     }
 
     async fn select(&self, group: &str, member: &str) -> Result<(), ApiError> {

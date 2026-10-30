@@ -90,6 +90,8 @@ pub struct Subscription {
     pub url: String,
     pub update_interval_mins: Option<u32>,
     pub fallback_exit: Option<ExitId>,
+    #[specta(optional)]
+    pub fallback_listener: Option<ListenerId>,
     /// unix 秒
     pub last_updated: Option<i64>,
     pub last_result: Option<FetchResult>,
@@ -150,6 +152,26 @@ pub struct Listener {
     pub auth: Option<Auth>,
     pub exit: Option<ExitId>,
     pub user_enabled: bool,
+    #[serde(default)]
+    #[specta(optional)]
+    pub routing: Option<ListenerRouting>,
+}
+
+/// Per-port routing; None preserves legacy uniform forwarding.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+pub struct ListenerRouting {
+    pub rules: Vec<PortRule>,
+    pub unmatched: RuleAction,
+}
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+pub enum RuleAction { Proxy, Direct, Reject }
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+pub enum RuleMatch { Domain, DomainSuffix, Ipv4Cidr }
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+pub struct PortRule {
+    pub matcher: RuleMatch,
+    pub value: String,
+    pub action: RuleAction,
 }
 
 impl Default for Subscription {
@@ -160,6 +182,7 @@ impl Default for Subscription {
             url: String::new(),
             update_interval_mins: Some(1440),
             fallback_exit: None,
+            fallback_listener: None,
             last_updated: None,
             last_result: None,
             nodes: Vec::new(),
@@ -190,6 +213,7 @@ impl Listener {
             auth: None,
             exit: None,
             user_enabled: true,
+            routing: None,
         }
     }
 }
@@ -277,6 +301,8 @@ pub struct ManualNode {
 pub struct NodeGroup {
     pub id: NodeGroupId,
     pub name: String,
+    #[specta(optional)]
+    pub members: Vec<NodeRef>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, specta::Type)]
@@ -381,7 +407,7 @@ mod tests {
     #[test]
     fn model_json_roundtrip() {
         let sub_id = SubscriptionId::new();
-        let group = NodeGroup { id: NodeGroupId::new(), name: "家用 🏠".into() };
+        let group = NodeGroup {members: vec![],  id: NodeGroupId::new(), name: "家用 🏠".into() };
         let proxy_node = ManualNode {
             id: ManualNodeId::new(),
             name: "自建 🇯🇵".into(),
@@ -406,8 +432,7 @@ mod tests {
             kind: ExitKind::Group {
                 strategy: GroupStrategy::UrlTest,
                 members: vec![
-                    ExitMember::Node(NodeRef::Subscription {
-                        subscription_id: sub_id.clone(),
+                    ExitMember::Node(NodeRef::Subscription { subscription_id: sub_id.clone(),
                         name: "香港 🇭🇰 01".into(),
                     }),
                     ExitMember::Node(NodeRef::Manual { manual_id: proxy_node.id.clone() }),
@@ -425,6 +450,7 @@ mod tests {
         });
         let m = Model {
             subscriptions: vec![Subscription {
+                fallback_listener: None,
                 id: sub_id,
                 name: "订阅 ✨".into(),
                 url: "https://example.com/sub".into(),

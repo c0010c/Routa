@@ -397,10 +397,12 @@ mod tests {
     fn conn(id: &str, inbound: &str) -> Conn {
         Conn {
             id: id.into(),
+            chains: vec![],
             upload: 0,
             download: 0,
             metadata: ConnMeta {
                 inbound_name: inbound.into(),
+                ..Default::default()
             },
         }
     }

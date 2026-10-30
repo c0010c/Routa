@@ -1,0 +1,43 @@
+{
+  "nodePage": {
+    "cardHeight": 88,
+    "cardWidth": 225,
+    "columns": "225px 225px 225px 225px 225px",
+    "sourceFont": "12px",
+    "titleDelayGap": 6,
+    "titleFont": "14px",
+    "titleWidth": 131
+  },
+  "dialog": {
+    "bodyHeight": 529,
+    "cardHeight": 88,
+    "cardWidth": 228.75,
+    "columns": "228.75px 228.75px 228.75px 228.75px",
+    "footerTop": 757,
+    "height": 720,
+    "latencyColor": "rgb(196, 43, 28)",
+    "scrollHeight": 529,
+    "selectedFill": "rgb(229, 241, 252)",
+    "width": 1008
+  },
+  "selection": {
+    "check": "✓已选择",
+    "fill": "rgb(229, 241, 252)",
+    "shadow": "none",
+    "sideMark": "3px"
+  },
+  "empty": {
+    "count": "0 / 20 个候选节点",
+    "footerTop": 757,
+    "height": 720
+  },
+  "keyboard": {
+    "selected": "6"
+  },
+  "more": {
+    "menuOpen": true,
+    "selected": "6"
+  },
+  "stableHeight": true,
+  "stableFooter": true
+}

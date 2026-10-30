@@ -21,7 +21,7 @@ use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL,
     ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SERVICE_MARKED_FOR_DELETE, ERROR_SERVICE_NOT_ACTIVE,
-    HANDLE,
+    ERROR_INVALID_PARAMETER, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{SetSecurityInfo, SE_FILE_OBJECT};
 use windows_sys::Win32::Security::{
@@ -36,7 +36,9 @@ use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::Services::{
     SetServiceObjectSecurity, SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STOP,
 };
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcess, OpenProcessToken, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+};
 use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
 
 use crate::engine::Guard;
@@ -289,9 +291,8 @@ pub fn uninstall() -> Result<(), String> {
     let mgr = manager(ServiceManagerAccess::CONNECT)?;
     let access = ServiceAccess::STOP | ServiceAccess::QUERY_STATUS | ServiceAccess::DELETE;
     if let Some(svc) = open(&mgr, access)? {
-        if let Err(e) = stop_and_wait(&svc) {
-            errors.push(e);
-        }
+        // 停服失败时保留注册信息和文件，让下一次卸载仍可正常重试。
+        stop_and_wait(&svc)?;
         match svc.delete() {
             Err(e) if os_code(&e) != Some(ERROR_SERVICE_MARKED_FOR_DELETE) => {
                 errors.push(failed("删除服务", e))
@@ -348,32 +349,89 @@ fn open(mgr: &ServiceManager, access: ServiceAccess) -> Result<Option<Service>, 
 
 /// 停止服务并等到它停下（最多 [`STOP_TIMEOUT`]）。正在启动时等它启动完再停。
 fn stop_and_wait(svc: &Service) -> Result<(), String> {
-    let deadline = Instant::now() + STOP_TIMEOUT;
+    stop_target(&mut ServiceStop { svc, processes: Vec::new() }, STOP_TIMEOUT, POLL)
+}
+
+/// SCM 的 Stopped 早于服务 EXE 完全退出：持有原进程句柄，避免 PID 复用影响等待结果。
+struct ServiceProcess { pid: u32, handle: HANDLE }
+
+impl ServiceProcess {
+    fn exited(&self) -> Result<bool, String> {
+        // SAFETY: 句柄在 ServiceProcess 存活期间有效，零超时只查询是否退出。
+        match unsafe { WaitForSingleObject(self.handle, 0) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(format!("等待旧分流服务进程失败：{}", io::Error::last_os_error())),
+        }
+    }
+}
+
+impl Drop for ServiceProcess {
+    fn drop(&mut self) {
+        // SAFETY: handle 来自 OpenProcess，并由此对象独占。
+        unsafe { CloseHandle(self.handle) };
+    }
+}
+
+trait StopTarget {
+    fn poll(&mut self) -> Result<ServiceState, String>;
+    fn request_stop(&mut self) -> Result<(), String>;
+    fn processes_exited(&self) -> Result<bool, String>;
+}
+
+struct ServiceStop<'a> { svc: &'a Service, processes: Vec<ServiceProcess> }
+
+impl StopTarget for ServiceStop<'_> {
+    fn poll(&mut self) -> Result<ServiceState, String> {
+        let status = self.svc.query_status().map_err(|e| failed("查询服务状态", e))?;
+        if let Some(pid) = status.process_id.filter(|pid| *pid != 0) {
+            if !self.processes.iter().any(|p| p.pid == pid) {
+                // SAFETY: 只请求等待权限；在停服前保留句柄，既不终止也不修改进程。
+                let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                if handle.is_null() {
+                    let e = io::Error::last_os_error();
+                    // 查询和 OpenProcess 之间进程可能刚好退出。
+                    if e.raw_os_error() != Some(ERROR_INVALID_PARAMETER as i32) {
+                        return Err(format!("无法等待旧分流服务进程 {pid}：{e}"));
+                    }
+                } else {
+                    self.processes.push(ServiceProcess { pid, handle });
+                }
+            }
+        }
+        Ok(status.current_state)
+    }
+
+    fn request_stop(&mut self) -> Result<(), String> {
+        match self.svc.stop() {
+            Err(e) if !matches!(os_code(&e), Some(ERROR_SERVICE_NOT_ACTIVE | ERROR_SERVICE_CANNOT_ACCEPT_CTRL)) =>
+                Err(failed("停止服务", e)),
+            _ => Ok(()),
+        }
+    }
+
+    fn processes_exited(&self) -> Result<bool, String> {
+        for p in &self.processes {
+            if !p.exited()? { return Ok(false); }
+        }
+        Ok(true)
+    }
+}
+
+fn stop_target(target: &mut impl StopTarget, limit: Duration, poll: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + limit;
     loop {
-        let state = svc
-            .query_status()
-            .map_err(|e| failed("查询服务状态", e))?
-            .current_state;
-        if state == ServiceState::Stopped {
+        let state = target.poll()?;
+        if state == ServiceState::Stopped && target.processes_exited()? {
             return Ok(());
         }
         if state == ServiceState::Running {
-            match svc.stop() {
-                Err(e)
-                    if !matches!(
-                        os_code(&e),
-                        Some(ERROR_SERVICE_NOT_ACTIVE | ERROR_SERVICE_CANNOT_ACCEPT_CTRL)
-                    ) =>
-                {
-                    return Err(failed("停止服务", e))
-                }
-                _ => {}
-            }
+            target.request_stop()?;
         }
         if Instant::now() >= deadline {
-            return Err(format!("服务在 {} 秒内没有停止", STOP_TIMEOUT.as_secs()));
+            return Err(format!("分流服务或旧服务进程在 {} 秒内没有退出，请稍后重试", limit.as_secs()));
         }
-        sleep(POLL);
+        sleep(poll);
     }
 }
 
@@ -447,6 +505,57 @@ fn failed(what: &str, e: windows_service::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FakeStop {
+        states: std::collections::VecDeque<ServiceState>,
+        polls: usize,
+        stops: usize,
+        exit_after: usize,
+    }
+
+    impl StopTarget for FakeStop {
+        fn poll(&mut self) -> Result<ServiceState, String> {
+            self.polls += 1;
+            Ok(if self.states.len() > 1 { self.states.pop_front().unwrap() } else { *self.states.front().unwrap() })
+        }
+        fn request_stop(&mut self) -> Result<(), String> { self.stops += 1; Ok(()) }
+        fn processes_exited(&self) -> Result<bool, String> { Ok(self.polls >= self.exit_after) }
+    }
+
+    #[test]
+    fn stopped_scm_state_does_not_release_files_before_old_process_exits() {
+        let mut target = FakeStop {
+            states: [ServiceState::StartPending, ServiceState::Running, ServiceState::StopPending, ServiceState::Stopped].into(),
+            polls: 0, stops: 0, exit_after: 7,
+        };
+        stop_target(&mut target, Duration::from_secs(1), Duration::ZERO).unwrap();
+        assert_eq!(target.stops, 1);
+        assert_eq!(target.polls, 7);
+    }
+
+    #[test]
+    fn old_process_still_alive_reports_failure_and_can_be_retried() {
+        let mut target = FakeStop {
+            states: [ServiceState::Stopped].into(), polls: 0, stops: 0, exit_after: usize::MAX,
+        };
+        assert!(stop_target(&mut target, Duration::ZERO, Duration::ZERO).unwrap_err().contains("旧服务进程"));
+        target.exit_after = 0;
+        stop_target(&mut target, Duration::ZERO, Duration::ZERO).unwrap();
+    }
+
+    #[test]
+    fn real_process_wait_handle_detects_exit_without_touching_service() {
+        use std::os::windows::process::CommandExt;
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/C", "ping -n 2 127.0.0.1 > nul"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn().unwrap();
+        let process = ServiceProcess { pid: child.id(), handle: unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, child.id()) } };
+        assert!(!process.handle.is_null());
+        assert!(!process.exited().unwrap());
+        child.wait().unwrap();
+        assert!(process.exited().unwrap());
+    }
 
     #[test]
     fn install_plan_paths() {

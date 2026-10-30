@@ -6,12 +6,12 @@ import { createTheme } from "@mui/material/styles";
 const numeric = { fontVariantNumeric: "tabular-nums" } as const;
 
 export const theme = createTheme({
-  cssVariables: { colorSchemeSelector: "media" },
+  cssVariables: { colorSchemeSelector: "data" },
   colorSchemes: {
     light: {
       palette: {
         primary: { main: "#0067c0" },
-        success: { main: "#0f7b0f" },
+        success: { main: "#0f7b0f", light: "#66851c" },
         warning: { main: "#9d5d00" },
         error: { main: "#c42b1c" },
         background: { default: "#f3f3f3", paper: "#ffffff" },
@@ -22,7 +22,7 @@ export const theme = createTheme({
     dark: {
       palette: {
         primary: { main: "#4cc2ff", contrastText: "#000" },
-        success: { main: "#6ccb5f" },
+        success: { main: "#6ccb5f", light: "#b0ce64" },
         warning: { main: "#fce100" },
         error: { main: "#ff99a4" },
         background: { default: "#202020", paper: "#2b2b2b" },
@@ -41,6 +41,26 @@ export const theme = createTheme({
     caption: numeric,
   },
   components: {
+    MuiCssBaseline: {
+      styleOverrides: {
+        // Desktop UI is not document content. Inputs and copyable data opt in;
+        // keep this on body so dialogs, menus and snackbars in portals share it.
+        body: { userSelect: "none" },
+        'input, textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"], [data-selectable="true"], [role="alert"]:not(.MuiAlert-root)': {
+          userSelect: "text",
+        },
+      },
+    },
+    MuiAlert: {
+      styleOverrides: {
+        message: ({ ownerState }) => ({
+          userSelect: ownerState.severity === "error" || ownerState.severity === "warning" ? "text" : undefined,
+        }),
+      },
+    },
+    MuiFormHelperText: {
+      styleOverrides: { root: { "&.Mui-error": { userSelect: "text" } } },
+    },
     MuiPaper: {
       defaultProps: { variant: "outlined" },
       styleOverrides: { rounded: { borderRadius: 8 } },

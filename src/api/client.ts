@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { Listener, Exit } from "../bindings";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import {
@@ -146,3 +148,8 @@ export function useCoreControl() {
     isPending: start.isPending || stop.isPending || restart.isPending,
   };
 }
+
+export const useSaveProxy = make(() => async (l: Listener, target: Exit): Promise<Result<ApplyOutcome, ValidationError[]>> => {
+  try { return { status: "ok", data: await invoke("save_proxy", { l, target }) }; }
+  catch (e) { if (Array.isArray(e)) return { status: "error", error: e }; throw e; }
+});

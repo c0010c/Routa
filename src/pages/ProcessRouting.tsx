@@ -26,6 +26,7 @@ import {
   TableRow,
   Tooltip,
   Typography,
+  TextField,
 } from "@mui/material";
 import { useState } from "react";
 import { useModel } from "../api/client";
@@ -40,23 +41,31 @@ import {
   useSaveProcessRoutingSettings,
   useSaveProcessRule,
 } from "../api/procroute";
-import type { ComponentState, ExitPolicy, ProcessRule, ProcRouteStatus, RuleView } from "../bindings";
+import type {
+  ComponentState,
+  ExitPolicy,
+  ProcessRule,
+  ProcRouteStatus,
+  RuleView,
+} from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { EmptyState } from "../components/EmptyState";
 import { RowActions } from "../components/RowActions";
-import { formatBytes, formatRate, type Label } from "../lib/format";
+import { formatBytes, type Label } from "../lib/format";
 import { ProcessRuleDialog } from "./ProcessRuleDialog";
+import { ProcessListenerSelect } from "../components/ProcessListenerSelect";
 
 export const EXIT_POLICY_LABEL = "Routa 不提供代理时";
 export const EXIT_POLICY_HINT =
   "适用于退出 Routa、手动停止内核、开机后 Routa 启动前；Routa 或组件崩溃时按每条规则自己的设置";
 export const TRUNCATED_HINT = "仅显示最近 400 条";
 
-const POLICY_TEXT = { Direct: "直连", Block: "阻断" } as const;
-const DISMISSED_INTERRUPTION_KEY = "routa.dismissed-process-routing-interruption";
+const DISMISSED_INTERRUPTION_KEY =
+  "routa.dismissed-process-routing-interruption";
 
 function componentLabel(c: ComponentState): Label {
-  if (typeof c === "object") return { text: `错误：${c.Error.message}`, color: "error" };
+  if (typeof c === "object")
+    return { text: `错误：${c.Error.message}`, color: "error" };
   switch (c) {
     case "NotInstalled":
       return { text: "未安装", color: "default" };
@@ -113,7 +122,15 @@ function formatTime(unix: number): string {
 
 type Pending = "uninstall" | "cleanup" | null;
 
-function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; enabled: boolean; onExit: ExitPolicy }) {
+function ComponentCard({
+  status,
+  enabled,
+  onExit,
+}: {
+  status: ProcRouteStatus;
+  enabled: boolean;
+  onExit: ExitPolicy;
+}) {
   const install = useProcRouteInstall();
   const uninstall = useProcRouteUninstall();
   const cleanup = useProcRouteCleanup();
@@ -121,29 +138,51 @@ function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; e
   const settings = useSaveProcessRoutingSettings();
   const [menu, setMenu] = useState<HTMLElement | null>(null);
   const [confirm, setConfirm] = useState<Pending>(null);
-  const [dismissedInterruption, setDismissedInterruption] = useState<string | null>(() =>
-    localStorage.getItem(DISMISSED_INTERRUPTION_KEY),
-  );
+  const [dismissedInterruption, setDismissedInterruption] = useState<
+    string | null
+  >(() => localStorage.getItem(DISMISSED_INTERRUPTION_KEY));
   const interruption = status.last_interruption;
-  const interruptionKey = interruption ? JSON.stringify([interruption.at_unix, interruption.reason]) : null;
+  const interruptionKey = interruption
+    ? JSON.stringify([interruption.at_unix, interruption.reason])
+    : null;
   const c = status.component;
   const label = componentLabel(c);
-  const installText = c === "NotInstalled" ? "启用进程分流" : c === "NeedsUpdate" ? "更新组件" : null;
-  const busy = install.isPending || uninstall.isPending || cleanup.isPending || retry.isPending;
+  const installText =
+    c === "NotInstalled"
+      ? "启用进程分流"
+      : c === "NeedsUpdate"
+        ? "更新分流服务"
+        : c === "Stopped" || typeof c === "object"
+          ? "修复分流服务"
+          : null;
+  const busy =
+    install.isPending ||
+    uninstall.isPending ||
+    cleanup.isPending ||
+    retry.isPending;
 
   return (
     <Paper sx={{ p: 2 }}>
       <Stack spacing={2}>
         <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
           <Typography sx={{ fontWeight: 600 }}>分流组件</Typography>
-          <Chip size="small" label={label.text} color={label.color} />
+          <Chip size="small" label={label.text} color={label.color} data-selectable={typeof c === "object"} />
           <Box sx={{ flexGrow: 1 }} />
           {installText && (
-            <Button variant="contained" loading={install.isPending} disabled={busy} onClick={() => install.mutate()}>
+            <Button
+              variant="contained"
+              loading={install.isPending}
+              disabled={busy}
+              onClick={() => install.mutate()}
+            >
               {installText}
             </Button>
           )}
-          <IconButton aria-label="更多组件操作" disabled={busy} onClick={(e) => setMenu(e.currentTarget)}>
+          <IconButton
+            aria-label="更多组件操作"
+            disabled={busy}
+            onClick={(e) => setMenu(e.currentTarget)}
+          >
             <MoreVert />
           </IconButton>
           <Menu anchorEl={menu} open={!!menu} onClose={() => setMenu(null)}>
@@ -166,18 +205,28 @@ function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; e
             </MenuItem>
           </Menu>
         </Stack>
-        {interruption && interruptionKey && interruptionKey !== dismissedInterruption && (
-          <Alert
-            severity="warning"
-            closeText="关闭中断提示"
-            onClose={() => {
-              setDismissedInterruption(interruptionKey);
-              localStorage.setItem(DISMISSED_INTERRUPTION_KEY, interruptionKey);
-            }}
-          >
-            {`最近一次中断：${formatTime(interruption.at_unix)}，${interruption.reason}`}
+        {c === "NeedsUpdate" && (
+          <Alert severity="warning">
+            分流服务与当前程序版本不匹配。更新需要管理员权限，期间进程分流会短暂中断。
           </Alert>
         )}
+        {interruption &&
+          interruptionKey &&
+          interruptionKey !== dismissedInterruption && (
+            <Alert
+              severity="warning"
+              closeText="关闭中断提示"
+              onClose={() => {
+                setDismissedInterruption(interruptionKey);
+                localStorage.setItem(
+                  DISMISSED_INTERRUPTION_KEY,
+                  interruptionKey,
+                );
+              }}
+            >
+              {`最近一次中断：${formatTime(interruption.at_unix)}，${interruption.reason}`}
+            </Alert>
+          )}
         {status.conflicts.length > 0 && (
           <Alert severity="warning">
             {status.conflicts.map((m) => (
@@ -186,17 +235,33 @@ function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; e
           </Alert>
         )}
         {status.apply_errors.length > 0 && (
-          <Alert severity="warning" action={
-            <Button color="inherit" loading={retry.isPending} disabled={busy || c === "NeedsUpdate" || c === "NotInstalled" || c === "OwnedByOtherUser"} onClick={() => retry.mutate()}>
-              重试
-            </Button>
-          }>
+          <Alert
+            severity="warning"
+            action={
+              <Button
+                color="inherit"
+                loading={retry.isPending}
+                disabled={
+                  busy ||
+                  c === "NeedsUpdate" ||
+                  c === "NotInstalled" ||
+                  c === "OwnedByOtherUser"
+                }
+                onClick={() => retry.mutate()}
+              >
+                重试
+              </Button>
+            }
+          >
             {status.apply_errors.map((m) => (
               <div key={m}>{m}</div>
             ))}
           </Alert>
         )}
-        <Stack direction="row" sx={{ alignItems: "center", alignSelf: "flex-start" }}>
+        <Stack
+          direction="row"
+          sx={{ alignItems: "center", alignSelf: "flex-start" }}
+        >
           <Switch
             checked={enabled}
             disabled={settings.isPending}
@@ -204,20 +269,47 @@ function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; e
             slotProps={{ input: { "aria-labelledby": "pr-enabled-label" } }}
             sx={{ ml: "-11px" }}
           />
-          <Typography component="span" id="pr-enabled-label">启用进程分流规则</Typography>
+          <Typography component="span" id="pr-enabled-label">
+            启用进程分流规则
+          </Typography>
         </Stack>
         <Box>
-          <FormLabel id="pr-exit">{EXIT_POLICY_LABEL}</FormLabel>
-          <RadioGroup
-            row
-            aria-labelledby="pr-exit"
-            value={onExit}
-            onChange={(e) => settings.mutate(enabled, e.target.value as ExitPolicy)}
-          >
-            <FormControlLabel value="Direct" control={<Radio size="small" />} label="直连" disabled={settings.isPending} />
-            <FormControlLabel value="Block" control={<Radio size="small" />} label="阻断" disabled={settings.isPending} />
-          </RadioGroup>
-          <FormHelperText sx={{ mx: 0 }}>{EXIT_POLICY_HINT}</FormHelperText>
+          <Box component="details">
+            <Box
+              component="summary"
+              sx={{
+                cursor: "pointer",
+                color: "text.secondary",
+                fontSize: 13,
+                mb: 1,
+              }}
+            >
+              退出行为与故障策略
+            </Box>
+            <FormLabel id="pr-exit">{EXIT_POLICY_LABEL}</FormLabel>
+            <RadioGroup
+              row
+              aria-labelledby="pr-exit"
+              value={onExit}
+              onChange={(e) =>
+                settings.mutate(enabled, e.target.value as ExitPolicy)
+              }
+            >
+              <FormControlLabel
+                value="Direct"
+                control={<Radio size="small" />}
+                label="直连"
+                disabled={settings.isPending}
+              />
+              <FormControlLabel
+                value="Block"
+                control={<Radio size="small" />}
+                label="阻断"
+                disabled={settings.isPending}
+              />
+            </RadioGroup>
+            <FormHelperText sx={{ mx: 0 }}>{EXIT_POLICY_HINT}</FormHelperText>
+          </Box>
         </Box>
       </Stack>
       {confirm === "uninstall" && (
@@ -242,27 +334,49 @@ function ComponentCard({ status, enabled, onExit }: { status: ProcRouteStatus; e
   );
 }
 
-function GuardChips({ view, active }: { view: RuleView | undefined; active: boolean }) {
+function GuardChips({
+  view,
+  active,
+}: {
+  view: RuleView | undefined;
+  active: boolean;
+}) {
   if (!active) return <Chip size="small" label="未启用" />;
   if (!view) return <Chip size="small" label="状态未知" color="warning" />;
   const l = actionLabel(view);
   return (
     <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap" }}>
       <Chip size="small" label={l.text} color={l.color} />
-      {view.reason && <Chip size="small" variant="outlined" label={view.reason} />}
+      {view.reason && (
+        <Chip size="small" variant="outlined" label={view.reason} data-selectable="true" />
+      )}
     </Stack>
   );
 }
 
-function FlowsDrawer({ rule, truncated, onClose }: { rule: ProcessRule | null; truncated: boolean; onClose: () => void }) {
+function FlowsDrawer({
+  rule,
+  truncated,
+  onClose,
+}: {
+  rule: ProcessRule | null;
+  truncated: boolean;
+  onClose: () => void;
+}) {
   const flows = useFlows();
   const rows = rule ? flows.filter((f) => f.rule_id === rule.id) : [];
   return (
     <Drawer anchor="right" open={rule !== null} onClose={onClose}>
       {rule && (
         <Box sx={{ width: 640, p: 2 }}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: "baseline", mb: 1 }}>
-            <Typography variant="h6">{fileName(rule.exe_path)} 的连接</Typography>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: "baseline", mb: 1 }}
+          >
+            <Typography variant="h6">
+              {fileName(rule.exe_path)} 的连接
+            </Typography>
             {truncated && (
               <Typography variant="caption" sx={{ color: "warning.main" }}>
                 {TRUNCATED_HINT}
@@ -275,7 +389,15 @@ function FlowsDrawer({ rule, truncated, onClose }: { rule: ProcessRule | null; t
           <Table size="small">
             <TableHead>
               <TableRow>
-                {["PID", "目标", "端口", "协议", "持续时间", "已上传", "已下载"].map((h) => (
+                {[
+                  "PID",
+                  "目标",
+                  "端口",
+                  "协议",
+                  "持续时间",
+                  "已上传",
+                  "已下载",
+                ].map((h) => (
                   <TableCell key={h}>{h}</TableCell>
                 ))}
               </TableRow>
@@ -289,10 +411,14 @@ function FlowsDrawer({ rule, truncated, onClose }: { rule: ProcessRule | null; t
                 </TableRow>
               ) : (
                 rows.map((f) => (
-                  <TableRow key={`${f.pid}-${f.host}-${f.port}-${f.udp ? "u" : "t"}-${f.age_ms ?? ""}`}>
-                    <TableCell>{f.pid}</TableCell>
-                    <TableCell sx={{ wordBreak: "break-all" }}>{f.host}</TableCell>
-                    <TableCell>{f.port}</TableCell>
+                  <TableRow
+                    key={`${f.pid}-${f.host}-${f.port}-${f.udp ? "u" : "t"}-${f.age_ms ?? ""}`}
+                  >
+                    <TableCell data-selectable="true">{f.pid}</TableCell>
+                    <TableCell data-selectable="true" sx={{ wordBreak: "break-all" }}>
+                      {f.host}
+                    </TableCell>
+                    <TableCell data-selectable="true">{f.port}</TableCell>
                     <TableCell>{f.udp ? "UDP" : "TCP"}</TableCell>
                     <TableCell>{formatDuration(f.age_ms)}</TableCell>
                     <TableCell>{formatBytes(f.sent)}</TableCell>
@@ -316,6 +442,7 @@ export function ProcessRoutingPage() {
   const [editing, setEditing] = useState<{ rule?: ProcessRule } | null>(null);
   const [deleting, setDeleting] = useState<ProcessRule | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   if (!model.data || !status.data) return <Typography>加载中…</Typography>;
   const m = model.data;
@@ -331,7 +458,18 @@ export function ProcessRoutingPage() {
           新建规则
         </Button>
       </Stack>
-      <ComponentCard status={s} enabled={pr.enabled} onExit={pr.on_routa_exit} />
+      <ComponentCard
+        status={s}
+        enabled={pr.enabled}
+        onExit={pr.on_routa_exit}
+      />
+      <TextField
+        size="small"
+        label="搜索进程名称或路径"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        sx={{ maxWidth: 360 }}
+      />
       {pr.rules.length === 0 ? (
         <EmptyState
           icon={<AppsOutlined />}
@@ -343,65 +481,123 @@ export function ProcessRoutingPage() {
           <Table size="small">
             <TableHead>
               <TableRow>
-                {["程序", "监听器", "组件故障时", "断开旧连接", "防护状态", "上传", "下载", ""].map((h) => (
+                {["进程", "监听器", "状态", "启用", ""].map((h) => (
                   <TableCell key={h}>{h}</TableCell>
                 ))}
               </TableRow>
             </TableHead>
             <TableBody>
-              {pr.rules.map((r) => {
-                const view = s.actions[r.id];
-                const name = fileName(r.exe_path);
-                return (
-                  <TableRow key={r.id} hover sx={{ cursor: "pointer" }} onClick={() => setViewing(r.id)}>
-                    <TableCell>
-                      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                        <InsertDriveFileOutlined fontSize="small" sx={{ color: "text.secondary" }} />
-                        <Tooltip title={r.exe_path}>
-                          <span>{name}</span>
-                        </Tooltip>
-                      </Stack>
-                    </TableCell>
-                    <TableCell>{m.listeners.find((l) => l.id === r.listener)?.name ?? "（已删除）"}</TableCell>
-                    <TableCell>{POLICY_TEXT[r.on_fault]}</TableCell>
-                    <TableCell>{r.reset_on_change ? "开" : "关"}</TableCell>
-                    <TableCell>
-                      <GuardChips view={view} active={pr.enabled && r.user_enabled} />
-                    </TableCell>
-                    <TableCell>{view ? formatRate(view.up_bps) : "—"}</TableCell>
-                    <TableCell>{view ? formatRate(view.down_bps) : "—"}</TableCell>
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <RowActions
-                        label={name}
-                        items={[
-                          { label: "编辑", onClick: () => setEditing({ rule: r }) },
-                          {
-                            label: r.user_enabled ? "禁用" : "启用",
-                            onClick: () => saveRule.mutate({ ...r, user_enabled: !r.user_enabled }),
-                          },
-                          { label: "删除", onClick: () => setDeleting(r), danger: true },
-                        ]}
-                      />
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+              {pr.rules
+                .filter((r) =>
+                  r.exe_path.toLowerCase().includes(search.toLowerCase()),
+                )
+                .map((r) => {
+                  const view = s.actions[r.id];
+                  const name = fileName(r.exe_path);
+                  return (
+                    <TableRow
+                      key={r.id}
+                      hover
+                      sx={{ cursor: "pointer" }}
+                      onClick={() => setViewing(r.id)}
+                    >
+                      <TableCell>
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          sx={{ alignItems: "center" }}
+                        >
+                          <InsertDriveFileOutlined
+                            fontSize="small"
+                            sx={{ color: "text.secondary" }}
+                          />
+                          <Tooltip title={r.exe_path}>
+                            <span>{name}</span>
+                          </Tooltip>
+                        </Stack>
+                      </TableCell>
+                      <TableCell>
+                        <ProcessListenerSelect
+                          rule={r}
+                          listeners={m.listeners}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <GuardChips
+                          view={view}
+                          active={pr.enabled && r.user_enabled}
+                        />
+                      </TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Switch
+                          checked={r.user_enabled}
+                          disabled={saveRule.isPending}
+                          slotProps={{
+                            input: { "aria-label": `启用 ${name}` },
+                          }}
+                          onChange={(_, checked) =>
+                            saveRule.mutate({ ...r, user_enabled: checked })
+                          }
+                        />
+                      </TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <RowActions
+                          label={name}
+                          items={[
+                            {
+                              label: "编辑",
+                              onClick: () => setEditing({ rule: r }),
+                            },
+                            {
+                              label: r.user_enabled ? "禁用" : "启用",
+                              onClick: () =>
+                                saveRule.mutate({
+                                  ...r,
+                                  user_enabled: !r.user_enabled,
+                                }),
+                            },
+                            {
+                              label: "删除",
+                              onClick: () => setDeleting(r),
+                              danger: true,
+                            },
+                          ]}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
             </TableBody>
           </Table>
         </TableContainer>
       )}
-      <Typography variant="body2" sx={{ color: "text.secondary" }}>
-        DNS 查询不经过分流：程序的域名解析由系统的 DNS 客户端服务代为发出，不属于该程序，会照常直连。
-        <br />
-        HTTP 类型的监听器不能选：它转发不了 UDP，程序的 UDP 流量会悄悄走直连。请选混合或 SOCKS 类型。
-      </Typography>
+      <Box component="details">
+        <Box
+          component="summary"
+          sx={{ cursor: "pointer", fontSize: 12, color: "text.secondary" }}
+        >
+          分流说明与连接行为
+        </Box>
+        <Typography variant="body2" sx={{ color: "text.secondary", mt: 1 }}>
+          DNS 查询不经过分流：程序的域名解析由系统的 DNS
+          客户端服务代为发出，不属于该程序，会照常直连。
+          <br />
+          HTTP 类型的监听器不能选：它转发不了 UDP，程序的 UDP
+          流量会悄悄走直连。请选混合或 SOCKS 类型。
+          监听器可直接在行内更改，后续新连接使用新目标，不强制断开已有连接。
+        </Typography>
+      </Box>
       <ProcessRuleDialog
         key={editing?.rule?.id ?? "new"}
         open={editing !== null}
         rule={editing?.rule}
         onClose={() => setEditing(null)}
       />
-      <FlowsDrawer rule={viewingRule} truncated={s.truncated_flows} onClose={() => setViewing(null)} />
+      <FlowsDrawer
+        rule={viewingRule}
+        truncated={s.truncated_flows}
+        onClose={() => setViewing(null)}
+      />
       {deleting && (
         <ConfirmDeleteDialog
           text={`确定删除「${fileName(deleting.exe_path)}」的分流规则吗？`}

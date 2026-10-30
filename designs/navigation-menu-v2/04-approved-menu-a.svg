@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
+<title>Routa 菜单方案：代理与进程分流独立，设置固定底部</title>
+<g font-family="Segoe UI,Microsoft YaHei UI,Microsoft YaHei,sans-serif">
+<rect x="0" y="0" width="1280" height="800" rx="10" fill="#202020" stroke="none"/>
+<rect x="0" y="0" width="1280" height="34" rx="0" fill="#1c1c1c" stroke="none"/>
+<rect x="14" y="10" width="14" height="14" rx="3" fill="#4cc2ff" stroke="none"/>
+<text x="37" y="22" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">Routa</text>
+<path d="M1150 17L1160 17" fill="none" stroke="#bcbcbc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1201" y="12" width="10" height="10" rx="0" fill="none" stroke="#bcbcbc"/>
+<path d="M1251 12l10 10m0-10-10 10" fill="none" stroke="#bcbcbc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="0" y="34" width="204" height="766" rx="0" fill="#202020" stroke="none"/>
+<rect x="22" y="60" width="28" height="28" rx="7" fill="#4cc2ff" stroke="none"/>
+<path d="M30 66v10q0 4 4 4h8M40 66v9m-3-3 3 3 3-3" fill="none" stroke="#17222b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="62" y="81" font-size="18" fill="#f3f3f3" font-weight="600" text-anchor="start">Routa</text>
+<g transform="translate(23 125) scale(.9)" fill="#bcbcbc">
+<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2M5 19V5h6v14zm14 0h-6v-7h6zm0-9h-6V5h6z"/>
+</g>
+<text x="59" y="142" font-size="14" fill="#bcbcbc" font-weight="400" text-anchor="start">概览</text>
+<rect x="10" y="164" width="184" height="40" rx="6" fill="#303030" stroke="none"/>
+<rect x="10" y="175" width="3" height="18" rx="1.5" fill="#4cc2ff" stroke="none"/>
+<g transform="translate(23 173) scale(.9)" fill="#f3f3f3">
+<path d="M6.99 11 3 15l3.99 4v-3H14v-2H6.99zM21 9l-3.99-4v3H10v2h7.01v3z"/>
+</g>
+<text x="59" y="190" font-size="14" fill="#f3f3f3" font-weight="600" text-anchor="start">代理</text>
+<g transform="translate(23 221) scale(.9)" fill="#bcbcbc">
+<path d="m9.78 11.16-1.42 1.42c-.68-.69-1.34-1.58-1.79-2.94l1.94-.49c.32.89.77 1.5 1.27 2.01M11 6 7 2 3 6h3.02c.02.81.08 1.54.19 2.17l1.94-.49C8.08 7.2 8.03 6.63 8.02 6zm10 0-4-4-4 4h2.99c-.1 3.68-1.28 4.75-2.54 5.88-.5.44-1.01.92-1.45 1.55-.34-.49-.73-.88-1.13-1.24L9.46 13.6c.93.85 1.54 1.54 1.54 3.4v5h2v-5c0-2.02.71-2.66 1.79-3.63 1.38-1.24 3.08-2.78 3.2-7.37z"/>
+</g>
+<text x="59" y="238" font-size="14" fill="#bcbcbc" font-weight="400" text-anchor="start">进程分流</text>
+<g transform="translate(23 269) scale(.9)" fill="#bcbcbc">
+<path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2m6.93 6h-2.95c-.32-1.25-.78-2.45-1.38-3.56 1.84.63 3.37 1.91 4.33 3.56M12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96M4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2s.06 1.34.14 2zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56-1.84-.63-3.37-1.9-4.33-3.56m2.95-8H5.08c.96-1.66 2.49-2.93 4.33-3.56C8.81 5.55 8.35 6.75 8.03 8M12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96M14.34 14H9.66c-.09-.66-.16-1.32-.16-2s.07-1.35.16-2h4.68c.09.65.16 1.32.16 2s-.07 1.34-.16 2m.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95c-.96 1.65-2.49 2.93-4.33 3.56M16.36 14c.08-.66.14-1.32.14-2s-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2z"/>
+</g>
+<text x="59" y="286" font-size="14" fill="#bcbcbc" font-weight="400" text-anchor="start">出口</text>
+<g transform="translate(23 317) scale(.9)" fill="#bcbcbc">
+<path d="M19 15v4H5v-4zm1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1M7 18.5c-.82 0-1.5-.67-1.5-1.5s.68-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5M19 5v4H5V5zm1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1M7 8.5c-.82 0-1.5-.67-1.5-1.5S6.18 5.5 7 5.5s1.5.68 1.5 1.5S7.83 8.5 7 8.5"/>
+</g>
+<text x="59" y="334" font-size="14" fill="#bcbcbc" font-weight="400" text-anchor="start">订阅与节点</text>
+<path d="M22 701L182 701" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(23 722) scale(.9)" fill="#bcbcbc">
+<path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.09-.16-.26-.25-.44-.25-.06 0-.12.01-.17.03l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1q-.09-.03-.18-.03c-.17 0-.34.09-.43.25l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.09.16.26.25.44.25.06 0 .12-.01.17-.03l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1q.09.03.18.03c.17 0 .34-.09.43-.25l2-3.46c.12-.22.07-.49-.12-.64zm-1.98-1.71c.04.31.05.52.05.73s-.02.43-.05.73l-.14 1.13.89.7 1.08.84-.7 1.21-1.27-.51-1.04-.42-.9.68c-.43.32-.84.56-1.25.73l-1.06.43-.16 1.13-.2 1.35h-1.4l-.19-1.35-.16-1.13-1.06-.43c-.43-.18-.83-.41-1.23-.71l-.91-.7-1.06.43-1.27.51-.7-1.21 1.08-.84.89-.7-.14-1.13c-.03-.31-.05-.54-.05-.74s.02-.43.05-.73l.14-1.13-.89-.7-1.08-.84.7-1.21 1.27.51 1.04.42.9-.68c.43-.32.84-.56 1.25-.73l1.06-.43.16-1.13.2-1.35h1.39l.19 1.35.16 1.13 1.06.43c.43.18.83.41 1.23.71l.91.7 1.06-.43 1.27-.51.7 1.21-1.07.85-.89.7zM12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4m0 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2"/>
+</g>
+<text x="59" y="739" font-size="14" fill="#bcbcbc" font-weight="400" text-anchor="start">设置</text>
+<text x="24" y="778" font-size="11" fill="#929292" font-weight="400" text-anchor="start">v0.2.0</text>
+<text x="240" y="105" font-size="28" fill="#f3f3f3" font-weight="600" text-anchor="start">代理</text>
+<circle cx="1121" cy="96" r="3" fill="#82cd8c"/>
+<text x="1133" y="101" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">内核运行中</text>
+<text x="240" y="143" font-size="13" fill="#bcbcbc" font-weight="400" text-anchor="start">监听器</text>
+<rect x="292" y="127" width="23" height="22" rx="4" fill="#343434" stroke="none"/>
+<text x="303.5" y="143" font-size="11" fill="#f3f3f3" font-weight="500" text-anchor="middle">1</text>
+<rect x="1104" y="123" width="140" height="34" rx="5" fill="#4cc2ff" stroke="none"/>
+<text x="1174.0" y="145" font-size="12" fill="#14212a" font-weight="500" text-anchor="middle">＋ 新建监听器</text>
+<rect x="240" y="181" width="1004" height="289" rx="8" fill="#272727" stroke="#3b3b3b"/>
+<path d="M270 210h10v16H270M264 218h10m-3-3 3 3-3 3" fill="none" stroke="#f3f3f3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="295" y="226" font-size="17" fill="#f3f3f3" font-weight="600" text-anchor="start">默认监听器</text>
+<rect x="404" y="207" width="44" height="24" rx="4" fill="#393939" stroke="none"/>
+<text x="426" y="224" font-size="11" fill="#bcbcbc" font-weight="400" text-anchor="middle">混合</text>
+<circle cx="472" cy="219" r="3" fill="#82cd8c"/>
+<text x="484" y="224" font-size="12" fill="#82cd8c" font-weight="400" text-anchor="start">运行中</text>
+<rect x="1142" y="210" width="34" height="18" rx="9" fill="#4cc2ff" stroke="none"/>
+<circle cx="1167" cy="219" r="6" fill="#202020"/>
+<circle cx="1212" cy="219" r="1" fill="#bcbcbc"/>
+<circle cx="1216" cy="219" r="1" fill="#bcbcbc"/>
+<circle cx="1220" cy="219" r="1" fill="#bcbcbc"/>
+<path d="M264 250L1220 250" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="264" y="282" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">监听地址</text>
+<text x="264" y="321" font-size="22" fill="#f3f3f3" font-weight="500" text-anchor="start">127.0.0.1:7881</text>
+<rect x="465" y="308" width="8" height="10" rx="1" fill="none" stroke="#bcbcbc"/>
+<path d="M469 305H461v10" fill="none" stroke="#bcbcbc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="264" y="350" font-size="12" fill="#929292" font-weight="400" text-anchor="start">HTTP / SOCKS5</text>
+<text x="758" y="282" font-size="12" fill="#bcbcbc" font-weight="400" text-anchor="start">出口</text>
+<rect x="758" y="296" width="286" height="34" rx="5" fill="#313131" stroke="#484848"/>
+<text x="770" y="318" font-size="12" fill="#f3f3f3" font-weight="400" text-anchor="start">日常出口</text>
+<path d="M1022 310l4 4 4-4" fill="none" stroke="#bcbcbc" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1070" y="318" font-size="13" fill="#f3f3f3" font-weight="400" text-anchor="start">香港 01</text>
+<text x="1070" y="345" font-size="12" fill="#82cd8c" font-weight="400" text-anchor="start">42 ms</text>
+<path d="M264 377L1220 377" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="264" y="420" font-size="13" fill="#f3f3f3" font-weight="400" text-anchor="start">系统代理</text>
+<circle cx="332" cy="415" r="7" fill="none" stroke="#929292"/>
+<text x="332" y="419" font-size="10" fill="#bcbcbc" font-weight="500" text-anchor="middle">i</text>
+<rect x="356" y="406" width="34" height="18" rx="9" fill="#454545" stroke="none"/>
+<circle cx="365" cy="415" r="6" fill="#bcbcbc"/>
+<text x="402" y="420" font-size="12" fill="#929292" font-weight="400" text-anchor="start">未开启</text>
+<path d="M688 402L688 434" fill="none" stroke="#3b3b3b" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="758" y="420" font-size="13" fill="#f3f3f3" font-weight="400" text-anchor="start">TUN</text>
+<circle cx="802" cy="415" r="7" fill="none" stroke="#929292"/>
+<text x="802" y="419" font-size="10" fill="#bcbcbc" font-weight="500" text-anchor="middle">i</text>
+<rect x="826" y="406" width="34" height="18" rx="9" fill="#454545" stroke="none"/>
+<circle cx="835" cy="415" r="6" fill="#bcbcbc"/>
+<text x="872" y="420" font-size="12" fill="#929292" font-weight="400" text-anchor="start">未开启</text>
+<text x="240" y="514" font-size="13" fill="#bcbcbc" font-weight="400" text-anchor="start">进程分流</text>
+<text x="322" y="514" font-size="18" fill="#929292" font-weight="400" text-anchor="start">›</text>
+<text x="346" y="514" font-size="12" fill="#929292" font-weight="400" text-anchor="start">单独管理应用的代理规则</text>
+<text x="1244" y="514" font-size="12" fill="#4cc2ff" font-weight="400" text-anchor="end">前往进程分流 →</text>
+<text x="240" y="778" font-size="11" fill="#929292" font-weight="400" text-anchor="start">菜单方案 · 设置固定底部</text>
+<text x="1244" y="778" font-size="11" fill="#929292" font-weight="400" text-anchor="end">设计预览 · 示例数据</text>
+</g></svg>

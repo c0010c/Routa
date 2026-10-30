@@ -177,6 +177,7 @@ mod tests {
 
     fn sub(url: &str) -> Subscription {
         Subscription {
+            fallback_listener: None,
             id: SubscriptionId::new(),
             name: "s".into(),
             url: url.into(),

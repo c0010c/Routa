@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Routa · 完整交互与 UI 设计</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside class="review-nav" aria-label="设计页面目录">
+    <div class="review-brand">R<span>ROUTA / DESIGN</span></div>
+    <div class="review-version">亮色版 · 交互设计 v1</div>
+    <nav id="scene-nav"></nav>
+    <a class="spec-link" href="specification.html" target="_blank">查看交互规范 ↗</a>
+  </aside>
+  <div class="review-workspace">
+    <header class="review-toolbar">
+      <div><b id="scene-title">首次启动</b><span id="scene-desc"></span></div>
+      <div class="review-tools">
+        <label>模拟结果<select id="simulation"><option value="success">正常</option><option value="network">网络失败</option><option value="permission">权限拒绝</option><option value="port">端口冲突</option></select></label>
+        <button id="reset-prototype">重置演示</button>
+      </div>
+    </header>
+    <main class="review-stage"><div id="app" class="product-window"></div></main>
+    <footer class="review-footer">可点击交互原型 · 使用示例数据，不修改系统代理、文件或真实配置</footer>
+  </div>
+  <script src="icons.js"></script>
+  <script src="prototype.js"></script>
+</body>
+</html>

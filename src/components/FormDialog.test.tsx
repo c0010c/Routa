@@ -26,17 +26,11 @@ describe("FormDialog", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("asks before discarding typed input, and can keep editing", () => {
+  it("discards typed drafts directly on Esc", () => {
     const onClose = renderForm();
-    fireEvent.input(screen.getByLabelText("名称"), { target: { value: "x" } });
-    esc();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByText("放弃未保存的修改？")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+    fireEvent.input(screen.getByLabelText("名称"), { target: {value:"x"} });
+    esc(); expect(onClose).toHaveBeenCalledOnce();
     expect(screen.queryByText("放弃未保存的修改？")).not.toBeInTheDocument();
-    esc();
-    fireEvent.click(screen.getByRole("button", { name: "放弃" }));
-    expect(onClose).toHaveBeenCalled();
   });
 
   it("取消 still closes directly", () => {

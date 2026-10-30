@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+const folder=path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/,'$1'));
+const source=fs.readFileSync(path.join(folder,'prototype.html'),'utf8');
+for(const [,script] of source.matchAll(/<script>([\s\S]*?)<\/script>/g)) new vm.Script(script);
+const wrapper='<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Routa · 代理工作区交互原型</title><style>body{margin:0;background:#181818}#routa-prototype{border-radius:0!important;max-width:1440px;margin:auto;min-height:100vh}</style></head><body>\n'+source+'\n</body></html>';
+fs.writeFileSync(path.join(folder,'index.html'),wrapper);
+const inline='C:/Users/Q/.codex/visualizations/2026/10/29/01a18855-63c0-7b11-86f1-28889f7599c6/proxy-workspace.html';
+fs.mkdirSync(path.dirname(inline),{recursive:true});
+fs.writeFileSync(inline,source);
+console.log(JSON.stringify({index:path.join(folder,'index.html'),inline,bytes:Buffer.byteLength(source),scriptSyntax:'pass'}));

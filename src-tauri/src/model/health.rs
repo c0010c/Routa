@@ -122,6 +122,7 @@ mod tests {
 
     fn sub(id: &str, names: &[&str]) -> Subscription {
         Subscription {
+            fallback_listener: None,
             id: SubscriptionId(id.into()),
             name: id.into(),
             url: "https://example.com".into(),

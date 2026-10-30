@@ -159,7 +159,7 @@ export function ExitDialog({ exit, onClose, onSaved }: { exit: Exit; onClose: ()
             <>
               <NodePicker value={node} onChange={setNode} />
               {nodeError && (
-                <Typography color="error" variant="caption">
+                <Typography color="error" variant="caption" data-selectable="true">
                   {nodeError}
                 </Typography>
               )}
@@ -185,7 +185,7 @@ export function ExitDialog({ exit, onClose, onSaved }: { exit: Exit; onClose: ()
               <MemberPicker value={members} onChange={setMembers} />
               {staleInForm.length > 0 && (
                 <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-                  <Typography color="error" variant="body2">
+                  <Typography color="error" variant="body2" data-selectable="true">
                     失效成员：{staleInForm.map((m) => (isGroupMember(m) ? "（已删除的组）" : "name" in m ? m.name : "（已删除）")).join("、")}
                   </Typography>
                   <Button

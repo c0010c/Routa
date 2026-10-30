@@ -28,17 +28,20 @@ interface Props {
   label?: string;
   /** Called whenever validity changes; an invalid entry is never emitted via onChange. */
   onValidityChange?: (valid: boolean) => void;
+  disabled?: boolean;
+  /** Text edits commit when editing finishes; toggles and units still commit immediately. */
+  commitOnBlur?: boolean;
 }
 
 /** Enable switch + number + unit (分钟/小时/天); always emits whole minutes within 1..=525600. */
-export function IntervalInput({ value, onChange, defaultMins, label = "启用", onValidityChange }: Props) {
+export function IntervalInput({ value, onChange, defaultMins, label = "启用", onValidityChange, disabled = false, commitOnBlur = false }: Props) {
   const init = split(value ?? defaultMins);
   const [enabled, setEnabled] = useState(value !== null);
   const [unit, setUnit] = useState<Unit>(init.unit);
   const [text, setText] = useState(String(init.amount));
   const [error, setError] = useState<string>();
 
-  const commit = (t: string, u: Unit) => {
+  const commit = (t: string, u: Unit, emit = true) => {
     const n = Number(t);
     const mins = n * factor(u);
     if (t.trim() === "" || !Number.isInteger(n) || !Number.isInteger(mins) || mins < MIN || mins > MAX) {
@@ -48,7 +51,7 @@ export function IntervalInput({ value, onChange, defaultMins, label = "启用", 
     }
     setError(undefined);
     onValidityChange?.(true);
-    onChange(mins);
+    if (emit) onChange(mins);
   };
 
   const toggle = (on: boolean) => {
@@ -63,10 +66,10 @@ export function IntervalInput({ value, onChange, defaultMins, label = "启用", 
   };
 
   return (
-    <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
+    <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start", flexWrap: "wrap", rowGap: 1 }}>
       <FormControlLabel
         sx={{ mt: 0.5 }}
-        control={<Switch checked={enabled} onChange={(e) => toggle(e.target.checked)} />}
+        control={<Switch disabled={disabled} checked={enabled} onChange={(e) => toggle(e.target.checked)} />}
         label={label}
       />
       <TextField
@@ -74,14 +77,16 @@ export function IntervalInput({ value, onChange, defaultMins, label = "启用", 
         type="number"
         label="间隔"
         value={text}
-        disabled={!enabled}
+        disabled={disabled || !enabled}
         error={!!error}
         helperText={error}
         slotProps={{ htmlInput: { min: 1 } }}
         onChange={(e) => {
           setText(e.target.value);
-          commit(e.target.value, unit);
+          commit(e.target.value, unit, !commitOnBlur);
         }}
+        onBlur={() => { if (commitOnBlur && enabled && !disabled) commit(text, unit); }}
+        onKeyDown={(e) => { if (commitOnBlur && e.key === "Enter") e.currentTarget.querySelector("input")?.blur(); }}
         sx={{ width: 140 }}
       />
       <TextField
@@ -89,7 +94,7 @@ export function IntervalInput({ value, onChange, defaultMins, label = "启用", 
         size="small"
         label="单位"
         value={unit}
-        disabled={!enabled}
+        disabled={disabled || !enabled}
         slotProps={{ select: { native: true } }}
         onChange={(e) => {
           const u = e.target.value as Unit;

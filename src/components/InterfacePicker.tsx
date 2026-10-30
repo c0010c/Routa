@@ -7,9 +7,10 @@ interface Props {
   value: InterfaceGuid | null;
   onChange: (v: InterfaceGuid | null) => void;
   disabled?: boolean;
+  label?: string;
 }
 
-export function InterfacePicker({ value, onChange, disabled }: Props) {
+export function InterfacePicker({ value, onChange, disabled, label = "网卡" }: Props) {
   const status = useStatus();
   const interfaces = status.data?.interfaces ?? [];
   const removed = value !== null && !interfaces.some((i) => i.guid === value);
@@ -17,12 +18,12 @@ export function InterfacePicker({ value, onChange, disabled }: Props) {
     <FormControl size="small" fullWidth>
       {/* shrink + displayEmpty: "系统默认" is the empty value and must still show. */}
       <InputLabel id="iface-label" shrink>
-        网卡
+        {label}
       </InputLabel>
       <Select
         disabled={disabled}
         labelId="iface-label"
-        label="网卡"
+        label={label}
         displayEmpty
         notched
         value={value ?? ""}

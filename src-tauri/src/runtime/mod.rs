@@ -8,6 +8,8 @@
 
 mod tasks;
 
+use crate::model::ExitId;
+
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,10 +23,10 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::config_gen::{
-    emitted_tailscale_names, empty_config, generate, node_proxy_name, nodes_check_config, GenInput,
+    delay_fingerprints, emitted_tailscale_names, empty_config, generate_for_capture, node_proxy_name, nodes_check_config, GenInput,
 };
 use crate::core::api::{ConnectionsSnapshot, MihomoApi};
-use crate::core::apply::{ApplyOutcome, Applier, FailedListener};
+use crate::core::apply::{Applier, ApplyOutcome, FailedListener};
 use crate::core::ports::PortOwners;
 use crate::core::process::{wait_ready, CheckError, CoreHandleLike, CoreLauncher, CoreState};
 use crate::model::health::{evaluate, ExitStatus, Health};
@@ -37,17 +39,22 @@ use crate::netif::{InterfaceSource, NetInterface};
 use crate::stats::delay::{test_many, DelayBook, DelayError, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
 use crate::stats::traffic::{Rate, TrafficAggregator, TrafficTick};
 use crate::store::{Store, TrafficTotals};
+use crate::subscription::fetch::{fetch_listener_ports, record_result, update_subscription, FetchError, PortAllocator};
 use crate::subscription::Parsed;
 use crate::tailscale::{TailscaleState, TailscaleTracker};
-use crate::subscription::fetch::{
-    fetch_listener_ports, record_result, update_subscription, FetchError, PortAllocator,
-};
 
 /// Builds the launcher for the current settings (core_path or sidecar); called
 /// at every (re)start so a changed `core_path` takes effect on restart.
 pub type LauncherFor = Arc<dyn Fn(&Settings) -> Arc<dyn CoreLauncher> + Send + Sync>;
 /// `(controller_port, secret)` -> API client for that core instance.
 pub type ApiFor = Box<dyn Fn(u16, String) -> Arc<dyn MihomoApi> + Send + Sync>;
+
+#[derive(Serialize, Debug, specta::Type)]
+#[serde(untagged)]
+pub enum SettingsSaveError {
+    Validation(Vec<ValidationError>),
+    Operation(String),
+}
 
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTROLLER_BUSY_PREFIX: &str = "控制端口";
@@ -147,6 +154,7 @@ struct Engine {
     core: Option<CoreRun>,
     /// Whether the supervisor restarts the core when it is not running.
     supervise: bool,
+    tun_exit: Option<ExitId>,
     alloc: PortAllocator,
 }
 
@@ -157,8 +165,14 @@ struct Live {
     /// Invalidates requests started before a core change or totals reset.
     traffic_generation: u64,
     name_to_id: HashMap<String, ListenerId>,
+    /// Display names for routes in the last accepted config, retained on rejected saves.
+    connection_nodes: HashMap<String, String>,
     stream_rate: Option<Rate>,
     last_delay_run: Option<i64>,
+    delay_contexts: HashMap<String, u64>,
+    /// Revisions also detect an A -> B -> A path change during a request.
+    delay_versions: HashMap<String, u64>,
+    delay_generation: u64,
 }
 
 struct Inner {
@@ -185,6 +199,72 @@ struct Inner {
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
+#[derive(Clone, Debug, serde::Serialize, specta::Type)]
+pub struct ConnectionInfo {
+    pub id: String,
+    pub listener: String,
+    pub process: String,
+    pub target: String,
+    pub node: String,
+    pub protocol: String,
+    pub uploaded: u64,
+    pub downloaded: u64,
+}
+
+fn connection_node_names(model: &Model) -> HashMap<String, String> {
+    use crate::model::{ExitKind, NodeRef, expand, manual_proxy_name};
+    let mut names = HashMap::from([("DIRECT".into(), "直连".into())]);
+    for n in &model.manual_nodes {
+        names.insert(manual_proxy_name(n), n.name.clone());
+    }
+    for s in &model.subscriptions {
+        for n in &s.nodes { names.insert(node_proxy_name(s, n), n.name.clone()); }
+    }
+    for e in &model.exits {
+        match &e.kind {
+            ExitKind::Direct => { names.insert(e.name.clone(), "直连".into()); }
+            ExitKind::Node { node } => {
+                let label = match node {
+                    NodeRef::Subscription { name, .. } => Some(name.clone()),
+                    NodeRef::Manual { manual_id } => model.manual_nodes.iter().find(|n| &n.id == manual_id).map(|n| n.name.clone()),
+                };
+                if let Some(label) = label { names.insert(e.name.clone(), label); }
+            }
+            ExitKind::Group { members, .. } => {
+                for n in expand(model, members).nodes {
+                    if let Some(crate::model::Resolved::Copyable { base_name, .. }) = crate::model::resolve(model, &n) {
+                        if let Some(label) = names.get(&base_name).cloned() {
+                            names.insert(crate::config_gen::member_proxy_name(e, &base_name), label);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
+fn connection_info(c: crate::core::api::Conn, names: &HashMap<String, String>) -> ConnectionInfo {
+    let route = c.chains.first().map(String::as_str).unwrap_or("");
+    let node = names.get(route).map(String::as_str).unwrap_or(route);
+    let host = if c.metadata.host.is_empty() { &c.metadata.destination_ip } else { &c.metadata.host };
+    let target = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{}", c.metadata.destination_port)
+    } else {
+        format!("{host}:{}", c.metadata.destination_port)
+    };
+    ConnectionInfo {
+        id: c.id,
+        listener: c.metadata.inbound_name,
+        process: if c.metadata.process_path.is_empty() { c.metadata.process } else { c.metadata.process_path },
+        target,
+        node: node.to_owned(),
+        protocol: c.metadata.network.to_uppercase(),
+        uploaded: c.upload,
+        downloaded: c.download,
+    }
+}
+
 pub struct Runtime {
     inner: Arc<Inner>,
 }
@@ -204,11 +284,7 @@ fn random_secret() -> String {
 
 /// Loads a persisted file; on failure moves it to `<name>.corrupt-<unix ts>`
 /// and starts from the default. Returns `(value, may_save)`.
-fn load_or_quarantine<T: Default>(
-    loaded: io::Result<T>,
-    path: &Path,
-    errors: &mut Vec<String>,
-) -> (T, bool) {
+fn load_or_quarantine<T: Default>(loaded: io::Result<T>, path: &Path, errors: &mut Vec<String>) -> (T, bool) {
     let e = match loaded {
         Ok(v) => return (v, true),
         Err(e) => e,
@@ -245,7 +321,9 @@ fn uncut(o: &ApplyOutcome) -> usize {
 const SHUT_DOWN: &str = "程序已退出，操作未执行";
 
 fn core_not_running() -> ApplyOutcome {
-    ApplyOutcome::NotRunning { error: "mihomo 未运行，配置将在内核启动后生效".into() }
+    ApplyOutcome::NotRunning {
+        error: "mihomo 未运行，配置将在内核启动后生效".into(),
+    }
 }
 
 impl Inner {
@@ -334,20 +412,48 @@ impl Inner {
         self.save_model(&m);
         *self.model.lock().unwrap() = m.clone();
         eng.model = m;
+        self.sync_delay_contexts(&eng.model);
+    }
+
+    fn update_delay_contexts(&self, next: HashMap<String, u64>) {
+        let changed = {
+            let mut live = self.live.lock().unwrap();
+            let changed: std::collections::HashSet<_> = live.delay_contexts.keys().chain(next.keys())
+                .filter(|name| live.delay_contexts.get(*name) != next.get(*name)).cloned().collect();
+            for name in &changed { *live.delay_versions.entry(name.clone()).or_default() += 1; }
+            live.delay_contexts = next;
+            changed
+        };
+        let mut st = self.status.lock().unwrap();
+        for (name, result) in &mut st.delays.0 { if changed.contains(name) { result.stale = true; } }
+    }
+
+    fn sync_delay_contexts(&self, model: &Model) {
+        let nics = self.nics.list();
+        self.update_delay_contexts(delay_fingerprints(model, &evaluate(model, &nics), &nics));
     }
 
     /// Executables a process rule must not name: Routa itself, the bundled
     /// mihomo, the custom core (`settings.core_path`) if one is set, and the
     /// process routing service exe (bundled helper and installed copy).
     fn forbidden_exes(&self, settings: &Settings) -> Vec<PathBuf> {
-        let bundled = Settings { core_path: None, ..settings.clone() };
+        let bundled = Settings {
+            core_path: None,
+            ..settings.clone()
+        };
         let mut out = Vec::new();
         match std::env::current_exe() {
             Ok(p) => out.push(p),
             Err(e) => eprintln!("runtime: cannot resolve Routa's own exe for process rule checks: {e}"),
         }
         out.extend((self.launcher_for)(&bundled).core_binary());
-        out.extend(settings.core_path.as_deref().filter(|p| !p.trim().is_empty()).map(PathBuf::from));
+        out.extend(
+            settings
+                .core_path
+                .as_deref()
+                .filter(|p| !p.trim().is_empty())
+                .map(PathBuf::from),
+        );
         out.extend(crate::procroute::elevate::component_exes());
         out
     }
@@ -355,9 +461,11 @@ impl Inner {
     /// Writes `yaml` to a temp file inside the core workdir, runs `mihomo -t`
     /// on it (with the launcher for `settings`) and deletes the file.
     async fn check_yaml(&self, settings: &Settings, yaml: &str) -> Result<(), CheckError> {
-        let path = self.store.core_workdir().join(format!("check-{}.yaml", &random_secret()[..16]));
-        std::fs::write(&path, yaml)
-            .map_err(|e| CheckError::Unavailable(format!("写入校验配置失败: {e}")))?;
+        let path = self
+            .store
+            .core_workdir()
+            .join(format!("check-{}.yaml", &random_secret()[..16]));
+        std::fs::write(&path, yaml).map_err(|e| CheckError::Unavailable(format!("写入校验配置失败: {e}")))?;
         let res = (self.launcher_for)(settings).check_config(&path).await;
         if let Err(e) = std::fs::remove_file(&path) {
             eprintln!("runtime: removing {} failed: {e}", path.display());
@@ -372,13 +480,16 @@ impl Inner {
         let nics = self.nics.list();
         let health = evaluate(m, &nics);
         let fetch = fetch_listener_ports(m, &mut eng.alloc);
-        let generated = generate(&GenInput {
-            model: m,
-            health: &health,
-            secret: CHECK_SECRET,
-            fetch_listeners: &fetch,
-            nics: &nics,
-        });
+        let generated = generate_for_capture(
+            &GenInput {
+                model: m,
+                health: &health,
+                secret: CHECK_SECRET,
+                fetch_listeners: &fetch,
+                nics: &nics,
+            },
+            eng.tun_exit.as_ref(),
+        );
         match self.check_yaml(&m.settings, &generated.yaml).await {
             Ok(()) => Ok(()),
             Err(CheckError::Rejected(message)) => Err(vec![ValidationError::CoreRejected { message }]),
@@ -417,11 +528,19 @@ impl Inner {
         {
             let mut live = self.live.lock().unwrap();
             live.api = None;
+            live.delay_generation += 1;
             live.traffic_generation += 1;
             live.name_to_id.clear();
+            live.connection_nodes.clear();
             live.stream_rate = None;
             let totals = self.traffic.lock().unwrap().totals.clone();
-            self.publish_traffic(TrafficTick { totals, ..TrafficTick::default() }, false);
+            self.publish_traffic(
+                TrafficTick {
+                    totals,
+                    ..TrafficTick::default()
+                },
+                false,
+            );
         }
         {
             // A new process logs every login state afresh.
@@ -431,6 +550,7 @@ impl Inner {
             ts.exit_retrying.clear();
             let mut st = self.status.lock().unwrap();
             st.effective_listeners.clear();
+            for result in st.delays.0.values_mut() { result.stale = true; }
             st.tailscale.clear();
             st.tailscale_exit_errors.clear();
             st.tailscale_exit_retrying.clear();
@@ -525,7 +645,11 @@ impl Inner {
                     let mut st = self.status.lock().unwrap();
                     set_core(&mut st, CoreState::Running);
                     st.core_stop_reason = None;
-                    if st.startup_error.as_deref().is_some_and(|e| e.starts_with(CONTROLLER_BUSY_PREFIX)) {
+                    if st
+                        .startup_error
+                        .as_deref()
+                        .is_some_and(|e| e.starts_with(CONTROLLER_BUSY_PREFIX))
+                    {
                         st.startup_error = None;
                     }
                 }
@@ -544,8 +668,7 @@ impl Inner {
         let secret = random_secret();
         let port = eng.model.settings.controller_port;
         let config = self.store.config_path();
-        std::fs::write(&config, empty_config(port, &secret))
-            .map_err(|e| format!("写入 mihomo 配置失败: {e}"))?;
+        std::fs::write(&config, empty_config(port, &secret)).map_err(|e| format!("写入 mihomo 配置失败: {e}"))?;
         let launcher = (self.launcher_for)(&eng.model.settings);
         let mut handle = launcher
             .launch(&config)
@@ -572,7 +695,9 @@ impl Inner {
             }
         }
         let api = (self.api_for)(port, secret.clone());
-        let left = deadline.saturating_duration_since(Instant::now()).max(Duration::from_secs(1));
+        let left = deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_secs(1));
         if let Err(e) = wait_ready(api.as_ref(), left).await {
             let _ = handle.stop().await;
             return Err(format!("mihomo 未在 5 秒内就绪: {e}"));
@@ -600,21 +725,37 @@ impl Inner {
     /// After a successful reload the Tailscale instances are prewarmed.
     async fn apply_once(self: &Arc<Self>, eng: &mut Engine) -> Option<ApplyOutcome> {
         let nics = self.nics.list();
-        let Engine { model, core, alloc, .. } = eng;
+        let Engine {
+            model,
+            core,
+            alloc,
+            tun_exit,
+            ..
+        } = eng;
         let health = evaluate(model, &nics);
+        self.update_delay_contexts(delay_fingerprints(model, &health, &nics));
         let fetch = fetch_listener_ports(model, alloc);
         let tailscales = emitted_tailscale_names(model, &nics);
         let outcome = match core.as_mut() {
             Some(run) => {
-                let generated = generate(&GenInput {
-                    model,
-                    health: &health,
-                    secret: &run.secret,
-                    fetch_listeners: &fetch,
-                    nics: &nics,
-                });
+                let generated = generate_for_capture(
+                    &GenInput {
+                        model,
+                        health: &health,
+                        secret: &run.secret,
+                        fetch_listeners: &fetch,
+                        nics: &nics,
+                    },
+                    tun_exit.as_ref(),
+                );
                 let plan = generated.plan.clone();
-                let CoreRun { handle, applier, secret, pid, .. } = run;
+                let CoreRun {
+                    handle,
+                    applier,
+                    secret,
+                    pid,
+                    ..
+                } = run;
                 let out = applier
                     .apply(generated, model.settings.controller_port, secret, *pid, async || {
                         if let Err(e) = handle.stop().await {
@@ -635,6 +776,7 @@ impl Inner {
                 let mut live = self.live.lock().unwrap();
                 match &out {
                     ApplyOutcome::Reloaded { .. } => {
+                        live.connection_nodes = connection_node_names(model);
                         live.name_to_id = plan
                             .listeners
                             .iter()
@@ -643,6 +785,7 @@ impl Inner {
                     }
                     ApplyOutcome::FailedClosed { .. } | ApplyOutcome::FailedCoreStopped { .. } => {
                         live.name_to_id.clear();
+                        live.connection_nodes.clear();
                     }
                     ApplyOutcome::FailedKeptPrevious { .. } | ApplyOutcome::NotRunning { .. } => {}
                 }
@@ -710,7 +853,10 @@ impl Inner {
         match self.apply_once(eng).await {
             Some(out) => {
                 if uncut(&out) > 0 {
-                    eprintln!("runtime: {} connection(s) could not be cut; restarting mihomo", uncut(&out));
+                    eprintln!(
+                        "runtime: {} connection(s) could not be cut; restarting mihomo",
+                        uncut(&out)
+                    );
                     let _ = self.start_core(eng).await;
                 }
                 out
@@ -724,7 +870,9 @@ impl Inner {
     /// re-applies when the nodes changed. `None` if the subscription is gone.
     async fn update_one_subscription(self: &Arc<Self>, id: &SubscriptionId) -> Option<FetchResult> {
         if self.is_shut_down() {
-            return Some(FetchResult::Failed { reason: SHUT_DOWN.into() });
+            return Some(FetchResult::Failed {
+                reason: SHUT_DOWN.into(),
+            });
         }
         let (sub, port) = {
             let mut eng = self.engine.lock().await;
@@ -734,6 +882,7 @@ impl Inner {
             let fetch = fetch_listener_ports(model, alloc);
             let st = self.status.lock().unwrap();
             let port = sub.fallback_exit.as_ref().and_then(|exit| {
+                if sub.fallback_listener.as_ref().is_some_and(|id| !st.effective_listeners.contains(id)) { return None; }
                 let ok = st.health.exits.get(exit).is_some_and(|h| h.status == ExitStatus::Ok);
                 let pid = core_pid.filter(|_| ok)?;
                 let port = fetch.iter().find(|(e, _)| e == exit).map(|(_, p)| *p)?;
@@ -749,23 +898,27 @@ impl Inner {
         };
 
         let result = match update_subscription(&sub, port).await {
-            Ok(p) => self
-                .check_nodes(&sub, p.nodes)
-                .await
-                .map(|nodes| Parsed { nodes, skipped_tailscale: p.skipped_tailscale }),
+            Ok(p) => self.check_nodes(&sub, p.nodes).await.map(|nodes| Parsed {
+                nodes,
+                skipped_tailscale: p.skipped_tailscale,
+            }),
             Err(e) => Err(e),
         };
 
         let mut eng = self.engine.lock().await;
         if self.is_shut_down() {
-            return Some(FetchResult::Failed { reason: SHUT_DOWN.into() });
+            return Some(FetchResult::Failed {
+                reason: SHUT_DOWN.into(),
+            });
         }
         let mut m = eng.model.clone();
         let target = m.subscriptions.iter_mut().find(|s| &s.id == id)?;
         if target.url != sub.url {
             // Edited while the fetch was in flight: the result belongs to the
             // old URL. Record nothing (not even last_updated).
-            return Some(FetchResult::Failed { reason: "订阅地址已更改，本次结果已丢弃".into() });
+            return Some(FetchResult::Failed {
+                reason: "订阅地址已更改，本次结果已丢弃".into(),
+            });
         }
         let old_nodes = target.nodes.clone();
         record_result(target, result, now_unix());
@@ -821,7 +974,15 @@ impl Inner {
     }
 
     async fn test_delays(&self, names: Vec<String>) -> Vec<(String, DelayResult)> {
-        let api = self.live.lock().unwrap().api.clone();
+        // Take the snapshot after any in-flight apply, but release the engine
+        // while measuring so node switches remain responsive.
+        let (api, versions, generation, url, applied) = {
+            let eng = self.engine.lock().await;
+            self.sync_delay_contexts(&eng.model);
+            let live = self.live.lock().unwrap();
+            let applied = matches!(self.status.lock().unwrap().last_apply, Some(ApplyOutcome::Reloaded { .. }));
+            (live.api.clone(), live.delay_versions.clone(), live.delay_generation, eng.model.settings.delay_test_url.clone(), applied)
+        };
         let Some(api) = api.filter(|_| !self.is_shut_down()) else {
             // No core to test through: report failures, keep the DelayBook.
             return names
@@ -829,12 +990,19 @@ impl Inner {
                 .map(|n| (n, DelayResult::failed(DelayError::NoCore, now_unix())))
                 .collect();
         };
-        let url = self.model.lock().unwrap().settings.delay_test_url.clone();
-        let results = test_many(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS).await;
+        let mut results = test_many(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS).await;
         {
+            let eng = self.engine.lock().await;
+            self.sync_delay_contexts(&eng.model);
+            let live = self.live.lock().unwrap();
             let mut st = self.status.lock().unwrap();
-            for (name, r) in &results {
-                st.delays.record(name.clone(), r.clone());
+            let same_core = live.delay_generation == generation && live.api.as_ref().is_some_and(|now| Arc::ptr_eq(now, &api));
+            let current_applied = matches!(st.last_apply, Some(ApplyOutcome::Reloaded { .. }));
+            for (name, r) in &mut results {
+                let same_path = live.delay_versions.get(name).copied().unwrap_or(0) == versions.get(name).copied().unwrap_or(0);
+                r.stale = !same_core || !same_path || !applied || !current_applied;
+                // A late old-path result must never replace a fresh current one.
+                if !r.stale { st.delays.record(name.clone(), r.clone()); }
             }
         }
         self.emit_status();
@@ -904,6 +1072,7 @@ impl Runtime {
                 model: model.clone(),
                 core: None,
                 supervise: false,
+                tun_exit: None,
                 alloc: PortAllocator::new(),
             }),
             model: Mutex::new(model),
@@ -959,6 +1128,64 @@ impl Runtime {
         self.inner.set_core_state(CoreState::Stopped);
     }
 
+    /// Settings preferences do not belong to the core config. Persist them
+    /// without a reload; only changed core parameters take the apply path.
+    /// Keep OS autostart and persistence failures observable to the caller.
+    pub async fn save_settings(
+        &self,
+        mut settings: Settings,
+        set_autostart: impl Fn(bool) -> Result<(), String>,
+    ) -> Result<ApplyOutcome, SettingsSaveError> {
+        let mut eng = self.inner.engine.lock().await;
+        if self.inner.is_shut_down() {
+            return Err(SettingsSaveError::Operation("程序正在退出，设置未保存".into()));
+        }
+        settings.core_path = None;
+        let old_autostart = eng.model.settings.autostart;
+        let autostart_changed = settings.autostart != old_autostart;
+        let core_changed = settings.controller_port != eng.model.settings.controller_port
+            || settings.core_path != eng.model.settings.core_path;
+        let mut model = eng.model.clone();
+        model.settings = settings;
+        normalize(&mut model);
+        validate(&model).map_err(SettingsSaveError::Validation)?;
+        if core_changed {
+            self.inner.check_model(&mut eng, &model).await.map_err(SettingsSaveError::Validation)?;
+        }
+        if autostart_changed {
+            set_autostart(model.settings.autostart).map_err(|_| {
+                SettingsSaveError::Operation("开机自启未能保存，请重试".into())
+            })?;
+        }
+        if self.inner.persist_model {
+            let result = self.inner.store.save_model(&model);
+            let failed = result.is_err();
+            self.inner.note_save(true, result);
+            if failed {
+                let rollback_failed = autostart_changed && set_autostart(old_autostart).is_err();
+                return Err(SettingsSaveError::Operation(if rollback_failed {
+                    "设置未能保存，开机自启未能恢复，请检查系统启动项".into()
+                } else {
+                    "设置未能写入磁盘，请重试".into()
+                }));
+            }
+        }
+        *self.inner.model.lock().unwrap() = model.clone();
+        eng.model = model;
+        self.inner.sync_delay_contexts(&eng.model);
+        if !core_changed {
+            self.inner.emit_status();
+            return Ok(ApplyOutcome::Reloaded { cut: 0, uncut: 0, failed_listeners: vec![] });
+        }
+        if eng.supervise {
+            return Ok(match self.inner.start_core(&mut eng).await {
+                Ok(()) => self.inner.status.lock().unwrap().last_apply.clone().unwrap_or_else(core_not_running),
+                Err(error) => ApplyOutcome::NotRunning { error },
+            });
+        }
+        Ok(self.inner.apply(&mut eng).await)
+    }
+
     /// clone → f → validate → `mihomo -t` → save → evaluate → generate → apply.
     /// A changed controller port or core path restarts a supervised core
     /// instead (the restart applies the new model).
@@ -982,7 +1209,12 @@ impl Runtime {
     ) -> Result<(ApplyOutcome, R), Vec<ValidationError>> {
         let mut eng = self.inner.engine.lock().await;
         if self.inner.is_shut_down() {
-            return Ok((ApplyOutcome::FailedCoreStopped { error: SHUT_DOWN.into() }, f(&mut eng.model.clone())?));
+            return Ok((
+                ApplyOutcome::FailedCoreStopped {
+                    error: SHUT_DOWN.into(),
+                },
+                f(&mut eng.model.clone())?,
+            ));
         }
         let mut m = eng.model.clone();
         let r = f(&mut m)?;
@@ -995,7 +1227,14 @@ impl Runtime {
         self.inner.commit_model(&mut eng, m);
         if restart {
             let outcome = match self.inner.start_core(&mut eng).await {
-                Ok(()) => self.inner.status.lock().unwrap().last_apply.clone().unwrap_or_else(core_not_running),
+                Ok(()) => self
+                    .inner
+                    .status
+                    .lock()
+                    .unwrap()
+                    .last_apply
+                    .clone()
+                    .unwrap_or_else(core_not_running),
                 Err(error) => ApplyOutcome::NotRunning { error },
             };
             return Ok((outcome, r));
@@ -1008,7 +1247,10 @@ impl Runtime {
     /// restarts mihomo: process routing is not part of its config. Validation
     /// errors leave everything untouched. After `shutdown` nothing is saved
     /// and `Ok(())` is returned (the app is exiting; there is nobody to tell).
-    pub async fn mutate_process_routing(&self, f: impl FnOnce(&mut ProcessRouting)) -> Result<(), Vec<ValidationError>> {
+    pub async fn mutate_process_routing(
+        &self,
+        f: impl FnOnce(&mut ProcessRouting),
+    ) -> Result<(), Vec<ValidationError>> {
         let mut eng = self.inner.engine.lock().await;
         if self.inner.is_shut_down() {
             return Ok(());
@@ -1063,8 +1305,70 @@ impl Runtime {
         self.inner.set_core_state(CoreState::Stopped);
     }
 
+    /// Change TUN under the same engine lock used by config edits and restarts.
+    pub async fn set_tun_exit(&self, target: Option<ExitId>) -> Result<(), String> {
+        let mut eng = self.inner.engine.lock().await;
+        if self.inner.is_shut_down() {
+            return Err(SHUT_DOWN.into());
+        }
+        if let Some(id) = &target {
+            if !self
+                .status()
+                .health
+                .exits
+                .get(id)
+                .is_some_and(|h| h.status == crate::model::health::ExitStatus::Ok)
+            {
+                return Err("TUN 对应的出口不可用".into());
+            }
+            if eng.core.is_none() {
+                return Err("请先启动内核".into());
+            }
+        }
+        let old = eng.tun_exit.clone();
+        if target.is_none() && eng.core.is_none() {
+            eng.tun_exit = None;
+            return Ok(());
+        }
+        eng.tun_exit = target;
+        let outcome = self.inner.apply(&mut eng).await;
+        if !matches!(&outcome, ApplyOutcome::Reloaded { failed_listeners, .. } if failed_listeners.is_empty()) {
+            eng.tun_exit = old;
+            let _ = self.inner.apply(&mut eng).await;
+            return Err(format!("TUN 设置未能生效：{outcome:?}"));
+        }
+        Ok(())
+    }
+
+    pub fn tun_adapter_ready(&self) -> bool {
+        self.inner
+            .nics
+            .list()
+            .iter()
+            .any(|n| n.is_up && (n.friendly_name == "RoutaTun" || n.mihomo_name == "RoutaTun"))
+    }
+
     pub fn status(&self) -> RuntimeStatus {
         self.inner.status.lock().unwrap().clone()
+    }
+
+    pub async fn connection_details(&self) -> Result<Vec<ConnectionInfo>, String> {
+        let (api, names) = {
+            let live = self.inner.live.lock().unwrap();
+            (live.api.clone().ok_or("内核未运行")?, live.connection_nodes.clone())
+        };
+        let snapshot = api.connections().await.map_err(|e| e.to_string())?;
+        {
+            let live = self.inner.live.lock().unwrap();
+            if !live.api.as_ref().is_some_and(|now| Arc::ptr_eq(now, &api)) || live.connection_nodes != names {
+                return Err("代理配置已更新，请稍后重试".into());
+            }
+        }
+        Ok(snapshot
+            .connections
+            .into_iter()
+            .map(|c| connection_info(c, &names))
+            .collect())
     }
 
     /// Directory holding mihomo's working files (config.yaml, mihomo.log).
@@ -1081,7 +1385,9 @@ impl Runtime {
         self.inner
             .update_one_subscription(&id)
             .await
-            .unwrap_or_else(|| FetchResult::Failed { reason: "订阅不存在".into() })
+            .unwrap_or_else(|| FetchResult::Failed {
+                reason: "订阅不存在".into(),
+            })
     }
 
     /// One pass of the subscription scheduler (normally run every 60 s).
@@ -1100,7 +1406,9 @@ impl Runtime {
     pub async fn retry_tailscale_exit_nodes(&self) -> ApplyOutcome {
         let mut eng = self.inner.engine.lock().await;
         if self.inner.is_shut_down() {
-            return ApplyOutcome::FailedCoreStopped { error: SHUT_DOWN.into() };
+            return ApplyOutcome::FailedCoreStopped {
+                error: SHUT_DOWN.into(),
+            };
         }
         self.inner.apply(&mut eng).await
     }

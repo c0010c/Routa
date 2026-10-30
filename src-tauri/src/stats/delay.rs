@@ -20,6 +20,10 @@ pub struct DelayResult {
     /// Why `ms` is `None`.
     #[serde(default)]
     pub error: Option<DelayError>,
+    /// The measured path/test settings changed after this result was produced.
+    #[serde(default)]
+    #[specta(optional)]
+    pub stale: bool,
 }
 
 /// Why a delay test produced no number. mihomo's delay endpoint only tells
@@ -53,7 +57,7 @@ impl From<ApiError> for DelayError {
 
 impl DelayResult {
     pub fn failed(error: DelayError, tested_at: i64) -> Self {
-        Self { ms: None, tested_at, error: Some(error) }
+        Self { ms: None, tested_at, error: Some(error), stale: false }
     }
 }
 
@@ -90,7 +94,7 @@ pub async fn test_many(
     stream::iter(names.iter().cloned())
         .map(|name| async move {
             let r = match api.delay(&name, url, timeout_ms).await {
-                Ok(ms) => DelayResult { ms: Some(ms), tested_at: now_unix(), error: None },
+                Ok(ms) => DelayResult { ms: Some(ms), tested_at: now_unix(), error: None, stale: false },
                 Err(e) => DelayResult::failed(e.into(), now_unix()),
             };
             (name, r)
@@ -152,6 +156,15 @@ mod tests {
     fn delay_result_without_error_field_deserializes() {
         let r: DelayResult = serde_json::from_str(r#"{"ms":null,"tested_at":1}"#).unwrap();
         assert_eq!(r.error, None);
+        assert!(!r.stale);
+    }
+
+    #[test]
+    fn stale_delay_is_optional_in_generated_frontend_contract() {
+        let generated = specta_typescript::export::<DelayResult>(
+            &specta_typescript::Typescript::default().bigint(specta_typescript::BigIntExportBehavior::Number),
+        ).unwrap();
+        assert!(generated.contains("stale?: boolean"), "{generated}");
     }
 
     #[test]
@@ -162,6 +175,7 @@ mod tests {
             ms: Some(10),
             tested_at: 5,
             error: None,
+            stale: false,
         };
         book.record("a".into(), r.clone());
         assert_eq!(book.get("a"), Some(&r));

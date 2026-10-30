@@ -91,18 +91,18 @@ describe("GettingStarted", () => {
     const exit = vi.mocked(commands.saveExit).mock.calls[0][0];
     expect(exit).toMatchObject({ name: "直连", kind: "Direct", interface: null });
     const l = vi.mocked(commands.saveListener).mock.calls[0][0];
-    expect(l).toMatchObject({ name: "默认", port: 7891, exit: exit.id });
+    expect(l).toMatchObject({ name: "默认", port: 7881, exit: exit.id });
     await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(`/?highlight=${l.id}`));
-    expect(await screen.findByText("已创建：端口 7891 走「直连」，可以用了")).toBeInTheDocument();
+    expect(await screen.findByText("已创建：端口 7881 走「直连」，可以用了")).toBeInTheDocument();
   });
 
   it("quick start reuses an existing direct exit and avoids name clashes", async () => {
     const exit: Exit = { id: "e9", name: "家里", kind: "Direct", interface: null };
-    renderCard({ ...base, exits: [exit], listeners: [listener({ name: "默认", port: 7891 })] });
+    renderCard({ ...base, exits: [exit], listeners: [listener({ name: "默认", port: 7881 })] });
     fireEvent.click(screen.getByRole("button", { name: "快速开始：建一个直连端口" }));
     await waitFor(() => expect(commands.saveListener).toHaveBeenCalledTimes(1));
     expect(commands.saveExit).not.toHaveBeenCalled();
-    expect(vi.mocked(commands.saveListener).mock.calls[0][0]).toMatchObject({ name: "默认 2", port: 7892, exit: "e9" });
+    expect(vi.mocked(commands.saveListener).mock.calls[0][0]).toMatchObject({ name: "默认 2", port: 7882, exit: "e9" });
   });
 });
 

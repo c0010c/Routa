@@ -121,6 +121,10 @@ fn parse_args(args: Vec<OsString>) -> Result<Command, String> {
 }
 
 fn main() -> ExitCode {
+    if std::env::args_os().skip(1).collect::<Vec<_>>() == [OsString::from("--build-info")] {
+        println!("{}", serde_json::json!({ "format": "ROUTA_BUILD_INFO_V1", "protocolVersion": routa_procsvc_proto::PROTO_VERSION }));
+        return ExitCode::SUCCESS;
+    }
     let (args, error_file) = take_error_file(std::env::args_os().skip(1).collect());
     let fail = |code: u8, msg: &str| {
         eprintln!("{msg}");
