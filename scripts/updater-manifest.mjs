@@ -19,6 +19,15 @@ export function buildManifest({ tag, notes, publishedAt, setupUrl, signature }, 
   };
 }
 
+export function pickAssets(release) {
+  const assets = release?.assets ?? [];
+  const setup = assets.find((a) => a.name.endsWith("_x64-setup.exe"));
+  if (!setup) throw new Error(`Release ${release?.tag_name ?? ""} 中找不到 _x64-setup.exe 安装包`);
+  const sig = assets.find((a) => a.name === `${setup.name}.sig`);
+  if (!sig) throw new Error(`Release ${release.tag_name} 中找不到 ${setup.name}.sig 签名文件`);
+  return { setup, sig };
+}
+
 async function api(path, token, init = {}) {
   return fetch(`https://api.github.com${path}`, {
     ...init,
@@ -34,10 +43,7 @@ async function main() {
   const res = await api(`/repos/${repo}/releases/latest`, token);
   if (!res.ok) throw new Error(`获取最新 Release 失败：HTTP ${res.status}`);
   const release = await res.json();
-  const setup = release.assets.find((a) => a.name.endsWith("_x64-setup.exe"));
-  if (!setup) throw new Error(`Release ${release.tag_name} 中找不到 _x64-setup.exe 安装包`);
-  const sig = release.assets.find((a) => a.name === `${setup.name}.sig`);
-  if (!sig) throw new Error(`Release ${release.tag_name} 中找不到 ${setup.name}.sig 签名文件`);
+  const { setup, sig } = pickAssets(release);
 
   const sigRes = await fetch(sig.browser_download_url);
   if (!sigRes.ok) throw new Error(`下载签名文件失败：HTTP ${sigRes.status}`);
@@ -58,7 +64,7 @@ async function main() {
   if (exists.status === 404) {
     // Non-draft prerelease so it never becomes "latest".
     execFileSync("gh", ["release", "create", UPDATER_TAG, "--repo", repo, "--title", UPDATER_TAG,
-      "--notes", "Auto-update manifests (maintained by CI).", "--prerelease"], { stdio: "inherit", env });
+      "--notes", "Auto-update manifests (maintained by CI).", "--prerelease", "--latest=false"], { stdio: "inherit", env });
   } else if (!exists.ok) {
     throw new Error(`查询 ${UPDATER_TAG} Release 失败：HTTP ${exists.status}`);
   }
