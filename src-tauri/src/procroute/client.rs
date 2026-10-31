@@ -167,12 +167,31 @@ fn settle_outcome_for(state: ComponentState) -> SettleOutcome {
     }
 }
 
+/// 瞬时连接错误（管道忙等）的重试：最多 4 次 × 500 ms，总计约 2 s。
+const SETTLE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+const SETTLE_MAX_RETRIES: u32 = 4;
+
+/// 只有 `Error`（服务可能在运行但暂时没连上）值得重试；没有服务的状态立即返回。
+fn should_retry_connect(state: &ComponentState, attempt: u32) -> bool {
+    matches!(state, ComponentState::Error { .. }) && attempt < SETTLE_MAX_RETRIES
+}
+
 /// 安装器启动前调用：让服务把本次 Routa 视为“正常退出”（Attach + Goodbye + 断开），
 /// 从而按 on_routa_exit 回落，即使上次 Routa 是崩溃退出。
 pub async fn settle_graceful(pid: u32) -> SettleOutcome {
-    let outcome = match connect().await {
-        Ok(conn) => settle_on(conn, pid).await,
-        Err(state) => settle_outcome_for(state),
+    let mut attempt = 0;
+    let outcome = loop {
+        match connect().await {
+            Ok(conn) => break settle_on(conn, pid).await,
+            Err(state) => {
+                if should_retry_connect(&state, attempt) {
+                    attempt += 1;
+                    tokio::time::sleep(SETTLE_RETRY_DELAY).await;
+                    continue;
+                }
+                break settle_outcome_for(state);
+            }
+        }
     };
     if let SettleOutcome::Failed(e) = &outcome {
         eprintln!("安装前通知分流服务失败：{e}");
@@ -890,6 +909,22 @@ mod tests {
     use routa_procsvc_proto::{Action, ExitPolicy, FaultPolicy, RuleSpec};
 
     use super::*;
+
+    #[test]
+    fn connect_retry_only_for_transient_errors_and_bounded() {
+        let err = ComponentState::Error { message: "busy".into() };
+        assert!(should_retry_connect(&err, 0));
+        assert!(should_retry_connect(&err, SETTLE_MAX_RETRIES - 1));
+        assert!(!should_retry_connect(&err, SETTLE_MAX_RETRIES));
+        for s in [
+            ComponentState::NotInstalled,
+            ComponentState::Stopped,
+            ComponentState::NeedsUpdate,
+            ComponentState::OwnedByOtherUser,
+        ] {
+            assert!(!should_retry_connect(&s, 0));
+        }
+    }
 
     /// 按顺序回放预设回复的假连接，记录收到的请求。
     struct FakeConn {

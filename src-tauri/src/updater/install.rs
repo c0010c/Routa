@@ -169,6 +169,11 @@ pub fn should_prompt_at_startup(state: &UpdateState, autostarted: bool) -> bool 
 /// happens before exiting; on failure startup continues normally and the
 /// updater shows `Failed`. Only the final spawn runs after exit.
 pub async fn startup_gate(app: &AppHandle, updater: &Updater, autostarted: bool) -> bool {
+    // Off the UI thread; the installer about to be launched is staged later,
+    // so nothing current is kept here.
+    tokio::task::spawn_blocking(|| {
+        clean_stale_staged(&std::env::temp_dir(), None);
+    });
     let state = updater.view().state;
     if !should_prompt_at_startup(&state, autostarted) {
         return false;
@@ -214,6 +219,30 @@ pub async fn startup_gate(app: &AppHandle, updater: &Updater, autostarted: bool)
     true
 }
 
+/// Shown before the installer runs, so a UAC prompt is never a surprise.
+const UAC_NOTE: &str = "若进程分流组件有更新，安装时会请求一次管理员权限（UAC）。";
+
+/// Deletes staged `routa-update-*-setup.exe` files in `dir` except `keep`.
+/// Best effort: files that cannot be removed (e.g. still running) are skipped.
+pub fn clean_stale_staged(dir: &Path, keep: Option<&Path>) -> usize {
+    let Ok(rd) = fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !(name.starts_with("routa-update-") && name.ends_with("-setup.exe")) {
+            continue;
+        }
+        if keep.is_some_and(|k| k == path) {
+            continue;
+        }
+        if fs::remove_file(&path).is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
 #[cfg(windows)]
 fn ask_install(version: &str) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -222,7 +251,9 @@ fn ask_install(version: &str) -> bool {
     let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
     let title = wide("Routa 更新");
     let text = wide(&format!(
-        "新版本 v{version} 已下载，是否现在安装？\n\n安装期间按“Routa 退出时”的分流策略处理。"
+        "新版本 v{version} 已下载，是否现在安装？\n\n安装期间按“Routa 退出时”的分流策略处理。
+
+{UAC_NOTE}"
     ));
     // Topmost and foreground: the main window must not hide it while the core
     // waits for the answer.
@@ -255,6 +286,26 @@ mod tests {
         assert!(should_prompt_at_startup(&ready, false));
         assert!(!should_prompt_at_startup(&ready, true));
         assert!(!should_prompt_at_startup(&UpdateState::Idle, false));
+    }
+
+    #[test]
+    fn dialog_text_mentions_uac() {
+        assert!(UAC_NOTE.contains("UAC"));
+    }
+
+    #[test]
+    fn clean_stale_staged_keeps_only_the_given_file_and_others() {
+        let t = tempfile::tempdir().unwrap();
+        for n in ["routa-update-0.3.0-setup.exe", "routa-update-0.4.0-setup.exe", "other.exe", "routa-update-x.txt"] {
+            fs::write(t.path().join(n), b"x").unwrap();
+        }
+        let keep = t.path().join("routa-update-0.4.0-setup.exe");
+        assert_eq!(clean_stale_staged(t.path(), Some(&keep)), 1);
+        assert!(!t.path().join("routa-update-0.3.0-setup.exe").exists());
+        assert!(keep.exists());
+        assert!(t.path().join("other.exe").exists());
+        assert!(t.path().join("routa-update-x.txt").exists());
+        assert_eq!(clean_stale_staged(t.path(), None), 1);
     }
 
     #[test]

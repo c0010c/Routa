@@ -86,7 +86,7 @@
 
 NSIS 安装版在安装末尾通过 UAC 注册服务；拒绝授权不影响安装，可稍后在应用中启用组件。
 
-**卸载 Routa 前，请先在应用内卸载组件。** NSIS 卸载时会通过 UAC 删除服务与防护规则，失败时可重试。组件残留时，配置为阻断的程序可能继续无法联网。可在管理员 PowerShell 中执行以下命令，手动删除服务与规则：
+NSIS 卸载时会通过 UAC 自动删除服务与防护规则，失败时可重试。若删除失败或拒绝了 UAC，组件会残留，配置为阻断的程序可能继续无法联网；可在管理员 PowerShell 中执行以下命令，手动删除服务与规则：
 
 ```powershell
 & "$env:ProgramFiles\Routa\ProcessRouting\routa-procsvc.exe" --uninstall

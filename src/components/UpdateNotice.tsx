@@ -3,6 +3,7 @@ import { Alert, Button, IconButton, Snackbar, Tooltip } from "@mui/material";
 import { useState } from "react";
 import { errorMessage } from "../api/client";
 import { installUpdate, useUpdate } from "../api/update";
+import { UAC_NOTE } from "../lib/updateCopy";
 
 export function UpdateNotice() {
   const { data } = useUpdate();
@@ -34,8 +35,15 @@ export function UpdateNotice() {
         }
       >
         {error ?? `新版本 v${state.version} 已就绪`}
-        {!error && state.notes && (
-          <Tooltip title={state.notes}>
+        {!error && (
+          <Tooltip
+            title={
+              <>
+                {state.notes && <div>{state.notes}</div>}
+                <div>{UAC_NOTE}</div>
+              </>
+            }
+          >
             <IconButton size="small" aria-label="更新内容" color="inherit" sx={{ p: 0.25, ml: 0.5 }}>
               <InfoOutlined sx={{ fontSize: 16 }} />
             </IconButton>

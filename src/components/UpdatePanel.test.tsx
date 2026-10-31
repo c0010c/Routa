@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { UpdateState, UpdateView } from "../bindings";
 import { installUpdate } from "../api/update";
+import { UAC_NOTE } from "../lib/updateCopy";
 import { UpdatePanel } from "./UpdatePanel";
 
 let view: UpdateView;
@@ -31,10 +32,11 @@ describe("UpdatePanel", () => {
     expect(screen.getByText("v0.4.0 已就绪")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "现在安装" }));
     expect(installUpdate).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(UAC_NOTE)).toBeInTheDocument();
   });
   it("Failed shows the message", () => {
     show({ kind: "Failed", message: "网络错误" });
-    expect(screen.getByText("检查更新失败：网络错误")).toBeInTheDocument();
+    expect(screen.getByText("更新失败：网络错误")).toBeInTheDocument();
   });
   it("Unsupported has no buttons", () => {
     show({ kind: "Unsupported" });

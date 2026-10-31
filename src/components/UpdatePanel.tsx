@@ -5,6 +5,7 @@ import type { UpdateState } from "../bindings";
 import { checkUpdate, installUpdate, useUpdate } from "../api/update";
 import { errorMessage } from "../api/client";
 import { formatBytes } from "../lib/format";
+import { UAC_NOTE } from "../lib/updateCopy";
 
 function statusText(state: UpdateState, last: number | null): string | null {
   switch (state.kind) {
@@ -22,7 +23,7 @@ function statusText(state: UpdateState, last: number | null): string | null {
     case "Ready":
       return `v${state.version} 已就绪`;
     case "Failed":
-      return `检查更新失败：${state.message}`;
+      return `更新失败：${state.message}`;
     default:
       return null;
   }
@@ -77,6 +78,11 @@ export function UpdatePanel() {
                   </Button>
                 )}
               </Stack>
+              {state.kind === "Ready" && (
+                <Typography variant="body2" color="text.secondary">
+                  {UAC_NOTE}
+                </Typography>
+              )}
               {text && (
                 <Typography variant="body2" color="text.secondary">
                   {text}

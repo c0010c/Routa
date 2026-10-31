@@ -86,7 +86,7 @@ Process routing runs as the `RoutaProcSvc` Windows service, built on [ProxyBridg
 
 The NSIS installer requests UAC at the end of setup to register the service. Declining does not fail installation; enable the component later in the app.
 
-**Before uninstalling Routa, uninstall the component from the app.** NSIS uninstallation requests UAC to remove the service and filter rules, with a retry prompt if removal fails. If the component remains installed, programs configured to block may stay offline. To remove the service and rules manually, run this in an administrator PowerShell:
+NSIS uninstallation removes the service and filter rules itself and requests UAC to do so, with a retry prompt if removal fails. If removal fails or you decline UAC, the component remains installed and programs configured to block may stay offline; remove the service and rules manually by running this in an administrator PowerShell:
 
 ```powershell
 & "$env:ProgramFiles\Routa\ProcessRouting\routa-procsvc.exe" --uninstall

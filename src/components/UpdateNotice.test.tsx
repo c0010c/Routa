@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { UpdateView } from "../bindings";
+import { UAC_NOTE } from "../lib/updateCopy";
 import { UpdateNotice } from "./UpdateNotice";
 
 let view: UpdateView;
@@ -17,6 +18,12 @@ describe("UpdateNotice", () => {
     expect(screen.getByText("新版本 v0.4.0 已就绪")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "稍后" }));
     expect(screen.queryByText("新版本 v0.4.0 已就绪")).toBeNull();
+  });
+  it("explains the possible UAC prompt in the tooltip", async () => {
+    view = { ...base, state: { kind: "Ready", version: "0.4.0", notes: null } };
+    render(<UpdateNotice />);
+    fireEvent.mouseOver(screen.getByRole("button", { name: "更新内容" }));
+    expect(await screen.findByText(UAC_NOTE)).toBeInTheDocument();
   });
   it("renders nothing when Idle", () => {
     view = { ...base, state: { kind: "Idle" } };
