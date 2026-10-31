@@ -184,14 +184,29 @@ pub fn install_matches(source_exe: &Path, source: &Path, installed: &Path) -> io
     Ok(true)
 }
 
-/// `--check-install`：服务已注册且已安装的文件与当前 exe / `source` 完全一致。只读，不需要管理员。
-pub fn check_install(source: &Path) -> Result<bool, String> {
+/// 安装目录里的 owner.sid 内容恰好等于 `sid`（缺失、读不了、不一致都为 false）。
+pub fn owner_matches(installed: &Path, sid: &str) -> bool {
+    fs::read_to_string(installed.join(OWNER_SID_FILE)).is_ok_and(|s| s == sid)
+}
+
+/// `--check-install`：服务已注册并在运行（或正在启动）、owner.sid 就是 `owner_sid`，
+/// 且已安装的文件与当前 exe / `source` 完全一致。只读，不需要管理员。
+pub fn check_install(source: &Path, owner_sid: &str) -> Result<bool, String> {
     let mgr = manager(ServiceManagerAccess::CONNECT)?;
-    if open(&mgr, ServiceAccess::QUERY_STATUS)?.is_none() {
+    let Some(svc) = open(&mgr, ServiceAccess::QUERY_STATUS)? else {
+        return Ok(false);
+    };
+    // 已停止或被禁用的服务要走完整安装（重设自动启动并启动）
+    let state = svc.query_status().map_err(|e| failed("查询服务状态", e))?.current_state;
+    if !matches!(state, ServiceState::Running | ServiceState::StartPending) {
+        return Ok(false);
+    }
+    let dir = install_dir()?;
+    if !owner_matches(&dir, owner_sid) {
         return Ok(false);
     }
     let exe = std::env::current_exe().map_err(|e| format!("无法确定本程序路径：{e}"))?;
-    install_matches(&exe, source, &install_dir()?).map_err(|e| format!("比较组件文件失败：{e}"))
+    install_matches(&exe, source, &dir).map_err(|e| format!("比较组件文件失败：{e}"))
 }
 
 /// 本机或域用户的 SID：`S-1-5-21-` 后跟 4 段十进制数。
@@ -734,6 +749,18 @@ mod tests {
         assert!(!install_matches(&src_exe, src.path(), dst.path()).unwrap());
         std::fs::remove_file(dst.path().join(rest[0])).unwrap();
         assert!(!install_matches(&src_exe, src.path(), dst.path()).unwrap());
+    }
+
+    #[test]
+    fn owner_matches_requires_exact_sid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "S-1-5-21-1-2-3-1001";
+        assert!(!owner_matches(dir.path(), sid));
+        std::fs::write(dir.path().join(OWNER_SID_FILE), sid).unwrap();
+        assert!(owner_matches(dir.path(), sid));
+        assert!(!owner_matches(dir.path(), "S-1-5-21-1-2-3-1002"));
+        std::fs::write(dir.path().join(OWNER_SID_FILE), format!("{sid}\n")).unwrap();
+        assert!(!owner_matches(dir.path(), sid));
     }
 
     #[test]

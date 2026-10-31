@@ -32,7 +32,7 @@ const USAGE: &str = "用法：
   routa-procsvc.exe --install --owner-sid <SID> --source <目录>
   routa-procsvc.exe --uninstall
   routa-procsvc.exe --cleanup
-  routa-procsvc.exe --check-install --source <目录>   （只读，不需要管理员；已是最新退出码 0，否则 1）
+  routa-procsvc.exe --check-install --source <目录> --owner-sid <SID>   （只读，不需要管理员；已是最新退出码 0，否则 1）
 以上命令都可另加 --error-file <路径>：失败时把原因写进该文件（必须是尚不存在的新文件）。
 不带参数时只能由服务管理器启动。";
 
@@ -42,7 +42,7 @@ enum Command {
     Install { owner_sid: String, source: PathBuf },
     Uninstall,
     Cleanup,
-    CheckInstall { source: PathBuf },
+    CheckInstall { source: PathBuf, owner_sid: String },
 }
 
 /// 取出 `--error-file <路径>`（可在任意位置，最多一次），其余参数原样返回。
@@ -82,6 +82,26 @@ fn write_error_file(path: &Path, msg: &str) -> Result<(), String> {
         .map_err(|e| format!("写入 {} 失败：{e}", path.display()))
 }
 
+fn parse_check_install(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let (mut owner_sid, mut source) = (None, None);
+    while let Some(flag) = args.next() {
+        let slot = match flag.to_str() {
+            Some("--owner-sid") if owner_sid.is_none() => &mut owner_sid,
+            Some("--source") if source.is_none() => &mut source,
+            _ => return Err(format!("未知或重复的参数：{}", flag.to_string_lossy())),
+        };
+        *slot = Some(args.next().ok_or_else(|| format!("{} 缺少值", flag.to_string_lossy()))?);
+    }
+    let owner_sid = owner_sid
+        .ok_or("缺少 --owner-sid")?
+        .into_string()
+        .map_err(|a| format!("参数不是有效文本：{a:?}"))?;
+    if !install::valid_owner_sid(&owner_sid) {
+        return Err(format!("无效的所有者 SID：{owner_sid}"));
+    }
+    Ok(Command::CheckInstall { source: PathBuf::from(source.ok_or("缺少 --source")?), owner_sid })
+}
+
 fn parse_args(args: Vec<OsString>) -> Result<Command, String> {
     let mut args = args.into_iter();
     let Some(first) = args.next() else {
@@ -96,13 +116,7 @@ fn parse_args(args: Vec<OsString>) -> Result<Command, String> {
         "--uninstall" => Some(Command::Uninstall),
         "--cleanup" => Some(Command::Cleanup),
         "--install" => None,
-        "--check-install" => {
-            let source = match (args.next(), args.next(), args.next()) {
-                (Some(flag), Some(dir), None) if flag == "--source" => PathBuf::from(dir),
-                _ => return Err("--check-install 需要且只能带 --source <目录>".into()),
-            };
-            return Ok(Command::CheckInstall { source });
-        }
+        "--check-install" => return parse_check_install(args),
         _ => return Err(format!("未知参数：{first}")),
     };
     if let Some(cmd) = simple {
@@ -163,9 +177,9 @@ fn main() -> ExitCode {
             }
         };
     }
-    if let Command::CheckInstall { source } = &cmd {
+    if let Command::CheckInstall { source, owner_sid } = &cmd {
         // 只读检查，不需要管理员；任何错误都按“不一致”（退出码 1）处理。
-        return match install::check_install(source) {
+        return match install::check_install(source, owner_sid) {
             Ok(true) => ExitCode::SUCCESS,
             Ok(false) => ExitCode::from(1),
             Err(e) => {
@@ -221,14 +235,17 @@ mod tests {
     #[test]
     fn parses_check_install() {
         assert_eq!(
-            parse(&["--check-install", "--source", r"C:\src"]),
-            Ok(Command::CheckInstall { source: PathBuf::from(r"C:\src") })
+            parse(&["--check-install", "--source", r"C:\src", "--owner-sid", SID]),
+            Ok(Command::CheckInstall { source: PathBuf::from(r"C:\src"), owner_sid: SID.into() })
         );
+        assert!(parse(&["--check-install", "--owner-sid", SID, "--source", "x"]).is_ok());
         for args in [
             &["--check-install"][..],
             &["--check-install", "--source"],
-            &["--check-install", "--source", "x", "y"],
+            &["--check-install", "--source", "x"],
             &["--check-install", "--owner-sid", SID],
+            &["--check-install", "--source", "x", "--owner-sid", "S-1-5-18"],
+            &["--check-install", "--source", "x", "--owner-sid", SID, "y"],
         ] {
             assert!(parse(args).is_err(), "{args:?}");
         }
