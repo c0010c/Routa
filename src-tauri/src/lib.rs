@@ -316,7 +316,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 // Before the core stops: tells the service this is a normal
                 // exit (on_routa_exit applies). Bounded at 1s inside.
-                procroute::client::goodbye().await;
+                let bye = procroute::client::goodbye().await;
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     let rt = Arc::clone(&*rt);
                     if let Some(dt) = app.try_state::<Arc<desktop::Desktop>>() {
@@ -331,26 +331,15 @@ pub fn run() {
                     }
                 }
                 state.store(2, Ordering::SeqCst);
-                // Goodbye has been sent: the service is on on_routa_exit.
-                if let Some(installer) = updater::install::take_install_on_exit() {
-                    let handle = app.clone();
-                    let launched = tauri::async_runtime::spawn_blocking(move || {
-                        updater::install::launch(&handle, &installer)
-                    })
-                    .await;
-                    match launched {
-                        Ok(Ok(())) => {}
-                        // The cache is kept; the next start offers it again.
-                        Ok(Err(e)) => eprintln!("updater: starting installer failed: {e}"),
-                        Err(e) => eprintln!("updater: starting installer failed: {e}"),
-                    }
-                }
+                // Launches only once the service confirmed Goodbye (settling
+                // it directly if `bye` was not confirmed).
+                updater::install::run_pending_install(&app, bye).await;
                 app.exit(0);
             });
         }
         RunEvent::Exit => {
             if state.swap(2, Ordering::SeqCst) == 0 {
-                tauri::async_runtime::block_on(procroute::client::goodbye());
+                let bye = tauri::async_runtime::block_on(procroute::client::goodbye());
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     if let Some(dt) = app.try_state::<Arc<desktop::Desktop>>() {
                         tauri::async_runtime::block_on(dt.shutdown(&rt));
@@ -358,11 +347,7 @@ pub fn run() {
                     tauri::async_runtime::block_on(rt.shutdown());
                 }
                 // Only on this path, which said Goodbye just above.
-                if let Some(installer) = updater::install::take_install_on_exit() {
-                    if let Err(e) = updater::install::launch(app, &installer) {
-                        eprintln!("updater: starting installer failed: {e}");
-                    }
-                }
+                tauri::async_runtime::block_on(updater::install::run_pending_install(app, bye));
             }
         }
         _ => {}

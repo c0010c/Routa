@@ -44,13 +44,13 @@ pub async fn update_check(state: State<'_, Arc<Updater>>) -> Result<UpdateView, 
 }
 
 /// Installs the ready update: re-verifies it, then exits through the normal
-/// exit sequence (Goodbye to the service first); the exit hook in `lib.rs`
-/// starts the installer.
+/// exit sequence; the exit hook in `lib.rs` starts the installer only once
+/// the service has confirmed Goodbye (see `install::run_pending_install`).
 #[tauri::command]
 #[specta::specta]
 pub async fn update_install(app: AppHandle, state: State<'_, Arc<Updater>>) -> Result<(), String> {
     let installer = state.prepare_install().await?;
-    install::request_install_on_exit(installer);
+    install::request_install_on_exit(install::InstallRequest::Cached(installer));
     app.exit(0);
     Ok(())
 }

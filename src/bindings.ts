@@ -410,8 +410,8 @@ async updateCheck() : Promise<Result<UpdateView, null>> {
 },
 /**
  * Installs the ready update: re-verifies it, then exits through the normal
- * exit sequence (Goodbye to the service first); the exit hook in `lib.rs`
- * starts the installer.
+ * exit sequence; the exit hook in `lib.rs` starts the installer only once
+ * the service has confirmed Goodbye (see `install::run_pending_install`).
  */
 async updateInstall() : Promise<Result<null, string>> {
     try {

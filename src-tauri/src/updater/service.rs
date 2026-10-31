@@ -174,6 +174,12 @@ impl Updater {
             .flatten()
     }
 
+    /// Shows an install failure (e.g. at startup) until the next check.
+    pub fn report_failure(&self, message: String) {
+        eprintln!("updater: {message}");
+        self.set(UpdateState::Failed { message });
+    }
+
     /// Checks again that a verified update is ready and returns the cached
     /// installer path for `install::launch` (which verifies once more).
     pub async fn prepare_install(&self) -> Result<PathBuf, String> {
