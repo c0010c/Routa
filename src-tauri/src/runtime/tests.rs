@@ -579,6 +579,19 @@ async fn subscription_due_is_fetched_and_applied() {
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
 
+/// Startup install exits before `start()`: shutdown must not launch the core.
+#[tokio::test(start_paused = true)]
+async fn shutdown_before_start_launches_nothing() {
+    let h = harness(&model_with_listener(false));
+    let model_before = std::fs::read(h.data.join("state.json")).unwrap();
+    h.rt.shutdown().await;
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(h.launcher.count(), 0);
+    assert!(h.launcher.checks.lock().unwrap().is_empty());
+    assert_eq!(h.rt.status().core, CoreState::Stopped);
+    assert_eq!(std::fs::read(h.data.join("state.json")).unwrap(), model_before);
+}
+
 #[tokio::test(start_paused = true)]
 async fn shutdown_persists_totals() {
     let m = model_with_listener(false);

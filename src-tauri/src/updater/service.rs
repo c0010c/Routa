@@ -1,5 +1,5 @@
 //! Update state machine: background check, download into the cache, and
-//! "update-status" events for the UI. Installing lives elsewhere.
+//! "update-status" events for the UI. Installing lives in `install.rs`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -63,14 +63,31 @@ pub struct Updater {
     checking: tokio::sync::Mutex<()>,
 }
 
+fn ready(p: Pending) -> UpdateState {
+    UpdateState::Ready {
+        version: p.version,
+        notes: p.notes,
+    }
+}
+
+/// State after a check. `outcome` is `Ok(Some)` for a verified installer of
+/// the announced version, `Ok(None)` when nothing newer is announced. A valid
+/// cached installer (`cached`, newer than the running version) stays
+/// installable when the check finds nothing (a stale mirror manifest) or
+/// fails; `Failed` only shows when there is nothing to install.
+fn post_check_state(outcome: Result<Option<Pending>, String>, cached: Option<Pending>) -> UpdateState {
+    match (outcome, cached) {
+        (Ok(Some(p)), _) | (_, Some(p)) => ready(p),
+        (Ok(None), None) => UpdateState::Idle,
+        (Err(message), None) => UpdateState::Failed { message },
+    }
+}
+
 /// State at startup: a verified cached installer is offered right away.
 fn initial_state(supported: bool, cached: Option<Pending>) -> UpdateState {
     match (supported, cached) {
         (false, _) => UpdateState::Unsupported,
-        (true, Some(p)) => UpdateState::Ready {
-            version: p.version,
-            notes: p.notes,
-        },
+        (true, Some(p)) => ready(p),
         (true, None) => UpdateState::Idle,
     }
 }
@@ -132,19 +149,51 @@ impl Updater {
             return self.view();
         };
         self.set(UpdateState::Checking);
-        let state = match self.run_check().await {
-            Ok(state) => state,
-            Err(message) => {
-                eprintln!("updater: {message}");
-                UpdateState::Failed { message }
-            }
+        let outcome = self.run_check().await;
+        if let Err(message) = &outcome {
+            eprintln!("updater: {message}");
+        }
+        let cached = if matches!(outcome, Ok(Some(_))) {
+            None
+        } else {
+            self.load_cached().await
         };
-        self.set(state);
+        self.set(post_check_state(outcome, cached));
         self.view()
     }
 
-    /// One check; any existing valid cache is left alone on error.
-    async fn run_check(&self) -> Result<UpdateState, String> {
+    /// The verified cached installer, if any. Entries not newer than the
+    /// running version or failing verification are removed.
+    async fn load_cached(&self) -> Option<Pending> {
+        let pubkey = updater_pubkey(&self.app)?;
+        let dir = self.data_dir.clone();
+        let current = self.current.clone();
+        tokio::task::spawn_blocking(move || Cache::new(&dir).load_verified(&pubkey, &current))
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// Checks again that a verified update is ready and returns the cached
+    /// installer path for `install::launch` (which verifies once more).
+    pub async fn prepare_install(&self) -> Result<PathBuf, String> {
+        if !matches!(self.view().state, UpdateState::Ready { .. }) {
+            return Err("没有可安装的更新".into());
+        }
+        if self.load_cached().await.is_none() {
+            let message = "更新安装包校验失败，已删除，请重新检查更新".to_string();
+            self.set(UpdateState::Failed {
+                message: message.clone(),
+            });
+            return Err(message);
+        }
+        Ok(Cache::new(&self.data_dir).installer_path())
+    }
+
+    /// One check: `Ok(Some)` with a verified installer of the announced
+    /// version in the cache, `Ok(None)` when nothing newer is announced.
+    /// Never removes a valid cached installer.
+    async fn run_check(&self) -> Result<Option<Pending>, String> {
         let pubkey = updater_pubkey(&self.app).ok_or("缺少更新签名公钥")?;
         let checker = self
             .app
@@ -156,20 +205,16 @@ impl Updater {
             .map_err(|e| format!("检查更新失败：{e}"))?;
         self.status.lock().unwrap().last_checked_unix = Some(now_unix());
 
-        let cache = Cache::new(&self.data_dir);
-        // Not newer than the running version: a cached installer is no longer
-        // announced, so drop it to keep the disk in line with `Idle`.
+        // Nothing newer announced. A cached installer is kept: a stale mirror
+        // manifest must not delete a valid newer one (`load_cached` drops
+        // entries that are not newer than the running version).
         let Some(update) = update else {
-            cache.clear();
-            return Ok(UpdateState::Idle);
+            return Ok(None);
         };
 
-        if let Some(p) = cache.load_verified(&pubkey, &self.current) {
+        if let Some(p) = self.load_cached().await {
             if p.version == update.version {
-                return Ok(UpdateState::Ready {
-                    version: p.version,
-                    notes: p.notes,
-                });
+                return Ok(Some(p));
             }
         }
 
@@ -216,10 +261,7 @@ impl Updater {
             .await
             .map_err(|e| format!("保存更新安装包失败：{e}"))?
             .map_err(|e| format!("保存更新安装包失败：{e}"))?;
-        Ok(UpdateState::Ready {
-            version: pending.version,
-            notes: pending.notes,
-        })
+        Ok(Some(pending))
     }
 
     pub fn spawn_background(self: Arc<Self>) {
@@ -254,6 +296,54 @@ mod tests {
             initial_state(true, Some(pending)),
             UpdateState::Ready {
                 version: "0.4.0".into(),
+                notes: None
+            }
+        );
+    }
+
+    fn pending(version: &str) -> Pending {
+        Pending {
+            version: version.into(),
+            signature: "s".into(),
+            notes: None,
+        }
+    }
+
+    #[test]
+    fn nothing_announced_keeps_a_valid_newer_cache() {
+        assert_eq!(
+            post_check_state(Ok(None), Some(pending("0.4.0"))),
+            UpdateState::Ready {
+                version: "0.4.0".into(),
+                notes: None
+            }
+        );
+        assert_eq!(post_check_state(Ok(None), None), UpdateState::Idle);
+    }
+
+    #[test]
+    fn failed_check_keeps_cached_update_installable() {
+        assert_eq!(
+            post_check_state(Err("下载更新失败".into()), Some(pending("0.4.0"))),
+            UpdateState::Ready {
+                version: "0.4.0".into(),
+                notes: None
+            }
+        );
+        assert_eq!(
+            post_check_state(Err("下载更新失败".into()), None),
+            UpdateState::Failed {
+                message: "下载更新失败".into()
+            }
+        );
+    }
+
+    #[test]
+    fn downloaded_update_wins_over_older_cache() {
+        assert_eq!(
+            post_check_state(Ok(Some(pending("0.5.0"))), Some(pending("0.4.0"))),
+            UpdateState::Ready {
+                version: "0.5.0".into(),
                 notes: None
             }
         );

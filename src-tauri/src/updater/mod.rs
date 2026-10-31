@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod download;
+pub mod install;
 pub mod service;
 
 use std::sync::Arc;
@@ -40,6 +41,18 @@ pub fn update_status(state: State<'_, Arc<Updater>>) -> UpdateView {
 #[specta::specta]
 pub async fn update_check(state: State<'_, Arc<Updater>>) -> Result<UpdateView, ()> {
     Ok(state.check_now().await)
+}
+
+/// Installs the ready update: re-verifies it, then exits through the normal
+/// exit sequence (Goodbye to the service first); the exit hook in `lib.rs`
+/// starts the installer.
+#[tauri::command]
+#[specta::specta]
+pub async fn update_install(app: AppHandle, state: State<'_, Arc<Updater>>) -> Result<(), String> {
+    let installer = state.prepare_install().await?;
+    install::request_install_on_exit(installer);
+    app.exit(0);
+    Ok(())
 }
 
 #[cfg(test)]

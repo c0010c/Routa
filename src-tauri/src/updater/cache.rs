@@ -30,6 +30,11 @@ impl Cache {
         Cache { dir: data_dir.join("update") }
     }
 
+    /// The cache that `installer` (an `installer_path()`) belongs to.
+    pub fn containing(installer: &Path) -> Option<Cache> {
+        installer.parent().map(|dir| Cache { dir: dir.to_path_buf() })
+    }
+
     pub fn installer_path(&self) -> PathBuf {
         self.dir.join(EXE)
     }
@@ -64,15 +69,30 @@ impl Cache {
     }
 
     fn try_load(&self, pubkey_b64: &str, current: &semver::Version) -> Option<Pending> {
-        let meta = fs::read(self.dir.join(META)).ok()?;
-        let pending: Pending = serde_json::from_slice(&meta).ok()?;
-        let version = semver::Version::parse(&pending.version).ok()?;
+        self.read_verified(pubkey_b64, current).ok().map(|(p, _)| p)
+    }
+
+    /// Reads the installer once and verifies exactly those bytes (signature,
+    /// version, newer than `current`). Never clears the cache. Callers that
+    /// run the installer must use the returned bytes, not re-read the file:
+    /// the directory is user-writable.
+    pub fn read_verified(
+        &self,
+        pubkey_b64: &str,
+        current: &semver::Version,
+    ) -> Result<(Pending, Vec<u8>), String> {
+        let meta = fs::read(self.dir.join(META)).map_err(|e| format!("读取更新信息失败：{e}"))?;
+        let pending: Pending =
+            serde_json::from_slice(&meta).map_err(|e| format!("更新信息损坏：{e}"))?;
+        let version = semver::Version::parse(&pending.version)
+            .map_err(|e| format!("更新版本号无效：{e}"))?;
         if version <= *current {
-            return None;
+            return Err(format!("缓存版本 {version} 不比当前版本 {current} 新"));
         }
-        let bytes = fs::read(self.installer_path()).ok()?;
-        verify(&bytes, &pending.signature, pubkey_b64, &pending.version).ok()?;
-        Some(pending)
+        let bytes =
+            fs::read(self.installer_path()).map_err(|e| format!("读取更新安装包失败：{e}"))?;
+        verify(&bytes, &pending.signature, pubkey_b64, &pending.version)?;
+        Ok((pending, bytes))
     }
 }
 
@@ -110,8 +130,10 @@ pub fn verify(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
+
+    pub const BYTES: &[u8] = b"fake installer bytes";
 
     fn keypair_and_sign(bytes: &[u8], file: &str) -> (String, String) {
         let kp = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
@@ -128,9 +150,8 @@ mod tests {
         (b64(kp.pk.to_box().unwrap().into_string()), b64(sig.into_string()))
     }
 
-    const BYTES: &[u8] = b"fake installer bytes";
-
-    fn setup(file: &str, version: &str) -> (tempfile::TempDir, Cache, String) {
+    /// A cache holding `BYTES` signed for `file`, recorded as `version`.
+    pub fn cache_with(file: &str, version: &str) -> (tempfile::TempDir, Cache, String) {
         let dir = tempfile::tempdir().unwrap();
         let (pk, sig) = keypair_and_sign(BYTES, file);
         let cache = Cache::new(dir.path());
@@ -138,6 +159,12 @@ mod tests {
         cache.write(BYTES, &pending).unwrap();
         (dir, cache, pk)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::cache_with as setup;
+    use super::*;
 
     fn v(s: &str) -> semver::Version {
         semver::Version::parse(s).unwrap()

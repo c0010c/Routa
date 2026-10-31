@@ -407,6 +407,19 @@ async updateCheck() : Promise<Result<UpdateView, null>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Installs the ready update: re-verifies it, then exits through the normal
+ * exit sequence (Goodbye to the service first); the exit hook in `lib.rs`
+ * starts the installer.
+ */
+async updateInstall() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_install") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 

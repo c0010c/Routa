@@ -99,6 +99,26 @@ fn build_runtime(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<Arc<Runtim
     Ok(rt)
 }
 
+/// Passed by the OS autostart entry so a boot-time start never blocks on the
+/// "install update?" dialog.
+const AUTOSTART_ARG: &str = "--autostart";
+
+/// Entries registered by older versions lack `--autostart`; enabling again
+/// rewrites them with it. Only for NSIS installs, so a dev build never points
+/// the user's autostart entry at itself.
+fn reregister_autostart(app: &tauri::AppHandle) {
+    use tauri_plugin_autostart::ManagerExt;
+    if !updater::is_nsis_install() {
+        return;
+    }
+    let autostart = app.autolaunch();
+    if autostart.is_enabled().unwrap_or(false) {
+        if let Err(e) = autostart.enable() {
+            eprintln!("autostart: re-register failed: {e}");
+        }
+    }
+}
+
 /// Commands and extra types exported to `src/bindings.ts`.
 fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
@@ -154,6 +174,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             desktop::read_core_log,
             updater::update_status,
             updater::update_check,
+            updater::update_install,
         ])
         // Payload of the "procroute-flows" event (not returned by any command).
         .typ::<routa_procsvc_proto::Flow>()
@@ -194,7 +215,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![AUTOSTART_ARG]),
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(builder.invoke_handler())
@@ -208,8 +229,17 @@ pub fn run() {
             app.manage(rt.clone());
             app.manage(updater.clone());
             tray::setup(app.handle())?;
+            reregister_autostart(app.handle());
+            let autostarted = std::env::args().any(|a| a == AUTOSTART_ARG);
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                // First, before anything touches the core or the service: a
+                // ready update may be installed now, in which case Routa exits
+                // without starting the core or the procroute client (whose
+                // Attach would otherwise be displaced by settle_graceful).
+                if updater::install::startup_gate(&handle, &updater, autostarted).await {
+                    return;
+                }
                 if let Err(e) = desktop.initialize(&rt).await {
                     eprintln!("default proxy initialization: {e}");
                 }
@@ -301,6 +331,20 @@ pub fn run() {
                     }
                 }
                 state.store(2, Ordering::SeqCst);
+                // Goodbye has been sent: the service is on on_routa_exit.
+                if let Some(installer) = updater::install::take_install_on_exit() {
+                    let handle = app.clone();
+                    let launched = tauri::async_runtime::spawn_blocking(move || {
+                        updater::install::launch(&handle, &installer)
+                    })
+                    .await;
+                    match launched {
+                        Ok(Ok(())) => {}
+                        // The cache is kept; the next start offers it again.
+                        Ok(Err(e)) => eprintln!("updater: starting installer failed: {e}"),
+                        Err(e) => eprintln!("updater: starting installer failed: {e}"),
+                    }
+                }
                 app.exit(0);
             });
         }
@@ -312,6 +356,12 @@ pub fn run() {
                         tauri::async_runtime::block_on(dt.shutdown(&rt));
                     }
                     tauri::async_runtime::block_on(rt.shutdown());
+                }
+                // Only on this path, which said Goodbye just above.
+                if let Some(installer) = updater::install::take_install_on_exit() {
+                    if let Err(e) = updater::install::launch(app, &installer) {
+                        eprintln!("updater: starting installer failed: {e}");
+                    }
                 }
             }
         }
