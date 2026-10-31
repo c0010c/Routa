@@ -152,6 +152,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             desktop::change_process_listener,
             desktop::get_connection_details,
             desktop::read_core_log,
+            updater::update_status,
+            updater::update_check,
         ])
         // Payload of the "procroute-flows" event (not returned by any command).
         .typ::<routa_procsvc_proto::Flow>()
@@ -194,14 +196,17 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             create_main_window(app)?;
             let data_dir = app.path().app_data_dir()?;
             let desktop = Arc::new(desktop::Desktop::open(data_dir.clone()).map_err(std::io::Error::other)?);
+            let updater = Arc::new(updater::Updater::new(app.handle().clone(), data_dir.clone()));
             let rt = build_runtime(app.handle(), data_dir)?;
             app.manage(desktop.clone());
             app.manage(rt.clone());
+            app.manage(updater.clone());
             tray::setup(app.handle())?;
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -216,6 +221,9 @@ pub fn run() {
                 // (no reason), which would push Block to every rule. Until
                 // then the service keeps its own "Routa absent" fallback.
                 procroute::client::spawn(rt.clone(), handle);
+                if updater::is_nsis_install() {
+                    updater.spawn_background();
+                }
                 desktop.clone().spawn_monitor(rt.clone());
                 let preferences = desktop.state(&rt).preferences;
                 if preferences.auto_connect {
