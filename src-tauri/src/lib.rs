@@ -14,6 +14,7 @@ pub mod system_proxy;
 pub mod tailnet;
 pub mod tailscale;
 pub mod tray;
+pub mod updater;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};

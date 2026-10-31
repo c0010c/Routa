@@ -38,11 +38,14 @@ tokio-tungstenite = "0.26"
 routa-procsvc-proto = { path = "procsvc-proto", features = ["specta"] }
 anyhow = "1"
 getrandom = "0.3"
+minisign-verify = "0.2"
+semver = "1"
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 wiremock = "0.6"
+minisign = "0.7"
 
 [target."cfg(windows)".dependencies]
 ipconfig = "0.3.4"
