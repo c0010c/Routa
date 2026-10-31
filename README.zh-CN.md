@@ -64,6 +64,22 @@
 - 已有 Routa 配置在未保存界面偏好时默认进入完整版。当前源码会将旧版共享出口迁移为每个代理独立的配置，并在迁移前将原配置备份为 `state.before-v43.json`。
 - v0.1.0 使用旧名称 `mihomo-mapper`，数据位于 `%APPDATA%\dev.mihomo-mapper\`；Routa 不会自动导入该目录。
 
+## 自动更新
+
+- 只有 NSIS 安装版会检查更新；开发版以及旧的 MSI 或免安装 exe 不会。
+- 启动 10 秒后检查一次，之后每 24 小时检查一次，没有关闭开关；也可在“设置”中手动“检查更新”。
+- 新版本在后台下载，下载完成后应用内提示“现在安装”或“稍后”。选择“稍后”后，下次手动启动时会在内核启动前弹出原生对话框再次询问；Windows 开机自启（`--autostart`）时不弹对话框，只显示应用内提示。
+- 安装时 Routa 先正常退出并告知服务这是正常退出，因此整个升级期间进程分流按“Routa 退出时”的策略处理；随后 NSIS 安装程序以被动模式运行并重新启动 Routa。
+- 进程分流组件只有在文件不同、所有者不同或未运行时才会重新注册（弹出 UAC）。
+- 下载源依次为：`update.hwdns.net` 镜像、`gh-proxy.org` 镜像、GitHub 直连；每个安装包都会校验签名。
+- 更新请求优先使用 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量，其次使用 Windows 系统代理；若 Routa 已设置系统代理，更新流量会经过 Routa 自己的端口。
+- 已停止提供便携版和 MSI。旧便携版用户可手动将 `data\` 目录内容复制到 `%APPDATA%\dev.routa\`。
+
+### 发布（维护者）
+
+- `release.yml` 会为安装包签名，需要仓库 Secrets `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；对应公钥为 `src-tauri/tauri.conf.json` 中的 `plugins.updater.pubkey`。
+- `release.yml` 创建的是草稿 Release；Release **正式发布**后，`updater.yml` 才会把 `latest.json` 和 `latest-proxy.json` 发布到 `updater` 预发布中，草稿不会被处理。
+
 ## 进程分流组件
 
 进程分流由 Windows 服务 `RoutaProcSvc` 执行，基于 [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) 与 [WinDivert](https://github.com/basil00/WinDivert)，组件文件安装在 `%ProgramFiles%\Routa\ProcessRouting`。
@@ -120,7 +136,7 @@ pnpm tauri build      # NSIS 安装包位于 src-tauri/target/release/bundle
 pnpm typecheck
 pnpm test
 pnpm build
-node --test scripts/build-artifacts.test.mjs
+node --test scripts/build-artifacts.test.mjs scripts/updater-manifest.test.mjs
 cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
 ```
 

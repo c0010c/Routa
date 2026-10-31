@@ -64,6 +64,22 @@ Installed builds store data in `%APPDATA%\dev.routa\`:
 - Existing Routa configurations open in Full mode when no interface preference has been saved. The current source migrates legacy shared outbounds into per-proxy configurations and saves the original configuration as `state.before-v43.json` before migration.
 - Version 0.1.0 used the name `mihomo-mapper` and `%APPDATA%\dev.mihomo-mapper\`. That directory is not imported automatically into Routa.
 
+## Automatic updates
+
+- Only NSIS-installed builds check for updates. Dev builds and old MSI or unpacked executables do not.
+- The first check runs 10 seconds after start, then every 24 hours; there is no switch to turn it off. **Settings → Check for updates** (设置 → 检查更新) checks manually.
+- New versions download in the background. When ready, an in-app notice offers 现在安装 (Install now) or 稍后 (Later). After 稍后, Routa asks again at the next manual start with a native dialog before the core starts. On Windows autostart (`--autostart`) there is no dialog, only the in-app notice.
+- Installing: Routa first exits normally and tells the service so, hence process routing follows the "Routa 退出时" (when Routa exits) policy for the whole upgrade. The NSIS installer then runs in passive mode and relaunches Routa.
+- The process-routing component is re-registered (UAC prompt) only when its files differ, its owner differs, or it is not running.
+- Sources are tried in order: `update.hwdns.net` mirror, `gh-proxy.org` mirror, GitHub direct. Every installer is signature-verified.
+- Update requests use the `HTTP_PROXY`/`HTTPS_PROXY` environment variables first, then the Windows system proxy. If Routa has set the system proxy, update traffic goes through Routa's own port.
+- Portable and MSI packages are discontinued. Old portable users can copy the contents of their `data\` folder into `%APPDATA%\dev.routa\` manually.
+
+### Releasing (maintainers)
+
+- `release.yml` signs the installer and needs the repository Secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the matching public key is `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
+- `release.yml` creates a draft Release. `updater.yml` publishes `latest.json` and `latest-proxy.json` to the `updater` pre-release after a Release is **published**; drafts are not picked up.
+
 ## Process-routing component
 
 Process routing runs as the `RoutaProcSvc` Windows service, built on [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) and [WinDivert](https://github.com/basil00/WinDivert). Its files are installed in `%ProgramFiles%\Routa\ProcessRouting`.
@@ -120,7 +136,7 @@ Before a direct `cargo build --release --features custom-protocol`, run `node sc
 pnpm typecheck
 pnpm test
 pnpm build
-node --test scripts/build-artifacts.test.mjs
+node --test scripts/build-artifacts.test.mjs scripts/updater-manifest.test.mjs
 cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
 ```
 

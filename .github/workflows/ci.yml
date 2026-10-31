@@ -77,7 +77,7 @@ jobs:
       - name: Build the process-routing service
         run: pnpm build-procsvc --locked
       - name: Build artifact regression tests
-        run: node --test scripts/build-artifacts.test.mjs
+        run: node --test scripts/build-artifacts.test.mjs scripts/updater-manifest.test.mjs
       - name: Rust tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
       - name: Real mihomo integration test
