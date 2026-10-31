@@ -73,16 +73,3 @@ export function verifyFrontend() {
   assertMatch(receipt.filesSha256, frontendFiles(), "前端产物与构建记录不一致，请重新构建前端");
   return receipt;
 }
-
-export function verifyRelease(release) {
-  const service = verifyService();
-  const frontend = verifyFrontend();
-  assertMatch(sha256(join(release, "routa-procsvc.exe")), service.exeSha256, "release 目录中的分流服务已过期，请重新构建主程序");
-  const gui = readBuildInfo(join(release, "routa.exe"));
-  assertMatch(gui.serviceSha256, service.exeSha256, "主程序与分流服务不是同一批构建，请重新构建主程序");
-  assertMatch(gui.frontendSha256, frontend.filesSha256, "主程序未包含最新前端，请重新构建主程序");
-  assertMatch(gui.protocolVersion, protocolVersion(), "主程序的分流协议已过期，请重新构建主程序");
-  assertMatch(gui.sourceSha256, guiSources(), "主程序源码已变化，请重新构建主程序");
-  assertMatch(gui.customProtocol, true, "主程序未启用 custom-protocol，不能用于便携包");
-  return { service, frontend, gui };
-}

@@ -23,7 +23,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "externalBin": ["binaries/mihomo", "binaries/routa-procsvc"],
     "resources": { "binaries/procsvc/*": "procsvc/" },
     "icon": ["icons/icon.ico"],

@@ -26,8 +26,6 @@ Download a Windows x64 build from [Releases](https://github.com/c0010c/Routa/rel
 | Package | Usage |
 | --- | --- |
 | `routa_<version>_x64-setup.exe` | NSIS installer |
-| `routa_<version>_x64_en-US.msi` | MSI installer |
-| `routa_<version>_x64_portable.zip` | Extract and run `routa.exe` |
 
 Verify downloads against `SHA256SUMS.txt` on the corresponding release. Builds bundle mihomo; the source pins its version in [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION). The current source uses the bundled core rather than a custom core path.
 
@@ -63,11 +61,6 @@ Installed builds store data in `%APPDATA%\dev.routa\`:
 | `ui-preferences.json` | Interface mode, default proxy, and connection preferences |
 | `mihomo\` | Core working directory and `mihomo.log` |
 
-When a `portable` file sits next to `routa.exe`, all application data, including the WebView cache, is stored in the adjacent `data\` directory. Remove the marker and restart to use `%APPDATA%\dev.routa\` instead. Switching storage modes does not move data automatically.
-
-- Keep portable builds in a writable directory, outside `Program Files`.
-- After moving a portable folder, turn Windows startup off and on again to update its recorded executable path.
-- Installed and portable builds cannot run simultaneously.
 - Existing Routa configurations open in Full mode when no interface preference has been saved. The current source migrates legacy shared outbounds into per-proxy configurations and saves the original configuration as `state.before-v43.json` before migration.
 - Version 0.1.0 used the name `mihomo-mapper` and `%APPDATA%\dev.mihomo-mapper\`. That directory is not imported automatically into Routa.
 
@@ -75,9 +68,9 @@ When a `portable` file sits next to `routa.exe`, all application data, including
 
 Process routing runs as the `RoutaProcSvc` Windows service, built on [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) and [WinDivert](https://github.com/basil00/WinDivert). Its files are installed in `%ProgramFiles%\Routa\ProcessRouting`.
 
-The NSIS installer requests UAC at the end of setup to register the service. Declining does not fail installation; enable the component later in the app. MSI and portable builds request UAC when enabling the component from the app.
+The NSIS installer requests UAC at the end of setup to register the service. Declining does not fail installation; enable the component later in the app.
 
-**Before uninstalling an MSI or removing a portable build, uninstall the component from the app.** NSIS uninstallation requests UAC to remove the service and filter rules, with a retry prompt if removal fails. If the component remains installed, programs configured to block may stay offline. To remove the service and rules manually, run this in an administrator PowerShell:
+**Before uninstalling Routa, uninstall the component from the app.** NSIS uninstallation requests UAC to remove the service and filter rules, with a retry prompt if removal fails. If the component remains installed, programs configured to block may stay offline. To remove the service and rules manually, run this in an administrator PowerShell:
 
 ```powershell
 & "$env:ProgramFiles\Routa\ProcessRouting\routa-procsvc.exe" --uninstall
@@ -114,13 +107,12 @@ Run or package the application:
 
 ```powershell
 pnpm tauri dev        # Development mode
-pnpm tauri build      # NSIS/MSI installers in src-tauri/target/release/bundle
-pnpm pack:portable    # Portable folder and ZIP in bundle/portable-<timestamp>
+pnpm tauri build      # NSIS installer in src-tauri/target/release/bundle
 ```
 
-`pnpm tauri build` rebuilds the service and frontend automatically. Portable packaging builds the production app and includes `routa.exe`, `mihomo.exe`, `routa-procsvc.exe`, `procsvc\`, the `portable` marker, `LICENSE`, and `build-info.json`.
+`pnpm tauri build` rebuilds the service and frontend automatically.
 
-`build-info.json` records GUI, service, frontend, and file SHA-256 fingerprints. `--skip-build` still verifies source, protocol, and artifact consistency. Use `--out-dir <directory>` to choose the portable output location; existing app folders or ZIPs are rejected to protect any `data` directory. Before a direct `cargo build --release --features custom-protocol`, run `node scripts/build-procsvc.mjs` and `node scripts/build-frontend.mjs`.
+Before a direct `cargo build --release --features custom-protocol`, run `node scripts/build-procsvc.mjs` and `node scripts/build-frontend.mjs`.
 
 ### Checks
 
