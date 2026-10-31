@@ -144,6 +144,25 @@ pub async fn connect() -> Result<Box<dyn SvcConn>, ComponentState> {
     handshake(Box::new(open_pipe()?)).await
 }
 
+/// 安装器启动前调用：让服务把本次 Routa 视为“正常退出”（Attach + Goodbye + 断开），
+/// 从而按 on_routa_exit 回落，即使上次 Routa 是崩溃退出。任何失败只记日志。
+pub async fn settle_graceful(pid: u32) {
+    match connect().await {
+        Ok(conn) => settle_on(conn, pid).await,
+        Err(state) => eprintln!("安装前通知分流服务失败：{state:?}"),
+    }
+}
+
+async fn settle_on(mut conn: Box<dyn SvcConn>, pid: u32) {
+    match conn.call(Request::Attach { routa_pid: pid }).await {
+        Ok(Response::Ok) => {}
+        other => return eprintln!("安装前 Attach 失败：{other:?}"),
+    }
+    if let Err(e) = conn.call(Request::Goodbye).await {
+        eprintln!("安装前 Goodbye 失败：{e}");
+    }
+}
+
 /// 发送 Hello；服务拒绝（版本不一致）时为 `NeedsUpdate`。
 async fn handshake(mut conn: Box<dyn SvcConn>) -> Result<Box<dyn SvcConn>, ComponentState> {
     match conn.call(Request::Hello { version: PROTO_VERSION }).await {
@@ -875,6 +894,21 @@ mod tests {
 
     fn applies(sent: &Mutex<Vec<Request>>) -> usize {
         sent.lock().unwrap().iter().filter(|r| matches!(r, Request::Apply(_))).count()
+    }
+
+    #[tokio::test]
+    async fn settle_attaches_then_says_goodbye() {
+        let (conn, sent) = FakeConn::new(vec![Ok(Response::Ok), Ok(Response::Ok)]);
+        settle_on(Box::new(conn), 42).await;
+        assert_eq!(*sent.lock().unwrap(), vec![Request::Attach { routa_pid: 42 }, Request::Goodbye]);
+    }
+
+    #[tokio::test]
+    async fn settle_skips_goodbye_when_attach_fails() {
+        let (mut conn, sent) = FakeConn::new(vec![]);
+        conn.attach_error = Some("x".into());
+        settle_on(Box::new(conn), 42).await;
+        assert_eq!(*sent.lock().unwrap(), vec![Request::Attach { routa_pid: 42 }]);
     }
 
     #[tokio::test]

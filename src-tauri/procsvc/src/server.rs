@@ -1149,6 +1149,32 @@ pub(crate) mod tests {
         assert_eq!(action(&world, "a"), Some(PbAction::Proxy));
     }
 
+    #[test]
+    fn attach_then_goodbye_session_falls_back_gracefully() {
+        let dir = tempfile::tempdir().unwrap();
+        persist::save(
+            &dir.path().join(persist::STATE_FILE),
+            &state(ExitPolicy::Direct),
+        )
+        .unwrap();
+        // 上次非正常停止：按 Crashed 回落，规则 a 为 Block
+        let (mut srv, world) = boot(dir.path(), &[], false);
+        assert_eq!(action(&world, "a"), Some(PbAction::Block));
+
+        let mut s = hello(&mut srv);
+        assert_eq!(
+            srv.handle(Request::Attach { routa_pid: std::process::id() }, &mut s),
+            Response::Ok
+        );
+        assert_eq!(srv.handle(Request::Goodbye, &mut s), Response::Ok);
+        srv.end_session(&s);
+        assert_eq!(action(&world, "a"), Some(PbAction::Direct));
+
+        let mut s2 = hello(&mut srv);
+        let reason = status(&mut srv, &mut s2).last_interruption.map(|i| i.reason);
+        assert_ne!(reason.as_deref(), Some(ROUTA_CRASHED));
+    }
+
     fn spawn_routa() -> std::process::Child {
         std::process::Command::new("ping")
             .args(["-n", "60", "127.0.0.1"])
