@@ -32,6 +32,7 @@ const USAGE: &str = "用法：
   routa-procsvc.exe --install --owner-sid <SID> --source <目录>
   routa-procsvc.exe --uninstall
   routa-procsvc.exe --cleanup
+  routa-procsvc.exe --check-install --source <目录>   （只读，不需要管理员；已是最新退出码 0，否则 1）
 以上命令都可另加 --error-file <路径>：失败时把原因写进该文件（必须是尚不存在的新文件）。
 不带参数时只能由服务管理器启动。";
 
@@ -41,6 +42,7 @@ enum Command {
     Install { owner_sid: String, source: PathBuf },
     Uninstall,
     Cleanup,
+    CheckInstall { source: PathBuf },
 }
 
 /// 取出 `--error-file <路径>`（可在任意位置，最多一次），其余参数原样返回。
@@ -94,6 +96,13 @@ fn parse_args(args: Vec<OsString>) -> Result<Command, String> {
         "--uninstall" => Some(Command::Uninstall),
         "--cleanup" => Some(Command::Cleanup),
         "--install" => None,
+        "--check-install" => {
+            let source = match (args.next(), args.next(), args.next()) {
+                (Some(flag), Some(dir), None) if flag == "--source" => PathBuf::from(dir),
+                _ => return Err("--check-install 需要且只能带 --source <目录>".into()),
+            };
+            return Ok(Command::CheckInstall { source });
+        }
         _ => return Err(format!("未知参数：{first}")),
     };
     if let Some(cmd) = simple {
@@ -154,6 +163,17 @@ fn main() -> ExitCode {
             }
         };
     }
+    if let Command::CheckInstall { source } = &cmd {
+        // 只读检查，不需要管理员；任何错误都按“不一致”（退出码 1）处理。
+        return match install::check_install(source) {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::from(1),
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::from(1)
+            }
+        };
+    }
     if !install::is_elevated() {
         return fail(2, "需要管理员权限");
     }
@@ -161,7 +181,7 @@ fn main() -> ExitCode {
         Command::Install { owner_sid, source } => install::install(&owner_sid, &source),
         Command::Uninstall => install::uninstall(),
         Command::Cleanup => install::cleanup(),
-        Command::Service => unreachable!(),
+        Command::Service | Command::CheckInstall { .. } => unreachable!(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -196,6 +216,22 @@ mod tests {
             parse(&["--install", "--source", r"C:\src", "--owner-sid", SID]),
             want
         );
+    }
+
+    #[test]
+    fn parses_check_install() {
+        assert_eq!(
+            parse(&["--check-install", "--source", r"C:\src"]),
+            Ok(Command::CheckInstall { source: PathBuf::from(r"C:\src") })
+        );
+        for args in [
+            &["--check-install"][..],
+            &["--check-install", "--source"],
+            &["--check-install", "--source", "x", "y"],
+            &["--check-install", "--owner-sid", SID],
+        ] {
+            assert!(parse(args).is_err(), "{args:?}");
+        }
     }
 
     fn split(args: &[&str]) -> (Vec<OsString>, Result<Option<PathBuf>, String>) {

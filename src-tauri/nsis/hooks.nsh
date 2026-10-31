@@ -104,14 +104,25 @@
   Push $R7
   Push $R8
   Push $R9
-  !insertmacro ROUTA_CURRENT_USER_SID
-  ${If} $R8 == ""
-    DetailPrint "进程分流组件：无法取得当前用户的 SID，跳过注册服务"
+  Push $0
+  ; 服务已注册且已安装的文件与本次安装包里的完全一致：不提权、不弹 UAC，直接跳过。
+  ; --check-install 只读且不需要管理员；任何非 0 退出码（包括无法运行）都走原有的提权安装。
+  nsExec::Exec '"$INSTDIR\${ROUTA_PROCSVC_EXE}" --check-install --source "$INSTDIR\procsvc"'
+  Pop $0
+  ; nsExec 启动失败时返回 "error"，用数字比较会被当成 0，所以按字符串比较
+  ${If} $0 == "0"
+    DetailPrint "进程分流组件：已是最新，跳过注册"
   ${Else}
-    DetailPrint "进程分流组件：注册服务（需要管理员权限）"
-    StrCpy $R9 '--install --owner-sid $R8 --source "$INSTDIR\procsvc"'
-    !insertmacro ROUTA_PROCSVC_RUN_ELEVATED
+    !insertmacro ROUTA_CURRENT_USER_SID
+    ${If} $R8 == ""
+      DetailPrint "进程分流组件：无法取得当前用户的 SID，跳过注册服务"
+    ${Else}
+      DetailPrint "进程分流组件：注册服务（需要管理员权限）"
+      StrCpy $R9 '--install --owner-sid $R8 --source "$INSTDIR\procsvc"'
+      !insertmacro ROUTA_PROCSVC_RUN_ELEVATED
+    ${EndIf}
   ${EndIf}
+  Pop $0
   Pop $R9
   Pop $R8
   Pop $R7
