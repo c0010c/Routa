@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect } from "react";
-import type { Flow, ProcRouteStatus, RuntimeStatus, TrafficTick } from "../bindings";
+import type { Flow, ProcRouteStatus, RuntimeStatus, TrafficTick, UpdateView } from "../bindings";
 import { setFlows } from "./procroute";
 import { setTraffic } from "./trafficStore";
 
@@ -26,6 +26,7 @@ export function useRuntimeEvents(): void {
     reg(listen<TrafficTick>("traffic", (e) => setTraffic(e.payload)));
     reg(listen<TrafficTick>("traffic-snapshot", (e) => setTraffic(e.payload, false)));
     reg(listen<ProcRouteStatus>("procroute-status", (e) => qc.setQueryData(["procroute"], e.payload)));
+    reg(listen<UpdateView>("update-status", (e) => qc.setQueryData(["update"], e.payload)));
     reg(listen<Flow[]>("procroute-flows", (e) => setFlows(e.payload)));
 
     return () => {

@@ -8,6 +8,7 @@ import {
 } from "@mui/material";
 import { Link } from "react-router-dom";
 import { BackHeading } from "../components/BackHeading";
+import { UpdatePanel } from "../components/UpdatePanel";
 import { UiPreferencesPanel } from "../components/UiPreferencesPanel";
 import { useModel } from "../api/client";
 import { settingsSaveMessage, useSettingsSave } from "../api/settings";
@@ -21,6 +22,7 @@ export function SimpleSettings() {
     <Stack spacing={3} sx={{ maxWidth: 720, mx: "auto" }}>
       <BackHeading title="设置" />
       <UiPreferencesPanel />
+      <UpdatePanel />
       <Paper>
         <Stack direction="row" sx={{ p: 2, alignItems: "center" }}>
           <Box sx={{ flex: 1 }}>
