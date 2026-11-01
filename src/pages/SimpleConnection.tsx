@@ -26,7 +26,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import RouteOutlined from "@mui/icons-material/RouteOutlined";
+import { BrandMark } from "../components/BrandMark";
 import LanguageOutlined from "@mui/icons-material/LanguageOutlined";
 import ChevronRightOutlined from "@mui/icons-material/ChevronRightOutlined";
 import InfoOutlined from "@mui/icons-material/InfoOutlined";
@@ -187,17 +187,7 @@ export function SimpleConnection() {
       sx={{ maxWidth: mode === "Apps" ? 900 : 520, mx: "auto" }}
     >
       <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-        <Box
-          sx={{
-            bgcolor: "primary.main",
-            color: "primary.contrastText",
-            p: 0.75,
-            display: "flex",
-            borderRadius: 1,
-          }}
-        >
-          <RouteOutlined />
-        </Box>
+        <BrandMark size={36} />
         <Typography sx={{ flex: 1, fontWeight: 600, fontSize: 20 }}>
           Routa
         </Typography>

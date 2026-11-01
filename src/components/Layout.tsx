@@ -3,7 +3,6 @@ import SpaceDashboardOutlined from "@mui/icons-material/SpaceDashboardOutlined";
 import DnsOutlined from "@mui/icons-material/DnsOutlined";
 import SwapHorizOutlined from "@mui/icons-material/SwapHorizOutlined";
 import LanguageOutlined from "@mui/icons-material/LanguageOutlined";
-import RouteOutlined from "@mui/icons-material/RouteOutlined";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import {
   Box,
@@ -17,6 +16,7 @@ import {
 } from "@mui/material";
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { BrandMark } from "./BrandMark";
 import { UpdateNotice } from "./UpdateNotice";
 import pkg from "../../package.json";
 
@@ -65,20 +65,7 @@ export function Layout({ children }: { children: ReactNode }) {
           spacing={1.25}
           sx={{ alignItems: "center", px: 2.5, pt: 2, pb: 1.5 }}
         >
-          <Box
-            sx={{
-              width: 24,
-              height: 24,
-              borderRadius: 1,
-              bgcolor: "primary.main",
-              color: "primary.contrastText",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <RouteOutlined sx={{ fontSize: 16 }} />
-          </Box>
+          <BrandMark size={24} />
           <Typography sx={{ fontWeight: 600 }}>Routa</Typography>
         </Stack>
         <List

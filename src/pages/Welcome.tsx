@@ -7,7 +7,7 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import RouteOutlined from "@mui/icons-material/RouteOutlined";
+import { BrandMark } from "../components/BrandMark";
 import { useState } from "react";
 import { useInterface } from "../components/InterfaceProvider";
 import { errorMessage } from "../api/client";
@@ -23,17 +23,7 @@ export function Welcome() {
       sx={{ maxWidth: 520, mx: "auto", p: 3.5, minHeight: "100vh" }}
     >
       <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-        <Box
-          sx={{
-            p: 0.75,
-            borderRadius: 1,
-            bgcolor: "primary.main",
-            color: "primary.contrastText",
-            display: "flex",
-          }}
-        >
-          <RouteOutlined />
-        </Box>
+        <BrandMark size={36} />
         <Typography sx={{ fontSize: 20, fontWeight: 600 }}>Routa</Typography>
       </Stack>
       <Box sx={{ pt: 2 }}>

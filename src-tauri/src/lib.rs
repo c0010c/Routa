@@ -86,6 +86,7 @@ fn build_runtime(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<Arc<Runtim
             let res = match ev {
                 RuntimeEvent::Status(s) => {
                     procroute::client::runtime_changed();
+                    tray::refresh(&handle);
                     handle.emit("runtime-status", s)
                 }
                 RuntimeEvent::Traffic(t) => handle.emit("traffic", t),
