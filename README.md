@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 A Windows desktop proxy manager built on [mihomo](https://github.com/MetaCubeX/mihomo). Choose a node and connect in Simple mode, or manage multiple proxy ports, routing rules, and network interfaces in Full mode—without writing YAML.
 
-> This README describes the current source. Published release builds may have fewer features. Windows x64 only; the application UI is currently in Simplified Chinese.
+> Windows x64 only; the application UI is currently in Simplified Chinese.
 
 ## Features
 
@@ -22,13 +22,7 @@ A Windows desktop proxy manager built on [mihomo](https://github.com/MetaCubeX/m
 
 ## Install
 
-Download a Windows x64 build from [Releases](https://github.com/c0010c/Routa/releases). Available package formats are:
-
-| Package | Usage |
-| --- | --- |
-| `routa_<version>_x64-setup.exe` | NSIS installer |
-
-Verify downloads against `SHA256SUMS.txt` on the corresponding release. Builds bundle mihomo; the source pins its version in [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION). The current source uses the bundled core rather than a custom core path.
+Download `routa_<version>_x64-setup.exe` from [Releases](https://github.com/c0010c/Routa/releases) and run it. Verify downloads against `SHA256SUMS.txt` on the corresponding release. Builds bundle mihomo; the source pins its version in [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION).
 
 The [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/) is required.
 
@@ -52,60 +46,22 @@ System proxy affects applications that honor Windows proxy settings. For applica
 
 Stopping system proxy or TUN leaves the core and proxy ports available; manually configured clients and independently enabled process-routing rules may still use them.
 
-## Data and upgrades
-
-Installed builds store data in `%APPDATA%\dev.routa\`:
-
-| File or directory | Contents |
-| --- | --- |
-| `state.json` | Proxy, node, subscription, and process-routing configuration |
-| `ui-preferences.json` | Interface mode, default proxy, and connection preferences |
-| `mihomo\` | Core working directory and `mihomo.log` |
-
-- Existing Routa configurations open in Full mode when no interface preference has been saved. The current source migrates legacy shared outbounds into per-proxy configurations and saves the original configuration as `state.before-v43.json` before migration.
-- Version 0.1.0 used the name `mihomo-mapper` and `%APPDATA%\dev.mihomo-mapper\`. That directory is not imported automatically into Routa.
-
-## Automatic updates
-
-- Only NSIS-installed builds check for updates. Dev builds and old MSI or unpacked executables do not.
-- Versions 0.3.0 and earlier have no updater: install the new NSIS installer manually once; later versions update automatically.
-- The first check runs 10 seconds after start, then every 24 hours; there is no switch to turn it off. **Settings → Check for updates** (设置 → 检查更新) checks manually.
-- New versions download in the background. When ready, an in-app notice offers 现在安装 (Install now) or 稍后 (Later). After 稍后, Routa asks again at the next manual start with a native dialog before the core starts. On Windows autostart (`--autostart`) there is no dialog, only the in-app notice.
-- Installing: Routa first exits normally and tells the service so, hence process routing follows the "Routa 退出时" (when Routa exits) policy for the whole upgrade. The NSIS installer then runs in passive mode and relaunches Routa.
-- The process-routing component is re-registered (UAC prompt) only when its files differ, its owner differs, or it is not running.
-- Sources are tried in order: `update.hwdns.net` mirror, `gh-proxy.org` mirror, GitHub direct. Every installer is signature-verified.
-- Update requests use the `HTTP_PROXY`/`HTTPS_PROXY` environment variables first, then the Windows system proxy. If Routa has set the system proxy, update traffic goes through Routa's own port.
-- Portable and MSI packages are discontinued. Old portable users can copy the contents of their `data\` folder into `%APPDATA%\dev.routa\` manually.
-
-### Releasing (maintainers)
-
-- `release.yml` signs the installer and needs the repository Secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the matching public key is `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
-- `release.yml` creates a draft Release. `updater.yml` publishes `latest.json` and `latest-proxy.json` to the `updater` pre-release after a Release is **published**; drafts are not picked up.
-
 ## Process-routing component
 
-Process routing runs as the `RoutaProcSvc` Windows service, built on [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) and [WinDivert](https://github.com/basil00/WinDivert). Its files are installed in `%ProgramFiles%\Routa\ProcessRouting`.
+Process routing runs as the `RoutaProcSvc` Windows service, built on [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) and [WinDivert](https://github.com/basil00/WinDivert). The installer registers it with a UAC prompt; if you decline, enable it later in the app.
 
-On a first install, the NSIS installer requests UAC at the end of setup to register the service. When upgrading, it requests UAC only if the component's files changed, it is owned by another Windows user, or it is not running. Declining does not fail installation; enable or update the component later in the app.
-
-NSIS uninstallation removes the service and filter rules itself and requests UAC to do so, with a retry prompt if removal fails. If removal fails or you decline UAC, the component remains installed and programs configured to block may stay offline; remove the service and rules manually by running this in an administrator PowerShell:
+Uninstalling removes the service as well. If that fails, run this in an administrator PowerShell, then delete the `%ProgramFiles%\Routa\ProcessRouting` folder:
 
 ```powershell
 & "$env:ProgramFiles\Routa\ProcessRouting\routa-procsvc.exe" --uninstall
 ```
 
-The command cannot delete its own running executable; remove the remaining `ProcessRouting` folder afterwards.
+Notes:
 
-Limitations and behavior:
-
-- DNS requests made by the Windows DNS Client service bypass process routing. Process routing alone does not proxy those DNS requests.
-- Executable-path rules apply to that program for every Windows user on the computer.
-- Targets must be Mixed/Socks listeners with IPv4 endpoints, such as `127.0.0.1` or `0.0.0.0`. HTTP-only and IPv6 listener endpoints are unsupported; IPv6 destinations through an IPv4 proxy endpoint are still supported.
-- Block policies use Windows Filtering Platform (WFP) rules that persist across component crashes, service stops, and restarts. Rules configured to go direct on failure may connect directly before the service starts after boot.
-- A missing, disabled, or ineffective target listener blocks the routed application. When the core crashes, the rule's failure policy applies; normal exit uses the separate exit policy.
-- Disconnecting existing connections affects IPv4 TCP only. Changing the proxy target without changing the routing action does not trigger a disconnect.
-- Antivirus software may flag or quarantine WinDivert. Check the component files and service status if routing fails.
-- The current process-routing protocol is version 3. Update the GUI and service together. Failed configurations require a manual retry after reconnecting.
+- Targets must be Mixed/Socks listeners on IPv4 (such as `127.0.0.1`); HTTP-only and IPv6 listeners are unsupported.
+- Rules apply to the program for every Windows user on the computer. DNS queries made by the Windows DNS Client service are not routed.
+- Block rules persist after crashes and restarts, so blocked programs stay offline until the component is running; direct-on-failure rules may connect directly before the service starts.
+- Antivirus software may quarantine WinDivert. Check it first if routing fails.
 
 ## Build from source
 

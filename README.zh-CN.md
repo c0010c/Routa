@@ -4,7 +4,7 @@
 
 基于 [mihomo](https://github.com/MetaCubeX/mihomo) 的 Windows 桌面代理管理工具。简洁版选节点即可连接；完整版可管理多个代理端口、分流规则与出站网卡，全程无需手写 YAML。
 
-> 本文介绍当前源码功能，已发布版本可能尚未包含全部功能。仅支持 Windows x64，应用界面目前为简体中文。
+> 仅支持 Windows x64，应用界面目前为简体中文。
 
 ## 功能
 
@@ -22,13 +22,7 @@
 
 ## 安装
 
-从 [Releases](https://github.com/c0010c/Routa/releases) 下载 Windows x64 构建，按需选择以下格式：
-
-| 文件 | 用途 |
-| --- | --- |
-| `routa_<版本>_x64-setup.exe` | NSIS 安装程序 |
-
-可用对应 Release 中的 `SHA256SUMS.txt` 校验下载文件。构建内置 mihomo，源码使用的固定版本见 [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)。当前源码统一使用内置内核，不再提供自定义内核路径。
+从 [Releases](https://github.com/c0010c/Routa/releases) 下载 `routa_<版本>_x64-setup.exe` 并运行。可用对应 Release 中的 `SHA256SUMS.txt` 校验下载文件。构建内置 mihomo，源码使用的固定版本见 [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)。
 
 运行需要 [WebView2 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)。
 
@@ -52,60 +46,22 @@
 
 关闭系统代理或 TUN 后，内核和代理端口仍可使用；手动配置代理的客户端及独立启用的进程分流规则仍可能继续使用代理。
 
-## 数据与升级
-
-安装版数据位于 `%APPDATA%\dev.routa\`：
-
-| 文件或目录 | 内容 |
-| --- | --- |
-| `state.json` | 代理、节点、订阅和进程分流配置 |
-| `ui-preferences.json` | 界面模式、默认代理和连接偏好 |
-| `mihomo\` | 内核工作目录及 `mihomo.log` 日志 |
-
-- 已有 Routa 配置在未保存界面偏好时默认进入完整版。当前源码会将旧版共享出口迁移为每个代理独立的配置，并在迁移前将原配置备份为 `state.before-v43.json`。
-- v0.1.0 使用旧名称 `mihomo-mapper`，数据位于 `%APPDATA%\dev.mihomo-mapper\`；Routa 不会自动导入该目录。
-
-## 自动更新
-
-- 只有 NSIS 安装版会检查更新；开发版以及旧的 MSI 或免安装 exe 不会。
-- 0.3.0 及更早版本没有更新功能：请手动安装一次新的 NSIS 安装包，之后的版本会自动更新。
-- 启动 10 秒后检查一次，之后每 24 小时检查一次，没有关闭开关；也可在“设置”中手动“检查更新”。
-- 新版本在后台下载，下载完成后应用内提示“现在安装”或“稍后”。选择“稍后”后，下次手动启动时会在内核启动前弹出原生对话框再次询问；Windows 开机自启（`--autostart`）时不弹对话框，只显示应用内提示。
-- 安装时 Routa 先正常退出并告知服务这是正常退出，因此整个升级期间进程分流按“Routa 退出时”的策略处理；随后 NSIS 安装程序以被动模式运行并重新启动 Routa。
-- 进程分流组件只有在文件不同、所有者不同或未运行时才会重新注册（弹出 UAC）。
-- 下载源依次为：`update.hwdns.net` 镜像、`gh-proxy.org` 镜像、GitHub 直连；每个安装包都会校验签名。
-- 更新请求优先使用 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量，其次使用 Windows 系统代理；若 Routa 已设置系统代理，更新流量会经过 Routa 自己的端口。
-- 已停止提供便携版和 MSI。旧便携版用户可手动将 `data\` 目录内容复制到 `%APPDATA%\dev.routa\`。
-
-### 发布（维护者）
-
-- `release.yml` 会为安装包签名，需要仓库 Secrets `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；对应公钥为 `src-tauri/tauri.conf.json` 中的 `plugins.updater.pubkey`。
-- `release.yml` 创建的是草稿 Release；Release **正式发布**后，`updater.yml` 才会把 `latest.json` 和 `latest-proxy.json` 发布到 `updater` 预发布中，草稿不会被处理。
-
 ## 进程分流组件
 
-进程分流由 Windows 服务 `RoutaProcSvc` 执行，基于 [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) 与 [WinDivert](https://github.com/basil00/WinDivert)，组件文件安装在 `%ProgramFiles%\Routa\ProcessRouting`。
+进程分流由 Windows 服务 `RoutaProcSvc` 执行，基于 [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) 与 [WinDivert](https://github.com/basil00/WinDivert)。安装时会通过 UAC 注册服务；拒绝授权的话，可稍后在应用中启用。
 
-首次安装时，NSIS 安装程序在安装末尾通过 UAC 注册服务；升级时只有组件文件有变化、归其他 Windows 用户所有或未在运行时才会请求 UAC。拒绝授权不影响安装，可稍后在应用中启用或更新组件。
-
-NSIS 卸载时会通过 UAC 自动删除服务与防护规则，失败时可重试。若删除失败或拒绝了 UAC，组件会残留，配置为阻断的程序可能继续无法联网；可在管理员 PowerShell 中执行以下命令，手动删除服务与规则：
+卸载时会一并删除服务。若删除失败，可在管理员 PowerShell 中执行以下命令，再删除 `%ProgramFiles%\Routa\ProcessRouting` 文件夹：
 
 ```powershell
 & "$env:ProgramFiles\Routa\ProcessRouting\routa-procsvc.exe" --uninstall
 ```
 
-该命令不能删除正在运行的自身程序，之后可手动删除残留的 `ProcessRouting` 文件夹。
+注意事项：
 
-限制与行为：
-
-- Windows DNS 客户端服务发出的 DNS 查询不经过进程分流；仅使用进程分流不会代理这些 DNS 请求。
-- 规则按 exe 路径匹配，对本机所有 Windows 用户运行的该程序生效。
-- 目标必须为使用 IPv4 入口（如 `127.0.0.1`、`0.0.0.0`）的 Mixed/Socks 监听器，不支持 HTTP 专用监听器和 IPv6 入口；通过 IPv4 代理入口访问 IPv6 目标不受此限制。
-- 阻断策略使用 Windows 防火墙平台（WFP）规则，可在组件崩溃、服务停止和系统重启后继续生效。选择故障时直连的规则，在开机后服务启动前可能直连。
-- 目标监听器不存在、被禁用或未生效时，相关应用会被阻断。内核崩溃时使用该规则的故障策略，正常退出时使用单独的退出策略。
-- “断开旧连接”仅对 IPv4 TCP 有效；只更换代理目标而不切换分流动作时，不触发断开。
-- 杀毒软件可能标记或隔离 WinDivert；分流异常时请检查组件文件和服务状态。
-- 当前进程分流协议为版本 3，主程序与服务需配套更新。失败配置在重新连接后仍需手动重试。
+- 目标必须是监听 IPv4（如 `127.0.0.1`）的 Mixed/Socks 监听器，不支持 HTTP 专用监听器和 IPv6 入口。
+- 规则对本机所有 Windows 用户运行的该程序生效；Windows DNS 客户端服务发出的 DNS 查询不经过进程分流。
+- 阻断规则在崩溃和重启后仍然生效，组件未运行时被阻断的程序会一直断网；故障时直连的规则在开机后服务启动前可能直连。
+- 杀毒软件可能隔离 WinDivert，分流异常时请先检查。
 
 ## 从源码构建
 
