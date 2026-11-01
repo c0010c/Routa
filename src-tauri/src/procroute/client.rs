@@ -144,6 +144,72 @@ pub async fn connect() -> Result<Box<dyn SvcConn>, ComponentState> {
     handshake(Box::new(open_pipe()?)).await
 }
 
+/// [`settle_graceful`] 的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettleOutcome {
+    /// 服务确认了本次会话的 Attach 和 Goodbye：按 on_routa_exit 回落。
+    Settled,
+    /// 没有可通知的服务（未安装、已停止、版本不一致、属于其他用户）：没有需要回落的东西。
+    NoService,
+    /// 服务可能在运行，但没能确认 Goodbye（连不上、Attach 或 Goodbye 失败）。
+    Failed(String),
+}
+
+/// 连接失败时的组件状态 → 结果：只有 `Error`（服务可能在运行但没连上）算失败。
+fn settle_outcome_for(state: ComponentState) -> SettleOutcome {
+    match state {
+        ComponentState::NotInstalled
+        | ComponentState::Stopped
+        | ComponentState::NeedsUpdate
+        | ComponentState::OwnedByOtherUser => SettleOutcome::NoService,
+        ComponentState::Running => SettleOutcome::Failed("连接分流服务失败".into()),
+        ComponentState::Error { message } => SettleOutcome::Failed(message),
+    }
+}
+
+/// 瞬时连接错误（管道忙等）的重试：最多 4 次 × 500 ms，总计约 2 s。
+const SETTLE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+const SETTLE_MAX_RETRIES: u32 = 4;
+
+/// 只有 `Error`（服务可能在运行但暂时没连上）值得重试；没有服务的状态立即返回。
+fn should_retry_connect(state: &ComponentState, attempt: u32) -> bool {
+    matches!(state, ComponentState::Error { .. }) && attempt < SETTLE_MAX_RETRIES
+}
+
+/// 安装器启动前调用：让服务把本次 Routa 视为“正常退出”（Attach + Goodbye + 断开），
+/// 从而按 on_routa_exit 回落，即使上次 Routa 是崩溃退出。
+pub async fn settle_graceful(pid: u32) -> SettleOutcome {
+    let mut attempt = 0;
+    let outcome = loop {
+        match connect().await {
+            Ok(conn) => break settle_on(conn, pid).await,
+            Err(state) => {
+                if should_retry_connect(&state, attempt) {
+                    attempt += 1;
+                    tokio::time::sleep(SETTLE_RETRY_DELAY).await;
+                    continue;
+                }
+                break settle_outcome_for(state);
+            }
+        }
+    };
+    if let SettleOutcome::Failed(e) = &outcome {
+        eprintln!("安装前通知分流服务失败：{e}");
+    }
+    outcome
+}
+
+async fn settle_on(mut conn: Box<dyn SvcConn>, pid: u32) -> SettleOutcome {
+    match conn.call(Request::Attach { routa_pid: pid }).await {
+        Ok(Response::Ok) => {}
+        other => return SettleOutcome::Failed(format!("Attach 失败：{other:?}")),
+    }
+    match conn.call(Request::Goodbye).await {
+        Ok(Response::Ok) => SettleOutcome::Settled,
+        other => SettleOutcome::Failed(format!("Goodbye 失败：{other:?}")),
+    }
+}
+
 /// 发送 Hello；服务拒绝（版本不一致）时为 `NeedsUpdate`。
 async fn handshake(mut conn: Box<dyn SvcConn>) -> Result<Box<dyn SvcConn>, ComponentState> {
     match conn.call(Request::Hello { version: PROTO_VERSION }).await {
@@ -470,10 +536,12 @@ impl Link {
         }
     }
 
-    async fn goodbye(&mut self) {
-        if let Some(conn) = self.conn.as_deref_mut() {
-            let _ = conn.call(Request::Goodbye).await;
-        }
+    /// 发送 Goodbye；只有在已登记（Attach / Apply 过）的会话上得到确认才算送达，
+    /// 否则服务不会把它算作在场 Routa 的道别。
+    async fn goodbye(&mut self) -> bool {
+        let registered = self.registered;
+        let Some(conn) = self.conn.as_deref_mut() else { return false };
+        matches!(conn.call(Request::Goodbye).await, Ok(Response::Ok)) && registered
     }
 
     /// 通过服务清理残留阻断；没连上时为 `None`。
@@ -533,7 +601,7 @@ impl Link {
 
 enum Command {
     Pause(oneshot::Sender<()>),
-    Goodbye(oneshot::Sender<()>),
+    Goodbye(oneshot::Sender<bool>),
     Cleanup(oneshot::Sender<Option<Result<(), String>>>),
     Reconnect,
     Retry(oneshot::Sender<Result<(), String>>),
@@ -669,17 +737,32 @@ pub fn reconnect_now() {
 
 /// 尽力在当前会话里发送 Goodbye（服务据此按"Routa 正常退出"处理），最多等 1 秒。
 /// 之后同步任务结束，不再下发任何状态。
-pub async fn goodbye() {
+pub async fn goodbye() -> GoodbyeOutcome {
     // 先置标志再看通道（spawn 的顺序相反）：要么同步任务收到 Goodbye，要么它根本不会启动。
     EXITING.store(true, Ordering::SeqCst);
-    let Some(tx) = COMMANDS.get() else { return };
-    let _ = timeout(GOODBYE_TIMEOUT, async {
+    let Some(tx) = COMMANDS.get() else { return GoodbyeOutcome::NotSpawned };
+    let delivered = timeout(GOODBYE_TIMEOUT, async {
         let (done, wait) = oneshot::channel();
-        if tx.send(Command::Goodbye(done)).await.is_ok() {
-            let _ = wait.await;
-        }
+        tx.send(Command::Goodbye(done)).await.is_ok() && wait.await.unwrap_or(false)
     })
-    .await;
+    .await
+    .unwrap_or(false);
+    if delivered {
+        GoodbyeOutcome::Delivered
+    } else {
+        GoodbyeOutcome::Failed
+    }
+}
+
+/// [`goodbye`] 的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoodbyeOutcome {
+    /// 服务在已登记的会话上确认了 Goodbye。
+    Delivered,
+    /// 同步任务从未启动（例如启动阶段就退出）：没有会话可以道别。
+    NotSpawned,
+    /// 同步任务在，但没能确认送达（没连上、未登记、出错或超时）。
+    Failed,
 }
 
 /// 通过当前会话让服务清理残留阻断；没有连上服务（或同步任务不在）时为 `None`。
@@ -725,8 +808,10 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
             cmd = commands.recv() => match cmd {
                 None => return,
                 Some(Command::Goodbye(done)) => {
-                    link.goodbye().await;
-                    let _ = done.send(());
+                    let delivered = link.goodbye().await;
+                    // 先释放唯一的管道会话：没送达时调用方要用 settle_graceful 重新连接。
+                    link.disconnect(ComponentState::Stopped);
+                    let _ = done.send(delivered);
                     return;
                 }
                 Some(Command::Pause(done)) => {
@@ -825,6 +910,22 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn connect_retry_only_for_transient_errors_and_bounded() {
+        let err = ComponentState::Error { message: "busy".into() };
+        assert!(should_retry_connect(&err, 0));
+        assert!(should_retry_connect(&err, SETTLE_MAX_RETRIES - 1));
+        assert!(!should_retry_connect(&err, SETTLE_MAX_RETRIES));
+        for s in [
+            ComponentState::NotInstalled,
+            ComponentState::Stopped,
+            ComponentState::NeedsUpdate,
+            ComponentState::OwnedByOtherUser,
+        ] {
+            assert!(!should_retry_connect(&s, 0));
+        }
+    }
+
     /// 按顺序回放预设回复的假连接，记录收到的请求。
     struct FakeConn {
         sent: Arc<Mutex<Vec<Request>>>,
@@ -875,6 +976,72 @@ mod tests {
 
     fn applies(sent: &Mutex<Vec<Request>>) -> usize {
         sent.lock().unwrap().iter().filter(|r| matches!(r, Request::Apply(_))).count()
+    }
+
+    #[tokio::test]
+    async fn settle_attaches_then_says_goodbye() {
+        let (conn, sent) = FakeConn::new(vec![Ok(Response::Ok)]);
+        assert_eq!(settle_on(Box::new(conn), 42).await, SettleOutcome::Settled);
+        assert_eq!(*sent.lock().unwrap(), vec![Request::Attach { routa_pid: 42 }, Request::Goodbye]);
+    }
+
+    #[tokio::test]
+    async fn settle_skips_goodbye_when_attach_fails() {
+        let (mut conn, sent) = FakeConn::new(vec![]);
+        conn.attach_error = Some("x".into());
+        assert!(matches!(settle_on(Box::new(conn), 42).await, SettleOutcome::Failed(_)));
+        assert_eq!(*sent.lock().unwrap(), vec![Request::Attach { routa_pid: 42 }]);
+    }
+
+    #[tokio::test]
+    async fn settle_fails_when_goodbye_is_not_confirmed() {
+        let (conn, _) = FakeConn::new(vec![Err("断开".into())]);
+        assert!(matches!(settle_on(Box::new(conn), 42).await, SettleOutcome::Failed(_)));
+    }
+
+    #[test]
+    fn absent_service_has_nothing_to_settle() {
+        for s in [
+            ComponentState::NotInstalled,
+            ComponentState::Stopped,
+            ComponentState::NeedsUpdate,
+            ComponentState::OwnedByOtherUser,
+        ] {
+            assert_eq!(settle_outcome_for(s), SettleOutcome::NoService);
+        }
+        assert!(matches!(settle_outcome_for(error("分流服务正被另一个连接占用")), SettleOutcome::Failed(_)));
+    }
+
+    /// 同步任务没启动（启动阶段就退出、或点了安装时客户端还没起来）：明确报告，交给调用方补救。
+    #[tokio::test]
+    async fn goodbye_without_sync_task_reports_not_spawned() {
+        assert!(COMMANDS.get().is_none());
+        assert_eq!(goodbye().await, GoodbyeOutcome::NotSpawned);
+    }
+
+    #[tokio::test]
+    async fn goodbye_counts_only_on_a_registered_session() {
+        let mut link = Link::default();
+        assert!(!link.goodbye().await);
+        let (conn, sent) = FakeConn::new(vec![
+            Ok(Response::Hello { version: PROTO_VERSION, accepted: true }),
+            Ok(Response::Ok),
+        ]);
+        link.attach(handshake(Box::new(conn)).await);
+        // 握手过、未登记：服务不会把这个 Goodbye 算作在场 Routa 的道别。
+        assert!(!link.goodbye().await);
+        assert!(matches!(sent.lock().unwrap().last(), Some(Request::Goodbye)));
+
+        let mut link = Link::default();
+        let (conn, _) = FakeConn::new(vec![
+            Ok(Response::Hello { version: PROTO_VERSION, accepted: true }),
+            Ok(Response::Applied { errors: vec![] }),
+            Ok(Response::Ok),
+        ]);
+        link.attach(handshake(Box::new(conn)).await);
+        link.sync(state(r"C:\a.exe"), false).await;
+        assert!(link.registered);
+        assert!(link.goodbye().await);
     }
 
     #[tokio::test]

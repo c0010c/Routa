@@ -43,7 +43,7 @@ jobs:
         run: pnpm build
 
   windows:
-    name: Windows tests and portable build
+    name: Windows tests and build
     runs-on: windows-2022
     timeout-minutes: 60
     defaults:
@@ -77,7 +77,7 @@ jobs:
       - name: Build the process-routing service
         run: pnpm build-procsvc --locked
       - name: Build artifact regression tests
-        run: node --test scripts/build-artifacts.test.mjs
+        run: node --test scripts/build-artifacts.test.mjs scripts/updater-manifest.test.mjs
       - name: Rust tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
       - name: Real mihomo integration test
@@ -89,20 +89,9 @@ jobs:
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test e2e_real_core -- --ignored --nocapture
       - name: Build Windows application
         run: pnpm tauri build --no-bundle -- --locked
-      - name: Package portable build
-        run: pnpm pack:portable --skip-build --out-dir src-tauri/target/release/bundle/portable
-      - name: Verify portable archive contents
+      - name: Verify Windows application
         run: |
-          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
-          $name = $config.productName
-          $zip = "src-tauri/target/release/bundle/portable/${name}_$($config.version)_x64_portable.zip"
-          if (!(Test-Path $zip)) { throw "Missing portable archive: $zip" }
-          $entries = & "$env:SystemRoot/System32/tar.exe" -tf $zip
-          if ($LASTEXITCODE -ne 0) { throw "Cannot read portable archive" }
-          $required = @(
-            "$name.exe", 'mihomo.exe', 'routa-procsvc.exe', 'procsvc/ProxyBridgeCore.dll',
-            'procsvc/WinDivert.dll', 'procsvc/WinDivert64.sys', 'portable', 'LICENSE', 'build-info.json'
-          )
-          foreach ($file in $required) {
-            if ("$name/$file" -notin $entries) { throw "Missing archive entry: $name/$file" }
-          }
+          $exe = "src-tauri/target/release/routa.exe"
+          if (!(Test-Path $exe)) { throw "Missing application: $exe" }
+          & $exe --build-info | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "routa.exe --build-info failed with exit code $LASTEXITCODE" }

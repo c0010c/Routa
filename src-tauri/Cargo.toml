@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 tauri-specta = { version = "=2.0.0-rc.21", features = ["derive", "typescript"] }
 specta = { version = "=2.0.0-rc.22", features = ["serde_json"] }
 uuid = { version = "1", features = ["v4"] }
@@ -38,11 +39,14 @@ tokio-tungstenite = "0.26"
 routa-procsvc-proto = { path = "procsvc-proto", features = ["specta"] }
 anyhow = "1"
 getrandom = "0.3"
+minisign-verify = "0.2"
+semver = "1"
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 wiremock = "0.6"
+minisign = "0.7"
 
 [target."cfg(windows)".dependencies]
 ipconfig = "0.3.4"

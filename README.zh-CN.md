@@ -18,6 +18,7 @@
 - **进程分流**：按 exe 完整路径把程序流量交给 Mixed/Socks 监听器，查看各进程连接与流量；每条规则可设置组件故障时直连或阻断，并单独设置 Routa 正常退出时的策略。
 - **监控与诊断**：分别查看内核与接管状态、实时及累计流量、活动连接及其实际路径、内核日志、端口冲突和组件状态。
 - **桌面集成**：内置 mihomo 内核，配置热重载、内核崩溃后自动重启，支持开机启动、启动后自动连接，以及关闭窗口时最小化到托盘或退出。
+- **自动更新**：NSIS 安装版会检查新版本、在后台下载，经你确认后安装；整个升级期间进程分流按“Routa 退出时”的策略处理。
 
 ## 安装
 
@@ -26,8 +27,6 @@
 | 文件 | 用途 |
 | --- | --- |
 | `routa_<版本>_x64-setup.exe` | NSIS 安装程序 |
-| `routa_<版本>_x64_en-US.msi` | MSI 安装包 |
-| `routa_<版本>_x64_portable.zip` | 便携版，解压后运行 `routa.exe` |
 
 可用对应 Release 中的 `SHA256SUMS.txt` 校验下载文件。构建内置 mihomo，源码使用的固定版本见 [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)。当前源码统一使用内置内核，不再提供自定义内核路径。
 
@@ -63,21 +62,33 @@
 | `ui-preferences.json` | 界面模式、默认代理和连接偏好 |
 | `mihomo\` | 内核工作目录及 `mihomo.log` 日志 |
 
-当 `routa.exe` 旁存在 `portable` 文件时，全部应用数据（包括 WebView 缓存）保存在同目录的 `data\` 中。删除标记文件并重启后改用 `%APPDATA%\dev.routa\`。切换存储模式不会自动搬移数据。
-
-- 便携版目录必须可写，请勿放在 `Program Files` 下。
-- 移动便携版目录后，关闭并重新开启开机启动，以更新记录的程序路径。
-- 安装版与便携版不能同时运行。
 - 已有 Routa 配置在未保存界面偏好时默认进入完整版。当前源码会将旧版共享出口迁移为每个代理独立的配置，并在迁移前将原配置备份为 `state.before-v43.json`。
 - v0.1.0 使用旧名称 `mihomo-mapper`，数据位于 `%APPDATA%\dev.mihomo-mapper\`；Routa 不会自动导入该目录。
+
+## 自动更新
+
+- 只有 NSIS 安装版会检查更新；开发版以及旧的 MSI 或免安装 exe 不会。
+- 0.3.0 及更早版本没有更新功能：请手动安装一次新的 NSIS 安装包，之后的版本会自动更新。
+- 启动 10 秒后检查一次，之后每 24 小时检查一次，没有关闭开关；也可在“设置”中手动“检查更新”。
+- 新版本在后台下载，下载完成后应用内提示“现在安装”或“稍后”。选择“稍后”后，下次手动启动时会在内核启动前弹出原生对话框再次询问；Windows 开机自启（`--autostart`）时不弹对话框，只显示应用内提示。
+- 安装时 Routa 先正常退出并告知服务这是正常退出，因此整个升级期间进程分流按“Routa 退出时”的策略处理；随后 NSIS 安装程序以被动模式运行并重新启动 Routa。
+- 进程分流组件只有在文件不同、所有者不同或未运行时才会重新注册（弹出 UAC）。
+- 下载源依次为：`update.hwdns.net` 镜像、`gh-proxy.org` 镜像、GitHub 直连；每个安装包都会校验签名。
+- 更新请求优先使用 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量，其次使用 Windows 系统代理；若 Routa 已设置系统代理，更新流量会经过 Routa 自己的端口。
+- 已停止提供便携版和 MSI。旧便携版用户可手动将 `data\` 目录内容复制到 `%APPDATA%\dev.routa\`。
+
+### 发布（维护者）
+
+- `release.yml` 会为安装包签名，需要仓库 Secrets `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；对应公钥为 `src-tauri/tauri.conf.json` 中的 `plugins.updater.pubkey`。
+- `release.yml` 创建的是草稿 Release；Release **正式发布**后，`updater.yml` 才会把 `latest.json` 和 `latest-proxy.json` 发布到 `updater` 预发布中，草稿不会被处理。
 
 ## 进程分流组件
 
 进程分流由 Windows 服务 `RoutaProcSvc` 执行，基于 [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) 与 [WinDivert](https://github.com/basil00/WinDivert)，组件文件安装在 `%ProgramFiles%\Routa\ProcessRouting`。
 
-NSIS 安装版在安装末尾通过 UAC 注册服务；拒绝授权不影响安装，可稍后在应用中启用组件。MSI 版和便携版在应用中启用组件时请求 UAC 授权。
+首次安装时，NSIS 安装程序在安装末尾通过 UAC 注册服务；升级时只有组件文件有变化、归其他 Windows 用户所有或未在运行时才会请求 UAC。拒绝授权不影响安装，可稍后在应用中启用或更新组件。
 
-**卸载 MSI 版或删除便携版前，请先在应用内卸载组件。** NSIS 卸载时会通过 UAC 删除服务与防护规则，失败时可重试。组件残留时，配置为阻断的程序可能继续无法联网。可在管理员 PowerShell 中执行以下命令，手动删除服务与规则：
+NSIS 卸载时会通过 UAC 自动删除服务与防护规则，失败时可重试。若删除失败或拒绝了 UAC，组件会残留，配置为阻断的程序可能继续无法联网；可在管理员 PowerShell 中执行以下命令，手动删除服务与规则：
 
 ```powershell
 & "$env:ProgramFiles\Routa\ProcessRouting\routa-procsvc.exe" --uninstall
@@ -114,13 +125,12 @@ pnpm build-procsvc      # 编译进程分流服务
 
 ```powershell
 pnpm tauri dev        # 开发模式
-pnpm tauri build      # NSIS/MSI 安装包位于 src-tauri/target/release/bundle
-pnpm pack:portable    # 便携目录与 ZIP 位于 bundle/portable-<时间戳>
+pnpm tauri build      # NSIS 安装包位于 src-tauri/target/release/bundle
 ```
 
-`pnpm tauri build` 会自动重新构建服务和前端。便携打包会构建生产版程序，包含 `routa.exe`、`mihomo.exe`、`routa-procsvc.exe`、`procsvc\`、`portable` 标记、`LICENSE` 和 `build-info.json`。
+`pnpm tauri build` 会自动重新构建服务和前端。
 
-`build-info.json` 记录 GUI、服务、前端和文件的 SHA-256 摘要。`--skip-build` 仍会检查源码、协议和产物是否一致。可用 `--out-dir <目录>` 指定便携包位置；已有同名程序目录或 ZIP 时会拒绝覆盖，以保护其中的 `data`。直接运行 `cargo build --release --features custom-protocol` 前，需要先执行 `node scripts/build-procsvc.mjs` 和 `node scripts/build-frontend.mjs`。
+直接运行 `cargo build --release --features custom-protocol` 前，需要先执行 `node scripts/build-procsvc.mjs` 和 `node scripts/build-frontend.mjs`。
 
 ### 检查
 
@@ -128,7 +138,7 @@ pnpm pack:portable    # 便携目录与 ZIP 位于 bundle/portable-<时间戳>
 pnpm typecheck
 pnpm test
 pnpm build
-node --test scripts/build-artifacts.test.mjs
+node --test scripts/build-artifacts.test.mjs scripts/updater-manifest.test.mjs
 cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
 ```
 

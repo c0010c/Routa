@@ -21,9 +21,20 @@
     ],
     "security": { "csp": null }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhGQ0E5RjFDNzVFMzc4OTcKUldTWGVPTjFISi9LajR4MWxwbDhzeGdpSzh0WG1uTXFpczFjZUJUZzkybCtYVzd1b2xhcGtBRXUK",
+      "endpoints": [
+        "https://update.hwdns.net/https://github.com/c0010c/Routa/releases/download/updater/latest-proxy.json",
+        "https://gh-proxy.org/https://github.com/c0010c/Routa/releases/download/updater/latest-proxy.json",
+        "https://github.com/c0010c/Routa/releases/download/updater/latest.json"
+      ],
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "externalBin": ["binaries/mihomo", "binaries/routa-procsvc"],
     "resources": { "binaries/procsvc/*": "procsvc/" },
     "icon": ["icons/icon.ico"],

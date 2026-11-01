@@ -3,6 +3,7 @@ import DnsOutlined from "@mui/icons-material/DnsOutlined";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
+import { UpdateNotice } from "./UpdateNotice";
 
 export function SimpleLayout({ children }: { children: ReactNode }) {
   return (
@@ -17,6 +18,7 @@ export function SimpleLayout({ children }: { children: ReactNode }) {
       <Box component="main" sx={{ flex: 1, minWidth: 0 }}>
         {children}
       </Box>
+      <UpdateNotice />
       <Divider sx={{ mt: 3 }} />
       <Stack
         component="nav"

@@ -160,6 +160,55 @@ pub fn files_to_copy() -> [&'static str; 4] {
     ]
 }
 
+/// `files_to_copy()` 里的每个文件在 `installed` 下都存在且内容逐字节相同。
+/// 第一个（服务 exe）与 `source_exe` 比较，其余与 `source.join(name)` 比较。
+/// `installed` 下缺文件返回 `Ok(false)`；只读，不改动任何文件。
+pub fn install_matches(source_exe: &Path, source: &Path, installed: &Path) -> io::Result<bool> {
+    let [exe_name, rest @ ..] = files_to_copy();
+    let pairs = std::iter::once((source_exe.to_path_buf(), exe_name))
+        .chain(rest.into_iter().map(|name| (source.join(name), name)));
+    for (src, name) in pairs {
+        let dst = installed.join(name);
+        let dst_meta = match fs::metadata(&dst) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        if !dst_meta.is_file() || dst_meta.len() != fs::metadata(&src)?.len() {
+            return Ok(false);
+        }
+        if fs::read(&src)? != fs::read(&dst)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// 安装目录里的 owner.sid 内容恰好等于 `sid`（缺失、读不了、不一致都为 false）。
+pub fn owner_matches(installed: &Path, sid: &str) -> bool {
+    fs::read_to_string(installed.join(OWNER_SID_FILE)).is_ok_and(|s| s == sid)
+}
+
+/// `--check-install`：服务已注册并在运行（或正在启动）、owner.sid 就是 `owner_sid`，
+/// 且已安装的文件与当前 exe / `source` 完全一致。只读，不需要管理员。
+pub fn check_install(source: &Path, owner_sid: &str) -> Result<bool, String> {
+    let mgr = manager(ServiceManagerAccess::CONNECT)?;
+    let Some(svc) = open(&mgr, ServiceAccess::QUERY_STATUS)? else {
+        return Ok(false);
+    };
+    // 已停止或被禁用的服务要走完整安装（重设自动启动并启动）
+    let state = svc.query_status().map_err(|e| failed("查询服务状态", e))?.current_state;
+    if !matches!(state, ServiceState::Running | ServiceState::StartPending) {
+        return Ok(false);
+    }
+    let dir = install_dir()?;
+    if !owner_matches(&dir, owner_sid) {
+        return Ok(false);
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("无法确定本程序路径：{e}"))?;
+    install_matches(&exe, source, &dir).map_err(|e| format!("比较组件文件失败：{e}"))
+}
+
 /// 本机或域用户的 SID：`S-1-5-21-` 后跟 4 段十进制数。
 pub fn valid_owner_sid(sid: &str) -> bool {
     ["S-1-5-21-", "S-1-12-1-"].iter().any(|prefix| {
@@ -681,6 +730,37 @@ mod tests {
             .open(&dir)
             .unwrap();
         set_dacl(&f, "D:PAI(A;OICI;FA;;;WD)").unwrap();
+    }
+
+    #[test]
+    fn install_matches_compares_every_file() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let [exe, rest @ ..] = files_to_copy();
+        let src_exe = src.path().join(exe);
+        std::fs::write(&src_exe, b"exe").unwrap();
+        std::fs::write(dst.path().join(exe), b"exe").unwrap();
+        for name in rest {
+            std::fs::write(src.path().join(name), name.as_bytes()).unwrap();
+            std::fs::write(dst.path().join(name), name.as_bytes()).unwrap();
+        }
+        assert!(install_matches(&src_exe, src.path(), dst.path()).unwrap());
+        std::fs::write(dst.path().join(rest[0]), b"changed").unwrap();
+        assert!(!install_matches(&src_exe, src.path(), dst.path()).unwrap());
+        std::fs::remove_file(dst.path().join(rest[0])).unwrap();
+        assert!(!install_matches(&src_exe, src.path(), dst.path()).unwrap());
+    }
+
+    #[test]
+    fn owner_matches_requires_exact_sid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "S-1-5-21-1-2-3-1001";
+        assert!(!owner_matches(dir.path(), sid));
+        std::fs::write(dir.path().join(OWNER_SID_FILE), sid).unwrap();
+        assert!(owner_matches(dir.path(), sid));
+        assert!(!owner_matches(dir.path(), "S-1-5-21-1-2-3-1002"));
+        std::fs::write(dir.path().join(OWNER_SID_FILE), format!("{sid}\n")).unwrap();
+        assert!(!owner_matches(dir.path(), sid));
     }
 
     #[test]

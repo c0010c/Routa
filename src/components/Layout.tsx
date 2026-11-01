@@ -17,6 +17,7 @@ import {
 } from "@mui/material";
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { UpdateNotice } from "./UpdateNotice";
 import pkg from "../../package.json";
 
 const DRAWER_WIDTH = 184;
@@ -115,6 +116,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <Box component="main" sx={{ flexGrow: 1, p: 3, minWidth: 0 }}>
         {children}
       </Box>
+      <UpdateNotice />
     </Box>
   );
 }

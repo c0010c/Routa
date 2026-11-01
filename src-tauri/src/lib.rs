@@ -4,7 +4,6 @@ pub mod core;
 pub mod desktop;
 pub mod model;
 pub mod netif;
-pub mod portable;
 pub mod procroute;
 pub mod runtime;
 pub mod scheduler;
@@ -15,6 +14,7 @@ pub mod system_proxy;
 pub mod tailnet;
 pub mod tailscale;
 pub mod tray;
+pub mod updater;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -46,43 +46,9 @@ fn sidecar_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/mihomo-x86_64-pc-windows-msvc.exe")
 }
 
-/// Startup errors in a release build have no console, so show them in a box.
-#[cfg(windows)]
-fn fatal_dialog(msg: &str) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
-    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-    let (text, caption) = (wide(msg), wide("Routa"));
-    unsafe {
-        MessageBoxW(
-            std::ptr::null_mut(),
-            text.as_ptr(),
-            caption.as_ptr(),
-            MB_OK | MB_ICONERROR,
-        )
-    };
-}
-
-/// `Some(data dir)` in portable mode, after making sure it is writable.
-fn portable_data_dir() -> Result<Option<PathBuf>, String> {
-    let Some(dir) = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().and_then(portable::data_dir_for))
-    else {
-        return Ok(None);
-    };
-    portable::prepare(&dir).map_err(|e| {
-        format!(
-            "便携模式无法写入数据目录：\n{}\n\n{e}\n\n请把程序放到可写的位置，或删除 exe 旁边的 `{}` 文件改用普通模式。",
-            dir.display(),
-            portable::MARKER
-        )
-    })?;
-    Ok(Some(dir))
-}
-
 /// The main window is created here rather than from tauri.conf.json so that
-/// portable mode can point the WebView2 profile next to the exe.
-fn create_main_window(app: &tauri::App, portable: Option<&std::path::Path>) -> tauri::Result<()> {
+/// its config is looked up and built in one place.
+fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     let config = app
         .config()
         .app
@@ -91,11 +57,7 @@ fn create_main_window(app: &tauri::App, portable: Option<&std::path::Path>) -> t
         .find(|w| w.label == "main")
         .expect("main window missing from tauri.conf.json")
         .clone();
-    let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
-    if let Some(dir) = portable {
-        builder = builder.data_directory(portable::webview_dir(dir));
-    }
-    builder.build()?;
+    tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?.build()?;
     Ok(())
 }
 
@@ -135,6 +97,26 @@ fn build_runtime(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<Arc<Runtim
         }
     });
     Ok(rt)
+}
+
+/// Passed by the OS autostart entry so a boot-time start never blocks on the
+/// "install update?" dialog.
+const AUTOSTART_ARG: &str = "--autostart";
+
+/// Entries registered by older versions lack `--autostart`; enabling again
+/// rewrites them with it. Only for NSIS installs, so a dev build never points
+/// the user's autostart entry at itself.
+fn reregister_autostart(app: &tauri::AppHandle) {
+    use tauri_plugin_autostart::ManagerExt;
+    if !updater::is_nsis_install() {
+        return;
+    }
+    let autostart = app.autolaunch();
+    if autostart.is_enabled().unwrap_or(false) {
+        if let Err(e) = autostart.enable() {
+            eprintln!("autostart: re-register failed: {e}");
+        }
+    }
 }
 
 /// Commands and extra types exported to `src/bindings.ts`.
@@ -190,6 +172,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             desktop::change_process_listener,
             desktop::get_connection_details,
             desktop::read_core_log,
+            updater::update_status,
+            updater::update_check,
+            updater::update_install,
         ])
         // Payload of the "procroute-flows" event (not returned by any command).
         .typ::<routa_procsvc_proto::Flow>()
@@ -210,16 +195,6 @@ fn export_bindings(builder: &Builder<tauri::Wry>) {
 }
 
 pub fn run() {
-    let portable_dir = match portable_data_dir() {
-        Ok(dir) => dir,
-        Err(msg) => {
-            eprintln!("{msg}");
-            #[cfg(windows)]
-            fatal_dialog(&msg);
-            std::process::exit(1);
-        }
-    };
-
     let builder = specta_builder();
     #[cfg(debug_assertions)]
     {
@@ -240,22 +215,31 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![AUTOSTART_ARG]),
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
-            create_main_window(app, portable_dir.as_deref())?;
-            let data_dir = match portable_dir {
-                Some(dir) => dir,
-                None => app.path().app_data_dir()?,
-            };
+            create_main_window(app)?;
+            let data_dir = app.path().app_data_dir()?;
             let desktop = Arc::new(desktop::Desktop::open(data_dir.clone()).map_err(std::io::Error::other)?);
+            let updater = Arc::new(updater::Updater::new(app.handle().clone(), data_dir.clone()));
             let rt = build_runtime(app.handle(), data_dir)?;
             app.manage(desktop.clone());
             app.manage(rt.clone());
+            app.manage(updater.clone());
             tray::setup(app.handle())?;
+            reregister_autostart(app.handle());
+            let autostarted = std::env::args().any(|a| a == AUTOSTART_ARG);
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                // First, before anything touches the core or the service: a
+                // ready update may be installed now, in which case Routa exits
+                // without starting the core or the procroute client (whose
+                // Attach would otherwise be displaced by settle_graceful).
+                if updater::install::startup_gate(&handle, &updater, autostarted).await {
+                    return;
+                }
                 if let Err(e) = desktop.initialize(&rt).await {
                     eprintln!("default proxy initialization: {e}");
                 }
@@ -267,6 +251,9 @@ pub fn run() {
                 // (no reason), which would push Block to every rule. Until
                 // then the service keeps its own "Routa absent" fallback.
                 procroute::client::spawn(rt.clone(), handle);
+                if updater::is_nsis_install() {
+                    updater.spawn_background();
+                }
                 desktop.clone().spawn_monitor(rt.clone());
                 let preferences = desktop.state(&rt).preferences;
                 if preferences.auto_connect {
@@ -329,7 +316,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 // Before the core stops: tells the service this is a normal
                 // exit (on_routa_exit applies). Bounded at 1s inside.
-                procroute::client::goodbye().await;
+                let bye = procroute::client::goodbye().await;
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     let rt = Arc::clone(&*rt);
                     if let Some(dt) = app.try_state::<Arc<desktop::Desktop>>() {
@@ -344,18 +331,23 @@ pub fn run() {
                     }
                 }
                 state.store(2, Ordering::SeqCst);
+                // Launches only once the service confirmed Goodbye (settling
+                // it directly if `bye` was not confirmed).
+                updater::install::run_pending_install(&app, bye).await;
                 app.exit(0);
             });
         }
         RunEvent::Exit => {
             if state.swap(2, Ordering::SeqCst) == 0 {
-                tauri::async_runtime::block_on(procroute::client::goodbye());
+                let bye = tauri::async_runtime::block_on(procroute::client::goodbye());
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     if let Some(dt) = app.try_state::<Arc<desktop::Desktop>>() {
                         tauri::async_runtime::block_on(dt.shutdown(&rt));
                     }
                     tauri::async_runtime::block_on(rt.shutdown());
                 }
+                // Only on this path, which said Goodbye just above.
+                tauri::async_runtime::block_on(updater::install::run_pending_install(app, bye));
             }
         }
         _ => {}

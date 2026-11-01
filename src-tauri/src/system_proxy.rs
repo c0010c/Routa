@@ -240,6 +240,25 @@ mod tests {
         proxy.release().unwrap();
         assert_eq!(*state.lock().unwrap(), previous);
     }
+    /// Exit before Routa ever enabled the proxy (startup install): no lease,
+    /// so the user's settings are not touched.
+    #[test]
+    fn release_without_lease_leaves_proxy_alone() {
+        let td = tempfile::tempdir().unwrap();
+        let other = ProxySettings {
+            flags: 3,
+            server: "127.0.0.1:9999".into(),
+            ..Default::default()
+        };
+        let state = Arc::new(Mutex::new(other.clone()));
+        let proxy = SystemProxy {
+            path: td.path().join("lease.json"),
+            backend: Box::new(Fake(state.clone())),
+        };
+        proxy.release().unwrap();
+        assert_eq!(*state.lock().unwrap(), other);
+        assert!(!td.path().join("lease.json").exists());
+    }
     #[test]
     fn never_overwrites_a_proxy_changed_by_another_app() {
         let td = tempfile::tempdir().unwrap();

@@ -396,6 +396,30 @@ async readCoreLog() : Promise<Result<string, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async updateStatus() : Promise<UpdateView> {
+    return await TAURI_INVOKE("update_status");
+},
+async updateCheck() : Promise<Result<UpdateView, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_check") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Installs the ready update: re-verifies it, then exits through the normal
+ * exit sequence; the exit hook in `lib.rs` starts the installer only once
+ * the service has confirmed Goodbye (see `install::run_pending_install`).
+ */
+async updateInstall() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_install") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -697,6 +721,16 @@ export type TrafficTick = { total_rate: Rate;
 per_listener_rate: Partial<{ [key in ListenerId]: Rate }>; totals: TrafficTotals }
 export type TrafficTotals = { total: Bytes; per_listener: Partial<{ [key in ListenerId]: Bytes }> }
 export type UiPreferences = { mode: InterfaceMode | null; listener_id: ListenerId | null; exit_id: ExitId | null; system_listener_id: ListenerId | null; capture_mode: CaptureMode; auto_connect: boolean; close_to_tray: boolean; managed_rules: ProcessRuleId[]; selected_apps: ProcessRuleId[] }
+export type UpdateState = 
+/**
+ * Not an NSIS install (dev build or unpacked exe): no updates.
+ */
+{ kind: "Unsupported" } | { kind: "Idle" } | { kind: "Checking" } | { kind: "Downloading"; version: string; received: number; total: number | null } | 
+/**
+ * A verified installer for `version` is in the cache.
+ */
+{ kind: "Ready"; version: string; notes: string | null } | { kind: "Failed"; message: string }
+export type UpdateView = { current_version: string; state: UpdateState; last_checked_unix: number | null }
 export type ValidationError = { DuplicateName: { kind: string; name: string } } | { PortConflict: { port: number; with: string } } | { InvalidName: { name: string; reason: string } } | { IntervalOutOfRange: { field: string; value: number } } | { DanglingRef: { what: string } } | 
 /**
  * A Tailscale instance used by the exit is bound to a different interface than the exit.

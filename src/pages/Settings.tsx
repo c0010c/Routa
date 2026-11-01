@@ -26,6 +26,7 @@ import { SaveFeedback, useSaveFeedback } from "../components/SaveFeedback";
 import { IntervalInput } from "../components/IntervalInput";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
 import { applyOutcomeMessages } from "../lib/format";
+import { UpdatePanel } from "../components/UpdatePanel";
 import { UiPreferencesPanel } from "../components/UiPreferencesPanel";
 
 /** One Win11-style settings row: label and explanation on the left, control on the right. */
@@ -161,6 +162,7 @@ function SettingsForm({
     <Stack spacing={2} sx={{ maxWidth: 760 }}>
       <Typography variant="h5">设置</Typography>
       <UiPreferencesPanel />
+      <UpdatePanel />
       <Button
         component={Link}
         to="/diagnostics"

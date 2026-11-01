@@ -18,6 +18,7 @@ A Windows desktop proxy manager built on [mihomo](https://github.com/MetaCubeX/m
 - **Process routing**: route programs by full executable path to Mixed/Socks listeners, inspect per-process connections and traffic, and choose direct or block on component failure. A separate policy controls behavior when Routa exits normally.
 - **Monitoring and diagnostics**: view core and capture status separately, live and total traffic, active connections and their routes, core logs, port conflicts, and component status.
 - **Desktop integration**: bundled mihomo core, configuration hot reload, automatic core restart after a crash, Windows startup, optional auto-connect, and a choice of minimizing to the tray or exiting when closing the window.
+- **Automatic updates**: NSIS installs check for new versions, download them in the background, and install after you confirm. Process routing follows the "when Routa exits" policy throughout the upgrade.
 
 ## Install
 
@@ -26,8 +27,6 @@ Download a Windows x64 build from [Releases](https://github.com/c0010c/Routa/rel
 | Package | Usage |
 | --- | --- |
 | `routa_<version>_x64-setup.exe` | NSIS installer |
-| `routa_<version>_x64_en-US.msi` | MSI installer |
-| `routa_<version>_x64_portable.zip` | Extract and run `routa.exe` |
 
 Verify downloads against `SHA256SUMS.txt` on the corresponding release. Builds bundle mihomo; the source pins its version in [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION). The current source uses the bundled core rather than a custom core path.
 
@@ -63,21 +62,33 @@ Installed builds store data in `%APPDATA%\dev.routa\`:
 | `ui-preferences.json` | Interface mode, default proxy, and connection preferences |
 | `mihomo\` | Core working directory and `mihomo.log` |
 
-When a `portable` file sits next to `routa.exe`, all application data, including the WebView cache, is stored in the adjacent `data\` directory. Remove the marker and restart to use `%APPDATA%\dev.routa\` instead. Switching storage modes does not move data automatically.
-
-- Keep portable builds in a writable directory, outside `Program Files`.
-- After moving a portable folder, turn Windows startup off and on again to update its recorded executable path.
-- Installed and portable builds cannot run simultaneously.
 - Existing Routa configurations open in Full mode when no interface preference has been saved. The current source migrates legacy shared outbounds into per-proxy configurations and saves the original configuration as `state.before-v43.json` before migration.
 - Version 0.1.0 used the name `mihomo-mapper` and `%APPDATA%\dev.mihomo-mapper\`. That directory is not imported automatically into Routa.
+
+## Automatic updates
+
+- Only NSIS-installed builds check for updates. Dev builds and old MSI or unpacked executables do not.
+- Versions 0.3.0 and earlier have no updater: install the new NSIS installer manually once; later versions update automatically.
+- The first check runs 10 seconds after start, then every 24 hours; there is no switch to turn it off. **Settings → Check for updates** (设置 → 检查更新) checks manually.
+- New versions download in the background. When ready, an in-app notice offers 现在安装 (Install now) or 稍后 (Later). After 稍后, Routa asks again at the next manual start with a native dialog before the core starts. On Windows autostart (`--autostart`) there is no dialog, only the in-app notice.
+- Installing: Routa first exits normally and tells the service so, hence process routing follows the "Routa 退出时" (when Routa exits) policy for the whole upgrade. The NSIS installer then runs in passive mode and relaunches Routa.
+- The process-routing component is re-registered (UAC prompt) only when its files differ, its owner differs, or it is not running.
+- Sources are tried in order: `update.hwdns.net` mirror, `gh-proxy.org` mirror, GitHub direct. Every installer is signature-verified.
+- Update requests use the `HTTP_PROXY`/`HTTPS_PROXY` environment variables first, then the Windows system proxy. If Routa has set the system proxy, update traffic goes through Routa's own port.
+- Portable and MSI packages are discontinued. Old portable users can copy the contents of their `data\` folder into `%APPDATA%\dev.routa\` manually.
+
+### Releasing (maintainers)
+
+- `release.yml` signs the installer and needs the repository Secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the matching public key is `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
+- `release.yml` creates a draft Release. `updater.yml` publishes `latest.json` and `latest-proxy.json` to the `updater` pre-release after a Release is **published**; drafts are not picked up.
 
 ## Process-routing component
 
 Process routing runs as the `RoutaProcSvc` Windows service, built on [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) and [WinDivert](https://github.com/basil00/WinDivert). Its files are installed in `%ProgramFiles%\Routa\ProcessRouting`.
 
-The NSIS installer requests UAC at the end of setup to register the service. Declining does not fail installation; enable the component later in the app. MSI and portable builds request UAC when enabling the component from the app.
+On a first install, the NSIS installer requests UAC at the end of setup to register the service. When upgrading, it requests UAC only if the component's files changed, it is owned by another Windows user, or it is not running. Declining does not fail installation; enable or update the component later in the app.
 
-**Before uninstalling an MSI or removing a portable build, uninstall the component from the app.** NSIS uninstallation requests UAC to remove the service and filter rules, with a retry prompt if removal fails. If the component remains installed, programs configured to block may stay offline. To remove the service and rules manually, run this in an administrator PowerShell:
+NSIS uninstallation removes the service and filter rules itself and requests UAC to do so, with a retry prompt if removal fails. If removal fails or you decline UAC, the component remains installed and programs configured to block may stay offline; remove the service and rules manually by running this in an administrator PowerShell:
 
 ```powershell
 & "$env:ProgramFiles\Routa\ProcessRouting\routa-procsvc.exe" --uninstall
@@ -114,13 +125,12 @@ Run or package the application:
 
 ```powershell
 pnpm tauri dev        # Development mode
-pnpm tauri build      # NSIS/MSI installers in src-tauri/target/release/bundle
-pnpm pack:portable    # Portable folder and ZIP in bundle/portable-<timestamp>
+pnpm tauri build      # NSIS installer in src-tauri/target/release/bundle
 ```
 
-`pnpm tauri build` rebuilds the service and frontend automatically. Portable packaging builds the production app and includes `routa.exe`, `mihomo.exe`, `routa-procsvc.exe`, `procsvc\`, the `portable` marker, `LICENSE`, and `build-info.json`.
+`pnpm tauri build` rebuilds the service and frontend automatically.
 
-`build-info.json` records GUI, service, frontend, and file SHA-256 fingerprints. `--skip-build` still verifies source, protocol, and artifact consistency. Use `--out-dir <directory>` to choose the portable output location; existing app folders or ZIPs are rejected to protect any `data` directory. Before a direct `cargo build --release --features custom-protocol`, run `node scripts/build-procsvc.mjs` and `node scripts/build-frontend.mjs`.
+Before a direct `cargo build --release --features custom-protocol`, run `node scripts/build-procsvc.mjs` and `node scripts/build-frontend.mjs`.
 
 ### Checks
 
@@ -128,7 +138,7 @@ pnpm pack:portable    # Portable folder and ZIP in bundle/portable-<timestamp>
 pnpm typecheck
 pnpm test
 pnpm build
-node --test scripts/build-artifacts.test.mjs
+node --test scripts/build-artifacts.test.mjs scripts/updater-manifest.test.mjs
 cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
 ```
 
