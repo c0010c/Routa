@@ -18,6 +18,7 @@ A Windows desktop proxy manager built on [mihomo](https://github.com/MetaCubeX/m
 - **Process routing**: route programs by full executable path to Mixed/Socks listeners, inspect per-process connections and traffic, and choose direct or block on component failure. A separate policy controls behavior when Routa exits normally.
 - **Monitoring and diagnostics**: view core and capture status separately, live and total traffic, active connections and their routes, core logs, port conflicts, and component status.
 - **Desktop integration**: bundled mihomo core, configuration hot reload, automatic core restart after a crash, Windows startup, optional auto-connect, and a choice of minimizing to the tray or exiting when closing the window.
+- **Automatic updates**: NSIS installs check for new versions, download them in the background, and install after you confirm. Process routing follows the "when Routa exits" policy throughout the upgrade.
 
 ## Install
 
@@ -67,6 +68,7 @@ Installed builds store data in `%APPDATA%\dev.routa\`:
 ## Automatic updates
 
 - Only NSIS-installed builds check for updates. Dev builds and old MSI or unpacked executables do not.
+- Versions 0.3.0 and earlier have no updater: install the new NSIS installer manually once; later versions update automatically.
 - The first check runs 10 seconds after start, then every 24 hours; there is no switch to turn it off. **Settings → Check for updates** (设置 → 检查更新) checks manually.
 - New versions download in the background. When ready, an in-app notice offers 现在安装 (Install now) or 稍后 (Later). After 稍后, Routa asks again at the next manual start with a native dialog before the core starts. On Windows autostart (`--autostart`) there is no dialog, only the in-app notice.
 - Installing: Routa first exits normally and tells the service so, hence process routing follows the "Routa 退出时" (when Routa exits) policy for the whole upgrade. The NSIS installer then runs in passive mode and relaunches Routa.
@@ -84,7 +86,7 @@ Installed builds store data in `%APPDATA%\dev.routa\`:
 
 Process routing runs as the `RoutaProcSvc` Windows service, built on [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge) and [WinDivert](https://github.com/basil00/WinDivert). Its files are installed in `%ProgramFiles%\Routa\ProcessRouting`.
 
-The NSIS installer requests UAC at the end of setup to register the service. Declining does not fail installation; enable the component later in the app.
+On a first install, the NSIS installer requests UAC at the end of setup to register the service. When upgrading, it requests UAC only if the component's files changed, it is owned by another Windows user, or it is not running. Declining does not fail installation; enable or update the component later in the app.
 
 NSIS uninstallation removes the service and filter rules itself and requests UAC to do so, with a retry prompt if removal fails. If removal fails or you decline UAC, the component remains installed and programs configured to block may stay offline; remove the service and rules manually by running this in an administrator PowerShell:
 
