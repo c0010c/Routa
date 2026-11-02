@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
 use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
@@ -14,21 +15,53 @@ use windows_sys::Win32::Graphics::Gdi::{
     AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::Shell::{
+    SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-const WM_FRAME: u32 = WM_APP + 1;
+use super::paint::{layout, paint, Frame, Layout};
+use super::view::{ListenerView, Rotation, Screen};
+use crate::desktop::TaskbarStatusMode;
+use crate::model::ListenerId;
+
+const WM_SNAPSHOT: u32 = WM_APP + 1;
 const WM_VISIBLE: u32 = WM_APP + 2;
 const RECONCILE_TIMER: usize = 1;
+const ANIMATION_TIMER: usize = 2;
+const ANIMATION_MS: u32 = 50;
+const SLIDE: Duration = Duration::from_millis(250);
 const CLOSE_COMMAND: usize = 1;
 const CONTROL_CLASS: &str = "RoutaTaskbarStatusControl";
 const STATUS_CLASS: &str = "RoutaTaskbarStatus";
-const WIDTH_AT_96_DPI: i32 = 95;
-const HEIGHT_AT_96_DPI: i32 = 36;
+/// The auto-hidden taskbar leaves about this much on screen.
+const MIN_VISIBLE_TASKBAR_DIVISOR: i32 = 2;
 
-/// Everything one paint needs.
-pub struct Frame;
+/// One second of data; the window thread decides which listener is on screen.
+pub struct Snapshot {
+    pub running: bool,
+    /// The rotation candidates, in display order.
+    pub views: Vec<ListenerView>,
+    pub mode: TaskbarStatusMode,
+}
+
+impl Snapshot {
+    fn ids(&self) -> Vec<ListenerId> {
+        self.views.iter().map(|v| v.id.clone()).collect()
+    }
+
+    fn screen(&self, current: Option<&ListenerId>) -> Screen {
+        if !self.running {
+            return Screen::NotRunning;
+        }
+        current
+            .and_then(|id| self.views.iter().find(|v| &v.id == id))
+            .map_or(Screen::NoListeners, |v| Screen::Listener(v.clone()))
+    }
+}
 
 /// Taskbar-client x of the window: left of the notification area, or the right
 /// edge of the taskbar when that area cannot be measured.
@@ -38,6 +71,12 @@ pub fn place_x(notify_left: i32, tray_width: i32, width: i32) -> i32 {
     } else {
         tray_width - width
     }
+}
+
+/// Whether the topmost fallback window may show. Embedded, the bar simply goes
+/// wherever the taskbar goes; on top of it, it has to step aside by itself.
+pub fn fallback_visible(fullscreen: bool, tray_visible_px: i32, tray_h: i32) -> bool {
+    !fullscreen && tray_visible_px >= tray_h / MIN_VISIBLE_TASKBAR_DIVISOR
 }
 
 /// Windows 11 starts at build 22000; RtlGetVersion ignores manifest shims.
@@ -53,7 +92,7 @@ fn wide(text: &str) -> Vec<u16> {
 
 pub struct Host {
     control: isize,
-    frame: Arc<Mutex<Option<Frame>>>,
+    snapshot: Arc<Mutex<Option<Snapshot>>>,
     thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -63,34 +102,33 @@ impl Host {
         if !supported() {
             return None;
         }
-        let frame = Arc::new(Mutex::new(None));
-        let shared = frame.clone();
+        let snapshot = Arc::new(Mutex::new(None));
+        let shared = snapshot.clone();
         let (ready, control) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("taskbar-status".into())
             .spawn(move || run(on_left, on_close, shared, ready))
             .ok()?;
         let control = control.recv().ok()??;
-        Some(Host { control, frame, thread: Mutex::new(Some(thread)) })
+        Some(Host { control, snapshot, thread: Mutex::new(Some(thread)) })
     }
 
     pub fn set_visible(&self, visible: bool) {
         unsafe { PostMessageW(self.control as HWND, WM_VISIBLE, visible as usize, 0) };
     }
 
-    pub fn update(&self, frame: Frame) {
-        *self.frame.lock().unwrap() = Some(frame);
-        unsafe { PostMessageW(self.control as HWND, WM_FRAME, 0, 0) };
+    pub fn update(&self, snapshot: Snapshot) {
+        *self.snapshot.lock().unwrap() = Some(snapshot);
+        unsafe { PostMessageW(self.control as HWND, WM_SNAPSHOT, 0, 0) };
     }
 
     /// Destroys the window; the bar must not outlive the app on the taskbar.
     pub fn shutdown(&self) {
+        let Some(thread) = self.thread.lock().unwrap().take() else { return };
         unsafe { PostMessageW(self.control as HWND, WM_CLOSE, 0, 0) };
-        if let Some(thread) = self.thread.lock().unwrap().take() {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-            while !thread.is_finished() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !thread.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
@@ -102,10 +140,20 @@ struct State {
     embedded: bool,
     visible: bool,
     bounds: (i32, i32, i32, i32),
+    layout: Layout,
+    light: bool,
     taskbar_created: u32,
     on_left: Box<dyn Fn() + Send>,
     on_close: Box<dyn Fn() + Send>,
-    frame: Arc<Mutex<Option<Frame>>>,
+    incoming: Arc<Mutex<Option<Snapshot>>>,
+    snapshot: Option<Snapshot>,
+    rotation: Rotation,
+    current: Option<ListenerId>,
+    previous: Option<Screen>,
+    slide_started: Option<Instant>,
+    name_started: Instant,
+    scroll_done: bool,
+    animating: bool,
 }
 
 thread_local! {
@@ -121,7 +169,7 @@ type WndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
 fn run(
     on_left: Box<dyn Fn() + Send>,
     on_close: Box<dyn Fn() + Send>,
-    frame: Arc<Mutex<Option<Frame>>>,
+    incoming: Arc<Mutex<Option<Snapshot>>>,
     ready: mpsc::Sender<Option<isize>>,
 ) {
     unsafe {
@@ -163,10 +211,20 @@ fn run(
                 embedded: false,
                 visible: true,
                 bounds: (0, 0, 0, 0),
+                layout: layout(96),
+                light: system_uses_light_theme(),
                 taskbar_created,
                 on_left,
                 on_close,
-                frame,
+                incoming,
+                snapshot: None,
+                rotation: Rotation::default(),
+                current: None,
+                previous: None,
+                slide_started: None,
+                name_started: Instant::now(),
+                scroll_done: true,
+                animating: false,
             })
         });
         SetTimer(control, RECONCILE_TIMER, 1000, None);
@@ -184,12 +242,21 @@ fn run(
 unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let taskbar_created = STATE.with(|state| state.try_borrow().ok().and_then(|s| s.as_ref().map(|s| s.taskbar_created)));
     match msg {
-        WM_TIMER => {
+        WM_TIMER if wparam == RECONCILE_TIMER => {
             with_state(reconcile);
             0
         }
-        WM_FRAME => {
-            with_state(paint);
+        WM_TIMER if wparam == ANIMATION_TIMER => {
+            with_state(render);
+            0
+        }
+        WM_SNAPSHOT => {
+            with_state(|s| {
+                if let Some(snapshot) = s.incoming.lock().unwrap().take() {
+                    s.snapshot = Some(snapshot);
+                }
+                render(s);
+            });
             0
         }
         WM_VISIBLE => {
@@ -264,6 +331,30 @@ fn rect_of(hwnd: HWND) -> Option<RECT> {
     (!hwnd.is_null() && unsafe { GetWindowRect(hwnd, &mut rect) } != 0).then_some(rect)
 }
 
+fn system_uses_light_theme() -> bool {
+    let (key, value) = (wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"), wide("SystemUsesLightTheme"));
+    let mut data = 0u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            &mut data as *mut u32 as *mut _,
+            &mut size,
+        )
+    };
+    status == 0 && data != 0
+}
+
+fn fullscreen_app_running() -> bool {
+    let mut state = 0;
+    let queried = unsafe { SHQueryUserNotificationState(&mut state) } == 0;
+    queried && matches!(state, QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE)
+}
+
 /// Runs every second and on "TaskbarCreated": Explorer destroys our child when
 /// it restarts, and the tray widens as icons come and go.
 fn reconcile(s: &mut State) {
@@ -305,28 +396,37 @@ fn reconcile(s: &mut State) {
                 return;
             }
         }
-        if !s.embedded {
-            s.embedded = embed(s.window, tray);
+        if !s.embedded && embed(s.window, tray) {
+            s.embedded = true;
             s.bounds = (0, 0, 0, 0);
         }
-        let dpi = GetDpiForWindow(tray).max(96) as i32;
-        let (width, height) = (WIDTH_AT_96_DPI * dpi / 96, HEIGHT_AT_96_DPI * dpi / 96);
+        s.layout = layout(GetDpiForWindow(tray).max(96));
         let tray_height = tray_rect.bottom - tray_rect.top;
         let notify_left = rect_of(find(tray, "TrayNotifyWnd")).map_or(0, |r| r.left - tray_rect.left);
-        let mut x = place_x(notify_left, tray_rect.right - tray_rect.left, width);
-        let mut y = (tray_height - height) / 2;
+        let mut x = place_x(notify_left, tray_rect.right - tray_rect.left, s.layout.width);
+        let mut y = (tray_height - s.layout.height) / 2;
+        let mut show = true;
         if !s.embedded {
             x += tray_rect.left;
             y += tray_rect.top;
+            let on_screen = tray_rect.bottom.min(GetSystemMetrics(SM_CYSCREEN)) - tray_rect.top.max(0);
+            show = fallback_visible(fullscreen_app_running(), on_screen, tray_height);
         }
-        let bounds = (x, y, width, height);
-        if bounds != s.bounds {
+        let bounds = (x, y, s.layout.width, s.layout.height);
+        if !show {
+            ShowWindow(s.window, SW_HIDE);
+        } else if bounds != s.bounds {
             s.bounds = bounds;
             let after = if s.embedded { HWND_TOP } else { HWND_TOPMOST };
-            SetWindowPos(s.window, after, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-            paint(s);
+            SetWindowPos(s.window, after, x, y, bounds.2, bounds.3, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            render(s);
         } else if IsWindowVisible(s.window) == 0 {
             ShowWindow(s.window, SW_SHOWNOACTIVATE);
+        }
+        let light = system_uses_light_theme();
+        if light != s.light {
+            s.light = light;
+            render(s);
         }
     }
 }
@@ -342,12 +442,61 @@ fn embed(window: HWND, tray: HWND) -> bool {
     }
 }
 
-fn paint(s: &mut State) {
-    let (_, _, width, height) = s.bounds;
-    if s.window.is_null() || width <= 0 || height <= 0 {
+/// Advances rotation and animation, then draws. Idle, this runs once a second;
+/// the fast timer only lives while something moves.
+fn render(s: &mut State) {
+    if s.window.is_null() || s.bounds.2 <= 0 || !s.visible {
+        set_animating(s, false);
         return;
     }
-    let _frame = s.frame.lock().unwrap().take();
+    let now = Instant::now();
+    let mut screen = Screen::NotRunning;
+    if let Some(snapshot) = &s.snapshot {
+        let next = s.rotation.next_slide(now, s.scroll_done, &snapshot.ids(), &snapshot.mode);
+        if next != s.current {
+            s.previous = s.current.as_ref().map(|id| snapshot.screen(Some(id)));
+            s.slide_started = s.current.as_ref().map(|_| now);
+            s.name_started = now;
+            s.scroll_done = false;
+            s.current = next;
+        } else if s.scroll_done {
+            // Still on screen after reading to the end: scroll it again.
+            s.name_started = now;
+        }
+        screen = snapshot.screen(s.current.as_ref());
+    }
+    let progress = s.slide_started.map_or(1.0, |at| now.duration_since(at).as_secs_f32() / SLIDE.as_secs_f32());
+    if progress >= 1.0 {
+        s.slide_started = None;
+        s.previous = None;
+    }
+    let frame = Frame {
+        screen,
+        previous: s.previous.clone(),
+        slide_progress: progress,
+        name_elapsed: now.duration_since(s.name_started),
+        light: s.light,
+    };
+    s.scroll_done = draw(s, &frame);
+    set_animating(s, s.slide_started.is_some() || !s.scroll_done);
+}
+
+fn set_animating(s: &mut State, animating: bool) {
+    if animating != s.animating {
+        s.animating = animating;
+        unsafe {
+            if animating {
+                SetTimer(s.control, ANIMATION_TIMER, ANIMATION_MS, None);
+            } else {
+                KillTimer(s.control, ANIMATION_TIMER);
+            }
+        }
+    }
+}
+
+fn draw(s: &State, frame: &Frame) -> bool {
+    let Layout { width, height, .. } = s.layout;
+    let mut done = true;
     unsafe {
         let screen = GetDC(std::ptr::null_mut());
         let dc = CreateCompatibleDC(screen);
@@ -363,8 +512,7 @@ fn paint(s: &mut State) {
         if !bitmap.is_null() && !bits.is_null() {
             let old = SelectObject(dc, bitmap);
             let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, (width * height) as usize);
-            // Placeholder: half-transparent blue (premultiplied).
-            pixels.fill(0x80_00_40_80);
+            done = paint(frame, &s.layout, pixels);
             let size = SIZE { cx: width, cy: height };
             let source = POINT { x: 0, y: 0 };
             let blend = BLENDFUNCTION {
@@ -382,11 +530,37 @@ fn paint(s: &mut State) {
         DeleteDC(dc);
         ReleaseDC(std::ptr::null_mut(), screen);
     }
+    done
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fallback_hidden_for_fullscreen_or_autohide() {
+        assert!(fallback_visible(false, 48, 48));
+        assert!(!fallback_visible(true, 48, 48));
+        assert!(!fallback_visible(false, 2, 48));
+    }
+
+    #[test]
+    fn snapshot_screen_follows_state_and_current_listener() {
+        use crate::taskbar_status::view::DelayView;
+        let view = ListenerView {
+            id: ListenerId("a".into()),
+            node: "甲".into(),
+            delay: DelayView::Unknown,
+            up: 0,
+            down: 0,
+            series: vec![],
+        };
+        let mut snapshot = Snapshot { running: true, views: vec![view.clone()], mode: TaskbarStatusMode::Rotate };
+        assert_eq!(snapshot.screen(Some(&ListenerId("a".into()))), Screen::Listener(view));
+        assert_eq!(snapshot.screen(None), Screen::NoListeners);
+        snapshot.running = false;
+        assert_eq!(snapshot.screen(Some(&ListenerId("a".into()))), Screen::NotRunning);
+    }
 
     #[test]
     fn place_x_uses_notify_left_then_falls_back() {
