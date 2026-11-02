@@ -12,5 +12,21 @@ fn main() {
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         print!("{}", String::from_utf8_lossy(&output.stdout));
     }
-    tauri_build::build()
+    // Layered child windows (the taskbar status bar) need a declared Windows 8+ target.
+    const MANIFEST: &str = r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*" />
+    </dependentAssembly>
+  </dependency>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>"#;
+    tauri_build::try_build(
+        tauri_build::Attributes::new().windows_attributes(tauri_build::WindowsAttributes::new().app_manifest(MANIFEST)),
+    )
+    .expect("failed to run tauri-build");
 }

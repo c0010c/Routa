@@ -13,6 +13,8 @@ pub mod subscription;
 pub mod system_proxy;
 pub mod tailnet;
 pub mod tailscale;
+#[cfg(windows)]
+pub mod taskbar_status;
 pub mod tray;
 pub mod updater;
 
@@ -229,6 +231,8 @@ pub fn run() {
             app.manage(rt.clone());
             app.manage(updater.clone());
             tray::setup(app.handle())?;
+            #[cfg(windows)]
+            taskbar_status::spawn(app.handle());
             reregister_autostart(app.handle());
             let autostarted = std::env::args().any(|a| a == AUTOSTART_ARG);
             let handle = app.handle().clone();
