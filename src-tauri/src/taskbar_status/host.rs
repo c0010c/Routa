@@ -124,7 +124,7 @@ pub struct Host {
 
 impl Host {
     /// `None` below Windows 11 or when the window thread cannot start.
-    pub fn spawn(on_left: Box<dyn Fn() + Send>, on_close: Box<dyn Fn() + Send>) -> Option<Host> {
+    pub fn spawn(on_close: Box<dyn Fn() + Send>) -> Option<Host> {
         if !supported() {
             return None;
         }
@@ -133,7 +133,7 @@ impl Host {
         let (ready, control) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("taskbar-status".into())
-            .spawn(move || run(on_left, on_close, shared, ready))
+            .spawn(move || run(on_close, shared, ready))
             .ok()?;
         let control = control.recv().ok()??;
         Some(Host { control, snapshot, thread: Mutex::new(Some(thread)) })
@@ -170,7 +170,6 @@ struct State {
     layout: Layout,
     light: bool,
     taskbar_created: u32,
-    on_left: Box<dyn Fn() + Send>,
     on_close: Box<dyn Fn() + Send>,
     incoming: Arc<Mutex<Option<Snapshot>>>,
     snapshot: Option<Snapshot>,
@@ -196,7 +195,6 @@ fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> Option<R> {
 type WndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
 
 fn run(
-    on_left: Box<dyn Fn() + Send>,
     on_close: Box<dyn Fn() + Send>,
     incoming: Arc<Mutex<Option<Snapshot>>>,
     ready: mpsc::Sender<Option<isize>>,
@@ -244,7 +242,6 @@ fn run(
                 layout: layout(96),
                 light: system_uses_light_theme(),
                 taskbar_created,
-                on_left,
                 on_close,
                 incoming,
                 snapshot: None,
@@ -327,10 +324,6 @@ unsafe extern "system" fn status_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
     match msg {
         // Asking the taskbar (the parent) could eat the click.
         WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
-        WM_LBUTTONUP => {
-            with_state(|s| (s.on_left)());
-            0
-        }
         // The state borrow is released while the menu's nested loop runs.
         WM_RBUTTONUP => {
             let control = with_state(|s| s.control);

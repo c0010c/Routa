@@ -47,10 +47,8 @@ fn snapshot(rt: &Runtime, desktop: &Desktop, history: &mut History) -> Snapshot 
 
 /// `None` where the bar is unsupported (below Windows 11).
 pub fn spawn(app: &AppHandle, rt: Arc<Runtime>, desktop: Arc<Desktop>) -> Option<TaskbarStatus> {
-    let left = app.clone();
     let (close_app, close_desktop) = (app.clone(), desktop.clone());
     let host = Arc::new(Host::spawn(
-        Box::new(move || crate::tray::show_main_window(&left)),
         Box::new(move || {
             let (app, desktop) = (close_app.clone(), close_desktop.clone());
             tauri::async_runtime::spawn(async move {
