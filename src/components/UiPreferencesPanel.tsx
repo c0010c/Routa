@@ -122,27 +122,41 @@ export function UiPreferencesPanel() {
             slotProps={{ input: { "aria-label": "任务栏状态栏" } }}
           />
           {supported && taskbar.enabled && (
-            <Select
-              size="small"
-              aria-label="显示内容"
-              value={shown}
-              disabled={feedback.pending || ui.saving}
-              onChange={(e) =>
-                void update({
-                  taskbar_status: {
-                    ...taskbar,
-                    mode: e.target.value === "rotate" ? "Rotate" : { Fixed: e.target.value },
-                  },
-                })
-              }
-            >
-              <MenuItem value="rotate">轮播</MenuItem>
-              {listeners.map((l) => (
-                <MenuItem key={l.id} value={l.id}>
-                  固定：{l.name}
+            <Stack direction="row" spacing={1}>
+              <Select
+                size="small"
+                aria-label="显示内容"
+                value={shown === "rotate" ? "rotate" : "fixed"}
+                disabled={feedback.pending || ui.saving}
+                onChange={(e) => {
+                  const first = listeners[0]?.id;
+                  const mode = e.target.value === "fixed" && first ? { Fixed: first } : "Rotate";
+                  void update({ taskbar_status: { ...taskbar, mode } });
+                }}
+              >
+                <MenuItem value="rotate">轮播</MenuItem>
+                <MenuItem value="fixed" disabled={listeners.length === 0}>
+                  固定
                 </MenuItem>
-              ))}
-            </Select>
+              </Select>
+              {shown !== "rotate" && (
+                <Select
+                  size="small"
+                  aria-label="固定的代理"
+                  value={shown}
+                  disabled={feedback.pending || ui.saving}
+                  onChange={(e) =>
+                    void update({ taskbar_status: { ...taskbar, mode: { Fixed: e.target.value } } })
+                  }
+                >
+                  {listeners.map((l) => (
+                    <MenuItem key={l.id} value={l.id}>
+                      {l.name}（{l.port}）
+                    </MenuItem>
+                  ))}
+                </Select>
+              )}
+            </Stack>
           )}
           <SaveFeedback notice={feedback.notices.taskbar_status} />
         </Stack>

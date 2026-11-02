@@ -23,6 +23,9 @@ const SCROLL_PX_PER_SEC: f32 = 24.0;
 /// Keeps transparent pixels clickable: a zero alpha lets the mouse through.
 const HIT_TEST_PIXEL: u32 = 0x0100_0000;
 const AREA_COVERAGE: u32 = 77;
+/// Text is drawn this many times larger and averaged down: GDI's own
+/// antialiasing is mostly switched off by the font's hinting at small sizes.
+const TEXT_SUPERSAMPLE: i32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
@@ -147,8 +150,8 @@ impl<'a> Painter<'a> {
             }
             let mut info: BITMAPINFO = std::mem::zeroed();
             info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            info.bmiHeader.biWidth = layout.width;
-            info.bmiHeader.biHeight = -layout.height;
+            info.bmiHeader.biWidth = layout.width * TEXT_SUPERSAMPLE;
+            info.bmiHeader.biHeight = -layout.height * TEXT_SUPERSAMPLE;
             info.bmiHeader.biPlanes = 1;
             info.bmiHeader.biBitCount = 32;
             info.bmiHeader.biCompression = BI_RGB;
@@ -159,9 +162,9 @@ impl<'a> Painter<'a> {
                 return None;
             }
             SelectObject(dc, bitmap);
-            let face: Vec<u16> = "Segoe UI".encode_utf16().chain(Some(0)).collect();
+            let face: Vec<u16> = "Microsoft YaHei UI".encode_utf16().chain(Some(0)).collect();
             let font = CreateFontW(
-                -layout.font_h, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, ANTIALIASED_QUALITY as _, 0, face.as_ptr(),
+                -layout.font_h * TEXT_SUPERSAMPLE, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, ANTIALIASED_QUALITY as _, 0, face.as_ptr(),
             );
             SelectObject(dc, font);
             SetBkMode(dc, TRANSPARENT as _);
@@ -170,27 +173,33 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// In output pixels.
     fn text_size(&self, text: &[u16]) -> SIZE {
         let mut size = SIZE { cx: 0, cy: 0 };
         unsafe { GetTextExtentPoint32W(self.dc, text.as_ptr(), text.len() as i32, &mut size) };
-        size
+        SIZE { cx: size.cx / TEXT_SUPERSAMPLE, cy: size.cy / TEXT_SUPERSAMPLE }
     }
 
     /// GDI leaves alpha at zero, so text goes white-on-black into the mask and
     /// its brightness becomes the coverage of the wanted color.
     fn text(&mut self, text: &str, x: i32, center_y: i32, clip: (i32, i32), rgb: u32, offset: i32) {
-        let (w, h) = (self.layout.width, self.layout.height);
+        let (w, h, n) = (self.layout.width, self.layout.height, TEXT_SUPERSAMPLE);
         let utf16: Vec<u16> = text.encode_utf16().collect();
         let top = center_y - self.text_size(&utf16).cy / 2;
-        let mask = unsafe { std::slice::from_raw_parts_mut(self.mask, (w * h) as usize) };
+        let mask = unsafe { std::slice::from_raw_parts_mut(self.mask, (w * h * n * n) as usize) };
         mask.fill(0);
-        unsafe { TextOutW(self.dc, x - offset, top, utf16.as_ptr(), utf16.len() as i32) };
+        unsafe { TextOutW(self.dc, (x - offset) * n, top * n, utf16.as_ptr(), utf16.len() as i32) };
         for py in 0..h {
             for px in clip.0.max(0)..clip.1.min(w) {
-                let index = (py * w + px) as usize;
-                let coverage = (mask[index] >> 8) & 255;
+                let mut sum = 0;
+                for sy in py * n..(py + 1) * n {
+                    for sx in px * n..(px + 1) * n {
+                        sum += (mask[(sy * w * n + sx) as usize] >> 8) & 255;
+                    }
+                }
+                let coverage = sum / (n * n) as u32;
                 if coverage > 0 {
-                    blend(&mut self.pixels[index], rgb, coverage);
+                    blend(&mut self.pixels[(py * w + px) as usize], rgb, coverage);
                 }
             }
         }
@@ -375,6 +384,20 @@ mod tests {
         f.name_elapsed = Duration::from_secs(120);
         assert!(painted(&f).1.scroll_done);
         assert!(painted(&frame(Screen::NotRunning)).1.scroll_done);
+    }
+
+    /// Share of inked pixels that are edge shades rather than solid or empty.
+    fn edge_share(screen: Screen) -> f32 {
+        let (pixels, _) = painted(&frame(screen));
+        let alphas: Vec<u32> = pixels.iter().map(|p| p >> 24).filter(|a| *a > 1).collect();
+        alphas.iter().filter(|a| **a < 230).count() as f32 / alphas.len() as f32
+    }
+
+    #[test]
+    fn text_edges_are_smoothly_antialiased() {
+        // Hinted GDI text at this size is mostly solid pixels with jagged edges.
+        let share = edge_share(Screen::NotRunning);
+        assert!(share > 0.5, "edge share {share}");
     }
 
     #[test]
