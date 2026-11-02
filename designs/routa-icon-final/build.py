@@ -32,11 +32,20 @@ GRAD = (f'<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" s
         f'<stop offset="1" stop-color="{BLUE_BOTTOM}"/></linearGradient>')
 
 # 1) 主图标（48 px 及以上）
+# 图形在底板中的占比：参考钉钉，主图标图形宽约占底板 63%，小尺寸版留得稍满（约 72%）保证可读。
+# 轨道图形的视觉外框中心约在 (122, 135)，以它为基准缩放后放到画布中心。
+MASTER_SCALE, SMALL_SCALE = 0.72, 0.74
+
+
+def fit(glyph, s):
+    return f'<g transform="translate(128 128) scale({s}) translate(-122 -135)">{glyph}</g>'
+
+
 master = doc('<rect width="256" height="256" rx="58" fill="url(#bg)"/>'
-             + orbit(100, 44, 12, (24, 18, 32), ("#fff", LIGHT, "#fff")), GRAD)
+             + fit(orbit(100, 44, 14, (25, 19, 33), ("#fff", LIGHT, "#fff")), MASTER_SCALE), GRAD)
 # 2) 小尺寸版（16 / 24 / 32 px）：圆角更小、轨道加粗、节点放大、远处节点也用纯白
 small = doc('<rect width="256" height="256" rx="44" fill="url(#bg)"/>'
-            + orbit(98, 50, 22, (34, 28, 44), ("#fff", "#fff", "#fff")), GRAD)
+            + fit(orbit(98, 50, 24, (33, 27, 42), ("#fff", "#fff", "#fff")), SMALL_SCALE), GRAD)
 # 3) 托盘单色（透明底）
 tray_glyph = lambda c: orbit(104, 52, 24, (36, 30, 46), (c, c, c), ring_color=c)
 tray_dark = doc(tray_glyph("#FFFFFF"))      # 深色任务栏

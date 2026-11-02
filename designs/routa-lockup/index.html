@@ -1,0 +1,61 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Routa · 组合标志</title>
+<style>
+body{margin:0;padding:40px 48px;background:#F5F6F8;font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif;color:#1F2937}
+h1{margin:0 0 6px;font-size:26px} h2{font-size:18px;margin:32px 0 12px} .sub{color:#6B7280}
+.row{display:flex;gap:20px;flex-wrap:wrap}
+.box{border-radius:16px;padding:32px;display:flex;align-items:center;justify-content:center}
+.light{background:#fff} .dark{background:#0F172A} .blue{background:#EAF3FF}
+.cap{color:#6B7280;font-size:13px;margin-top:6px}
+table{border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden} td,th{padding:8px 14px;border-bottom:1px solid #EEF0F3;text-align:left}
+</style>
+<h1>Routa · 组合标志（横版 / 竖版 / 字标 / 横幅）</h1>
+<div class="sub">图标：C7「钉钉蓝 · 轨道」（designs/routa-icon-final/svg/master.svg）。字标「Routa」由等粗圆头笔画构成，不依赖字体。</div>
+
+<h2>横版 · 裸符号（主用）</h2>
+<div class="row">
+  <div><div class="box light"><img src="svg/bare-light.svg" width="440"></div><div class="cap">bare-light · 浅色底（主用）</div></div>
+  <div><div class="box dark"><img src="svg/bare-dark.svg" width="440"></div><div class="cap">bare-dark · 深色底</div></div>
+</div>
+<div class="row" style="margin-top:16px">
+  <div><div class="box light"><img src="svg/bare-mono-black.svg" width="300"></div><div class="cap">bare-mono-black · 单色（打印 / 单色场合）</div></div>
+  <div><div class="box" style="background:#1677FF"><img src="svg/bare-mono-white.svg" width="300"></div><div class="cap">bare-mono-white · 单色反白（彩色底）</div></div>
+  <div><div class="box light"><img src="svg/symbol-bare.svg" width="120"></div><div class="cap">symbol-bare · 裸符号单独</div></div>
+</div>
+<h2>README / 官网横幅（裸符号版）</h2>
+<img src="svg/banner-bare-1280x320.svg" width="960" style="border-radius:12px">
+<h2>缩小测试（裸符号横版）</h2>
+<div class="box light" style="justify-content:flex-start;gap:28px">
+  <img src="svg/bare-light.svg" height="64"><img src="svg/bare-light.svg" height="40"><img src="svg/bare-light.svg" height="28"><img src="svg/bare-light.svg" height="20">
+</div>
+<h2>其它版本（带圆角底板）</h2>
+<div class="row">
+  <div><div class="box light"><img src="svg/lockup-horizontal.svg" width="420"></div><div class="cap">lockup-horizontal · 浅色底</div></div>
+  <div><div class="box dark"><img src="svg/lockup-horizontal-white.svg" width="420"></div><div class="cap">lockup-horizontal-white · 深色底</div></div>
+</div>
+
+
+<h2>竖版 / 字标</h2>
+<div class="row">
+  <div><div class="box light"><img src="svg/lockup-stacked.svg" width="200"></div><div class="cap">lockup-stacked</div></div>
+  <div><div class="box light"><img src="svg/wordmark.svg" width="260"></div><div class="cap">wordmark</div></div>
+  <div><div class="box dark"><img src="svg/wordmark-white.svg" width="260"></div><div class="cap">wordmark-white</div></div>
+</div>
+
+<h2>README / 官网横幅</h2>
+<img src="svg/banner-1280x320.svg" width="960" style="border-radius:12px">
+
+<h2>缩小测试（横版）</h2>
+<div class="box light" style="justify-content:flex-start;gap:28px">
+  <img src="svg/lockup-horizontal.svg" height="64"><img src="svg/lockup-horizontal.svg" height="40"><img src="svg/lockup-horizontal.svg" height="28"><img src="svg/lockup-horizontal.svg" height="20">
+</div>
+
+<h2>使用规范</h2>
+<table>
+<tr><th>项目</th><th>规定</th></tr>
+<tr><td>安全留白</td><td>四周至少留出“前方大节点的直径”（约图标高度的 1/4）</td></tr>
+<tr><td>最小尺寸</td><td>横版高度 ≥ 20 px（屏幕）；更小时只用图标</td></tr>
+<tr><td>主用版本</td><td>横版裸符号 bare-light（浅底）/ bare-dark（深底）；带圆角底板的横版用于应用商店、安装包等需要“像 App 图标”的场合</td></tr>
+<tr><td>图标与字标比例</td><td>字标大写高 = 图标高 × 0.42，间距 = 图标高 × 0.22，字标与图标垂直居中对齐，不要单独缩放其中一个</td></tr>
+<tr><td>颜色</td><td>图标渐变 #2BA6FF → #0071E6；字标浅底用 #0B1B33，深底用 #FFFFFF</td></tr>
+<tr><td>禁止</td><td>拉伸变形、改字标颜色为其他彩色、给字标加描边或阴影、把图标放在字标右侧</td></tr>
+</table>

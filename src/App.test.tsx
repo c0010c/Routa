@@ -60,7 +60,7 @@ describe("Layout sidebar", () => {
   it("shows the brand and version", async () => {
     render(<App />);
     const nav = await screen.findByRole("navigation", { name: "主导航" });
-    expect(screen.getByText("Routa")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Routa" })).toBeInTheDocument();
     expect(screen.getByText(`v${pkg.version}`)).toBeInTheDocument();
     expect(nav).toBeInTheDocument();
   });

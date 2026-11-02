@@ -16,7 +16,7 @@ import {
 } from "@mui/material";
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { BrandMark } from "./BrandMark";
+import { BrandLockup } from "./BrandLockup";
 import { UpdateNotice } from "./UpdateNotice";
 import pkg from "../../package.json";
 
@@ -62,11 +62,9 @@ export function Layout({ children }: { children: ReactNode }) {
       >
         <Stack
           direction="row"
-          spacing={1.25}
           sx={{ alignItems: "center", px: 2.5, pt: 2, pb: 1.5 }}
         >
-          <BrandMark size={24} />
-          <Typography sx={{ fontWeight: 600 }}>Routa</Typography>
+          <BrandLockup height={30} />
         </Stack>
         <List
           component="nav"
