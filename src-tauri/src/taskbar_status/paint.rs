@@ -23,6 +23,9 @@ const SCROLL_PX_PER_SEC: f32 = 24.0;
 /// Keeps transparent pixels clickable: a zero alpha lets the mouse through.
 const HIT_TEST_PIXEL: u32 = 0x0100_0000;
 const AREA_COVERAGE: u32 = 77;
+/// Chart margins at 96 DPI; the bottom one clears the running-app indicator.
+const CHART_TOP: f32 = 4.0;
+const CHART_BOTTOM: f32 = 6.0;
 /// Text is drawn this many times larger and averaged down: GDI's own
 /// antialiasing is mostly switched off by the font's hinting at small sizes.
 const TEXT_SUPERSAMPLE: i32 = 4;
@@ -206,12 +209,21 @@ impl<'a> Painter<'a> {
     }
 
     fn chart(&mut self, series: &[crate::stats::traffic::Rate], dy: i32) {
+        // Nothing at all beats a flat line, which reads as a running indicator.
+        if series.iter().all(|r| r.up == 0 && r.down == 0) {
+            return;
+        }
         let (w, h, chart_w) = (self.layout.width, self.layout.height, self.layout.chart_w);
-        let thickness = (self.layout.font_h as f32 / 12.0).max(1.0);
-        let (up, down) = chart_points(series, (chart_w - 1) as f32, (h - 1) as f32);
+        let scale = h as f32 / HEIGHT as f32;
+        let thickness = scale.max(1.0);
+        // The baseline sits above the strip where Windows draws running indicators.
+        let (top, base) = (CHART_TOP * scale, h as f32 - CHART_BOTTOM * scale);
+        let (up, down) = chart_points(series, (chart_w - 1) as f32, base - top);
+        let shift = |line: Vec<(f32, f32)>| line.into_iter().map(|(x, y)| (x, y + top)).collect::<Vec<_>>();
+        let (up, down) = (shift(up), shift(down));
         for py in 0..h {
             let local = (py - dy) as f32 + 0.5;
-            if local < 0.0 || local > h as f32 {
+            if local < 0.0 || local > base {
                 continue;
             }
             for px in 0..chart_w {
@@ -398,6 +410,35 @@ mod tests {
         // Hinted GDI text at this size is mostly solid pixels with jagged edges.
         let share = edge_share(Screen::NotRunning);
         assert!(share > 0.5, "edge share {share}");
+    }
+
+    fn listener_with(series: Vec<Rate>) -> Screen {
+        let Screen::Listener(mut view) = listener_screen() else { unreachable!() };
+        view.series = series;
+        Screen::Listener(view)
+    }
+
+    /// Whether anything but the transparent hit-test pixel lies in these chart rows.
+    fn chart_inked(screen: Screen, rows: std::ops::Range<i32>) -> bool {
+        let (pixels, _) = painted(&frame(screen));
+        let layout = layout(96);
+        rows.flat_map(|y| (0..layout.chart_w).map(move |x| (y * layout.width + x) as usize))
+            .any(|i| pixels[i] >> 24 > 1)
+    }
+
+    #[test]
+    fn chart_is_empty_without_traffic() {
+        // A flat line on the bottom edge reads as another app's running indicator.
+        assert!(!chart_inked(listener_with(vec![Rate::default(); 10]), 0..layout(96).height));
+    }
+
+    #[test]
+    fn chart_stays_clear_of_the_taskbar_running_indicator() {
+        let h = layout(96).height;
+        let series = (0..10).map(|i| Rate { up: 0, down: i % 2 * 1000 }).collect();
+        assert!(chart_inked(listener_with(series), 0..h));
+        let series = (0..10).map(|i| Rate { up: 0, down: i % 2 * 1000 }).collect();
+        assert!(!chart_inked(listener_with(series), h - 4..h));
     }
 
     #[test]
