@@ -1,6 +1,7 @@
 //! Windows 11 taskbar status bar: traffic chart, rates, node and delay.
 
 pub mod host;
+pub mod paint;
 pub mod view;
 
 use tauri::{AppHandle, Manager};
