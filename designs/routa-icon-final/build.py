@@ -1,4 +1,4 @@
-"""Routa 最终图标（C7「钉钉蓝 · 轨道」精修版）：主图标、小尺寸版、托盘单色与状态图标，以及多尺寸 ICO。"""
+"""Routa 最终图标（C7「钉钉蓝 · 轨道」精修版）：主图标、小尺寸版、托盘状态图标，以及多尺寸 ICO。"""
 import math
 import struct
 from pathlib import Path
@@ -46,20 +46,23 @@ master = doc('<rect width="256" height="256" rx="58" fill="url(#bg)"/>'
 # 2) 小尺寸版（16 / 24 / 32 px）：圆角更小、轨道加粗、节点放大、远处节点也用纯白
 small = doc('<rect width="256" height="256" rx="44" fill="url(#bg)"/>'
             + fit(orbit(98, 50, 24, (33, 27, 42), ("#fff", "#fff", "#fff")), SMALL_SCALE), GRAD)
-# 3) 托盘单色（透明底）
-tray_glyph = lambda c: orbit(104, 52, 24, (36, 30, 46), (c, c, c), ring_color=c)
-tray_dark = doc(tray_glyph("#FFFFFF"))      # 深色任务栏
-tray_light = doc(tray_glyph("#1A1A1A"))     # 浅色任务栏
-# 4) 托盘状态（深色任务栏）
-st_on = doc(orbit(104, 52, 24, (36, 30, 46), ("#fff", "#fff", "#4ADE80")))
-st_warn = doc(orbit(104, 52, 24, (36, 30, 46), ("#fff", None, "#FBBF24"))
-              + '<g transform="rotate(-18 128 132)"><circle cx="{:.1f}" cy="{:.1f}" r="24" fill="none" stroke="#fff" stroke-width="10"/></g>'.format(
-                  128 + 104 * pt(330)[0], 132 + 52 * pt(330)[1]))
-st_off = doc(orbit(104, 52, 18, (32, 26, 40), ("#8B95A5", "#8B95A5", "#8B95A5"), ring_color="#8B95A5",
-                   ring_extra='stroke-dasharray="20 16"'))
+# 3) 托盘状态：实心底板 + 加粗轨道，底色表示状态，不依赖任务栏深浅。
+# 16 px 下轨道也有约 1.5 px 粗；未连接额外加一道斜杠，只靠形状也能区分。
+TRAY_SCALE = 0.80
+TRAY_BLUE, TRAY_AMBER, TRAY_GREY = "#0A84FF", "#FBBF24", "#64748B"
 
-files = {"master": master, "small": small, "tray-dark": tray_dark, "tray-light": tray_light,
-         "tray-connected": st_on, "tray-warning": st_warn, "tray-disconnected": st_off}
+
+def tray_tile(bg, ink="#fff", slash=False):
+    glyph = fit(orbit(100, 62, 28, (28, 22, 34), (ink, ink, ink), ring_color=ink), TRAY_SCALE)
+    cut = (f'<path d="M48 48 208 208" stroke="{bg}" stroke-width="58" stroke-linecap="round"/>'
+           f'<path d="M48 48 208 208" stroke="{ink}" stroke-width="26" stroke-linecap="round"/>') if slash else ""
+    return doc(f'<rect width="256" height="256" rx="56" fill="{bg}"/>{glyph}{cut}')
+
+
+tray = {"tray-idle": tray_tile(TRAY_GREY), "tray-connected": tray_tile(TRAY_BLUE),
+        "tray-warning": tray_tile(TRAY_AMBER, ink="#1A1A1A"), "tray-disconnected": tray_tile(TRAY_GREY, slash=True)}
+
+files = {"master": master, "small": small, **tray}
 for name, content in files.items():
     (SVG / f"{name}.svg").write_text(content, encoding="utf-8")
 print("svg:", ", ".join(files))
