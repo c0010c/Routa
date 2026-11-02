@@ -79,6 +79,17 @@ pub fn fallback_visible(fullscreen: bool, tray_visible_px: i32, tray_h: i32) -> 
     !fullscreen && tray_visible_px >= tray_h / MIN_VISIBLE_TASKBAR_DIVISOR
 }
 
+/// A taskbar that refused our child once keeps refusing (security software),
+/// so retrying every second would only flicker the fallback window.
+pub fn should_try_embed(failed_for: isize, tray: isize) -> bool {
+    failed_for != tray
+}
+
+/// The taskbar is topmost too and rises above the fallback on every click.
+pub fn reclaim_topmost(embedded: bool, shown: bool) -> bool {
+    !embedded && shown
+}
+
 /// Windows 11 starts at build 22000; RtlGetVersion ignores manifest shims.
 pub fn supported() -> bool {
     let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
@@ -138,6 +149,7 @@ struct State {
     window: HWND,
     tray: HWND,
     embedded: bool,
+    embed_failed_for: HWND,
     visible: bool,
     bounds: (i32, i32, i32, i32),
     layout: Layout,
@@ -209,6 +221,7 @@ fn run(
                 window: std::ptr::null_mut(),
                 tray: std::ptr::null_mut(),
                 embedded: false,
+                embed_failed_for: std::ptr::null_mut(),
                 visible: true,
                 bounds: (0, 0, 0, 0),
                 layout: layout(96),
@@ -281,7 +294,10 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
             0
         }
         _ if Some(msg) == taskbar_created => {
-            with_state(reconcile);
+            with_state(|s| {
+                s.embed_failed_for = std::ptr::null_mut();
+                reconcile(s)
+            });
             0
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
@@ -396,9 +412,13 @@ fn reconcile(s: &mut State) {
                 return;
             }
         }
-        if !s.embedded && embed(s.window, tray) {
-            s.embedded = true;
-            s.bounds = (0, 0, 0, 0);
+        if !s.embedded && should_try_embed(s.embed_failed_for as isize, tray as isize) {
+            if embed(s.window, tray) {
+                s.embedded = true;
+                s.bounds = (0, 0, 0, 0);
+            } else {
+                s.embed_failed_for = tray;
+            }
         }
         s.layout = layout(GetDpiForWindow(tray).max(96));
         let tray_height = tray_rect.bottom - tray_rect.top;
@@ -422,6 +442,9 @@ fn reconcile(s: &mut State) {
             render(s);
         } else if IsWindowVisible(s.window) == 0 {
             ShowWindow(s.window, SW_SHOWNOACTIVATE);
+        }
+        if reclaim_topmost(s.embedded, show) {
+            SetWindowPos(s.window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
         let light = system_uses_light_theme();
         if light != s.light {
@@ -536,6 +559,20 @@ fn draw(s: &State, frame: &Frame) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedding_is_retried_only_for_a_new_taskbar() {
+        assert!(should_try_embed(0, 7));
+        assert!(!should_try_embed(7, 7));
+        assert!(should_try_embed(7, 8));
+    }
+
+    #[test]
+    fn only_the_shown_fallback_window_reclaims_topmost() {
+        assert!(reclaim_topmost(false, true));
+        assert!(!reclaim_topmost(true, true));
+        assert!(!reclaim_topmost(false, false));
+    }
 
     #[test]
     fn fallback_hidden_for_fullscreen_or_autohide() {
