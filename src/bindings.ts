@@ -517,7 +517,7 @@ error?: DelayError | null;
  * The measured path/test settings changed after this result was produced.
  */
 stale?: boolean }
-export type DesktopState = { preferences: UiPreferences; connection: CaptureMode | null; requested: CaptureMode | null; error: string | null; is_admin: boolean; system_listener_id: ListenerId | null }
+export type DesktopState = { preferences: UiPreferences; connection: CaptureMode | null; requested: CaptureMode | null; error: string | null; is_admin: boolean; system_listener_id: ListenerId | null; taskbar_status_supported: boolean }
 export type Exit = { id: ExitId; name: string; kind: ExitKind; interface: InterfaceGuid | null }
 export type ExitHealth = { status: ExitStatus; effective_members: NodeRef[]; missing_members: ExitMember[]; 
 /**
@@ -714,13 +714,15 @@ export type TailscaleOpts = { hostname: string; exit_node: string; ephemeral: bo
  */
 interface: InterfaceGuid | null }
 export type TailscaleState = "Unknown" | { NeedsLogin: { url: string | null } } | { LoggedIn: { ip: string | null } } | { Failed: { reason: string } }
+export type TaskbarStatusMode = "Rotate" | { Fixed: ListenerId }
+export type TaskbarStatusPrefs = { enabled: boolean; mode: TaskbarStatusMode }
 export type TrafficTick = { total_rate: Rate; 
 /**
  * Every listener that had a delta in this tick.
  */
 per_listener_rate: Partial<{ [key in ListenerId]: Rate }>; totals: TrafficTotals }
 export type TrafficTotals = { total: Bytes; per_listener: Partial<{ [key in ListenerId]: Bytes }> }
-export type UiPreferences = { mode: InterfaceMode | null; listener_id: ListenerId | null; exit_id: ExitId | null; system_listener_id: ListenerId | null; capture_mode: CaptureMode; auto_connect: boolean; close_to_tray: boolean; managed_rules: ProcessRuleId[]; selected_apps: ProcessRuleId[] }
+export type UiPreferences = { mode: InterfaceMode | null; listener_id: ListenerId | null; exit_id: ExitId | null; system_listener_id: ListenerId | null; capture_mode: CaptureMode; auto_connect: boolean; close_to_tray: boolean; managed_rules: ProcessRuleId[]; selected_apps: ProcessRuleId[]; taskbar_status: TaskbarStatusPrefs }
 export type UpdateState = 
 /**
  * Not an NSIS install (dev build or unpacked exe): no updates.

@@ -8,17 +8,24 @@ import {
   Typography,
 } from "@mui/material";
 import { useInterface } from "./InterfaceProvider";
+import { useModel } from "../api/client";
 import { type InterfaceMode } from "../api/desktop";
 import { SaveFeedback } from "./SaveFeedback";
 
 export function UiPreferencesPanel() {
   const ui = useInterface();
+  // A disabled listener never rotates in, so pinning it would look ignored.
+  const listeners = (useModel().data?.listeners ?? []).filter((l) => l.user_enabled);
   if (!ui?.state) return null;
   const p = ui.state.preferences;
   const feedback = ui.preferenceFeedback;
   const update = async (next: Partial<typeof p>) => {
     await ui.updatePreference(next, Object.keys(next)[0] as keyof typeof p);
   };
+  const taskbar = p.taskbar_status;
+  const supported = ui.state.taskbar_status_supported;
+  const pinned = typeof taskbar.mode === "object" ? taskbar.mode.Fixed : null;
+  const shown = pinned && listeners.some((l) => l.id === pinned) ? pinned : "rotate";
   return (
     <Stack spacing={2}>
       <Typography sx={{ fontWeight: 600 }}>界面</Typography>
@@ -90,6 +97,68 @@ export function UiPreferencesPanel() {
             <MenuItem value="exit">退出程序</MenuItem>
           </Select>
           <SaveFeedback notice={feedback.notices.close_to_tray} />
+        </Stack>
+        <Stack
+          direction="column"
+          sx={{
+            p: 2,
+            borderTop: 1,
+            borderColor: "divider",
+            alignItems: "flex-start",
+          }}
+        >
+          <Box sx={{ flex: 1 }}>
+            <Typography>任务栏状态栏</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {supported ? "在托盘旁显示流量、节点和延迟" : "仅支持 Windows 11"}
+            </Typography>
+          </Box>
+          <Switch
+            checked={supported && taskbar.enabled}
+            disabled={!supported || feedback.pending || ui.saving}
+            onChange={(_, v) =>
+              void update({ taskbar_status: { ...taskbar, enabled: v } })
+            }
+            slotProps={{ input: { "aria-label": "任务栏状态栏" } }}
+          />
+          {supported && taskbar.enabled && (
+            <Stack direction="row" spacing={1}>
+              <Select
+                size="small"
+                aria-label="显示内容"
+                value={shown === "rotate" ? "rotate" : "fixed"}
+                disabled={feedback.pending || ui.saving}
+                onChange={(e) => {
+                  const first = listeners[0]?.id;
+                  const mode = e.target.value === "fixed" && first ? { Fixed: first } : "Rotate";
+                  void update({ taskbar_status: { ...taskbar, mode } });
+                }}
+              >
+                <MenuItem value="rotate">轮播</MenuItem>
+                <MenuItem value="fixed" disabled={listeners.length === 0}>
+                  固定
+                </MenuItem>
+              </Select>
+              {shown !== "rotate" && (
+                <Select
+                  size="small"
+                  aria-label="固定的代理"
+                  value={shown}
+                  disabled={feedback.pending || ui.saving}
+                  onChange={(e) =>
+                    void update({ taskbar_status: { ...taskbar, mode: { Fixed: e.target.value } } })
+                  }
+                >
+                  {listeners.map((l) => (
+                    <MenuItem key={l.id} value={l.id}>
+                      {l.name}（{l.port}）
+                    </MenuItem>
+                  ))}
+                </Select>
+              )}
+            </Stack>
+          )}
+          <SaveFeedback notice={feedback.notices.taskbar_status} />
         </Stack>
       </Paper>
     </Stack>

@@ -25,6 +25,7 @@ const desktop: DesktopState = {
     capture_mode: "System",
     auto_connect: false,
     close_to_tray: true,
+    taskbar_status: { enabled: true, mode: "Rotate" },
     managed_rules: [],
     selected_apps: [],
   },
@@ -33,6 +34,7 @@ const desktop: DesktopState = {
   error: null,
   is_admin: false,
   system_listener_id: null,
+  taskbar_status_supported: true,
 };
 beforeEach(() => {
   vi.mocked(invoke).mockResolvedValue(structuredClone(desktop));

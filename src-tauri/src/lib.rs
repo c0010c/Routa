@@ -13,6 +13,8 @@ pub mod subscription;
 pub mod system_proxy;
 pub mod tailnet;
 pub mod tailscale;
+#[cfg(windows)]
+pub mod taskbar_status;
 pub mod tray;
 pub mod updater;
 
@@ -230,6 +232,10 @@ pub fn run() {
             app.manage(rt.clone());
             app.manage(updater.clone());
             tray::setup(app.handle())?;
+            #[cfg(windows)]
+            if let Some(status) = taskbar_status::spawn(app.handle(), rt.clone(), desktop.clone()) {
+                app.manage(status);
+            }
             reregister_autostart(app.handle());
             let autostarted = std::env::args().any(|a| a == AUTOSTART_ARG);
             let handle = app.handle().clone();
@@ -312,6 +318,10 @@ pub fn run() {
             {
                 return; // already shutting down
             }
+            #[cfg(windows)]
+            if let Some(status) = app.try_state::<taskbar_status::TaskbarStatus>() {
+                status.shutdown();
+            }
             let app = app.clone();
             let state = state.clone();
             tauri::async_runtime::spawn(async move {
@@ -339,6 +349,10 @@ pub fn run() {
             });
         }
         RunEvent::Exit => {
+            #[cfg(windows)]
+            if let Some(status) = app.try_state::<taskbar_status::TaskbarStatus>() {
+                status.shutdown();
+            }
             if state.swap(2, Ordering::SeqCst) == 0 {
                 let bye = tauri::async_runtime::block_on(procroute::client::goodbye());
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
