@@ -89,10 +89,19 @@ pub struct Frame {
     pub light: bool,
 }
 
-/// Fills `pixels`; returns whether the current node name finished scrolling.
-pub fn paint(frame: &Frame, layout: &Layout, pixels: &mut [u32]) -> bool {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Painted {
+    /// The current node name was read to its end (or fits).
+    pub scroll_done: bool,
+    /// Rendered width of the current node name; 0 without one.
+    pub name_width: i32,
+}
+
+pub fn paint(frame: &Frame, layout: &Layout, pixels: &mut [u32]) -> Painted {
     pixels.fill(HIT_TEST_PIXEL);
-    let Some(mut painter) = Painter::new(*layout, palette(frame.light), pixels) else { return true };
+    let Some(mut painter) = Painter::new(*layout, palette(frame.light), pixels) else {
+        return Painted { scroll_done: true, name_width: 0 };
+    };
     let progress = frame.slide_progress.clamp(0.0, 1.0);
     if let Some(previous) = frame.previous.as_ref().filter(|_| progress < 1.0) {
         painter.screen(previous, -((progress * layout.height as f32) as i32), Duration::ZERO);
@@ -220,7 +229,7 @@ impl<'a> Painter<'a> {
         }
     }
 
-    fn screen(&mut self, screen: &Screen, dy: i32, name_elapsed: Duration) -> bool {
+    fn screen(&mut self, screen: &Screen, dy: i32, name_elapsed: Duration) -> Painted {
         let Layout { width, height, chart_w, values_w, node_w, gap, .. } = self.layout;
         let (top, bottom) = (height / 4 + dy, height * 3 / 4 + dy);
         let node_x = width - node_w;
@@ -229,7 +238,7 @@ impl<'a> Painter<'a> {
             Screen::NotRunning | Screen::NoListeners => {
                 let label = if matches!(screen, Screen::NotRunning) { "未运行" } else { "无监听" };
                 self.text(label, node_x, height / 2 + dy, (node_x, width), palette.dim, 0);
-                true
+                Painted { scroll_done: true, name_width: 0 }
             }
             Screen::Listener(view) => {
                 self.chart(&view.series, dy);
@@ -238,7 +247,8 @@ impl<'a> Painter<'a> {
                 self.text(&format_rate(view.up), values_x, top, clip, palette.up, 0);
                 self.text(&format_rate(view.down), values_x, bottom, clip, palette.down, 0);
                 let name: Vec<u16> = view.node.encode_utf16().collect();
-                let (offset, done) = scroll_offset(self.text_size(&name).cx, node_w, name_elapsed);
+                let name_width = self.text_size(&name).cx;
+                let (offset, scroll_done) = scroll_offset(name_width, node_w, name_elapsed);
                 self.text(&view.node, node_x, top, (node_x, width), palette.text, offset);
                 let (delay, rgb) = match view.delay {
                     DelayView::Ms(ms, tone) => (
@@ -253,7 +263,7 @@ impl<'a> Painter<'a> {
                     DelayView::Unknown => ("● --".to_string(), palette.dim),
                 };
                 self.text(&delay, node_x, bottom, (node_x, width), rgb, 0);
-                done
+                Painted { scroll_done, name_width }
             }
         }
     }
@@ -291,7 +301,7 @@ mod tests {
         Frame { screen, previous: None, slide_progress: 1.0, name_elapsed: Duration::ZERO, light: false }
     }
 
-    fn painted(frame: &Frame) -> (Vec<u32>, bool) {
+    fn painted(frame: &Frame) -> (Vec<u32>, Painted) {
         let layout = layout(96);
         let mut pixels = vec![0; (layout.width * layout.height) as usize];
         let done = paint(frame, &layout, &mut pixels);
@@ -361,10 +371,16 @@ mod tests {
     #[test]
     fn paint_reports_scroll_done_only_after_a_long_name_finished() {
         let mut f = frame(listener_screen());
-        assert!(!painted(&f).1);
+        assert!(!painted(&f).1.scroll_done);
         f.name_elapsed = Duration::from_secs(120);
-        assert!(painted(&f).1);
-        assert!(painted(&frame(Screen::NotRunning)).1);
+        assert!(painted(&f).1.scroll_done);
+        assert!(painted(&frame(Screen::NotRunning)).1.scroll_done);
+    }
+
+    #[test]
+    fn paint_reports_the_node_name_width() {
+        assert!(painted(&frame(listener_screen())).1.name_width > layout(96).node_w);
+        assert_eq!(painted(&frame(Screen::NotRunning)).1.name_width, 0);
     }
 
     #[test]

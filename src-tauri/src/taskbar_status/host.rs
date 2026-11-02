@@ -23,7 +23,7 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use super::paint::{layout, paint, Frame, Layout};
+use super::paint::{layout, paint, scroll_offset, Frame, Layout, Painted};
 use super::view::{ListenerView, Rotation, Screen};
 use crate::desktop::TaskbarStatusMode;
 use crate::model::ListenerId;
@@ -77,6 +77,21 @@ pub fn place_x(notify_left: i32, tray_width: i32, width: i32) -> i32 {
 /// wherever the taskbar goes; on top of it, it has to step aside by itself.
 pub fn fallback_visible(fullscreen: bool, tray_visible_px: i32, tray_h: i32) -> bool {
     !fullscreen && tray_visible_px >= tray_h / MIN_VISIBLE_TASKBAR_DIVISOR
+}
+
+/// What is on screen, as far as deciding whether to paint again goes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Drawn {
+    pub screen: Screen,
+    pub offset: i32,
+    pub light: bool,
+    pub bounds: (i32, i32, i32, i32),
+}
+
+/// A long name pauses before and after each scroll; during those pauses the
+/// animation timer keeps ticking but the pixels would come out the same.
+pub fn skip_redraw(last: Option<&Drawn>, next: &Drawn, sliding: bool) -> bool {
+    !sliding && last == Some(next)
 }
 
 /// A taskbar that refused our child once keeps refusing (security software),
@@ -165,6 +180,8 @@ struct State {
     slide_started: Option<Instant>,
     name_started: Instant,
     scroll_done: bool,
+    name_width: i32,
+    last_drawn: Option<Drawn>,
     animating: bool,
 }
 
@@ -237,6 +254,8 @@ fn run(
                 slide_started: None,
                 name_started: Instant::now(),
                 scroll_done: true,
+                name_width: 0,
+                last_drawn: None,
                 animating: false,
             })
         });
@@ -381,6 +400,7 @@ fn reconcile(s: &mut State) {
                 DestroyWindow(s.window);
             }
             s.window = std::ptr::null_mut();
+            s.last_drawn = None;
             s.tray = tray;
             s.embedded = false;
             s.bounds = (0, 0, 0, 0);
@@ -493,14 +513,19 @@ fn render(s: &mut State) {
         s.slide_started = None;
         s.previous = None;
     }
-    let frame = Frame {
-        screen,
-        previous: s.previous.clone(),
-        slide_progress: progress,
-        name_elapsed: now.duration_since(s.name_started),
-        light: s.light,
-    };
-    s.scroll_done = draw(s, &frame);
+    let name_elapsed = now.duration_since(s.name_started);
+    let (offset, scroll_done) = scroll_offset(s.name_width, s.layout.node_w, name_elapsed);
+    let drawn = Drawn { screen: screen.clone(), offset, light: s.light, bounds: s.bounds };
+    let sliding = s.slide_started.is_some();
+    if skip_redraw(s.last_drawn.as_ref(), &drawn, sliding) {
+        s.scroll_done = scroll_done;
+    } else {
+        let frame = Frame { screen, previous: s.previous.clone(), slide_progress: progress, name_elapsed, light: s.light };
+        let painted = draw(s, &frame);
+        s.scroll_done = painted.scroll_done;
+        s.name_width = painted.name_width;
+        s.last_drawn = (!sliding).then_some(drawn);
+    }
     set_animating(s, s.slide_started.is_some() || !s.scroll_done);
 }
 
@@ -517,9 +542,9 @@ fn set_animating(s: &mut State, animating: bool) {
     }
 }
 
-fn draw(s: &State, frame: &Frame) -> bool {
+fn draw(s: &State, frame: &Frame) -> Painted {
     let Layout { width, height, .. } = s.layout;
-    let mut done = true;
+    let mut painted = Painted { scroll_done: true, name_width: 0 };
     unsafe {
         let screen = GetDC(std::ptr::null_mut());
         let dc = CreateCompatibleDC(screen);
@@ -535,7 +560,7 @@ fn draw(s: &State, frame: &Frame) -> bool {
         if !bitmap.is_null() && !bits.is_null() {
             let old = SelectObject(dc, bitmap);
             let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, (width * height) as usize);
-            done = paint(frame, &s.layout, pixels);
+            painted = paint(frame, &s.layout, pixels);
             let size = SIZE { cx: width, cy: height };
             let source = POINT { x: 0, y: 0 };
             let blend = BLENDFUNCTION {
@@ -553,12 +578,28 @@ fn draw(s: &State, frame: &Frame) -> bool {
         DeleteDC(dc);
         ReleaseDC(std::ptr::null_mut(), screen);
     }
-    done
+    painted
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scroll_pause_that_shows_the_same_pixels_is_not_redrawn() {
+        let drawn = Drawn { screen: Screen::NotRunning, offset: 4, light: false, bounds: (1, 2, 95, 36) };
+        assert!(skip_redraw(Some(&drawn), &drawn.clone(), false));
+        assert!(!skip_redraw(Some(&drawn), &drawn.clone(), true));
+        assert!(!skip_redraw(None, &drawn, false));
+        for changed in [
+            Drawn { offset: 5, ..drawn.clone() },
+            Drawn { light: true, ..drawn.clone() },
+            Drawn { bounds: (0, 2, 95, 36), ..drawn.clone() },
+            Drawn { screen: Screen::NoListeners, ..drawn.clone() },
+        ] {
+            assert!(!skip_redraw(Some(&drawn), &changed, false));
+        }
+    }
 
     #[test]
     fn embedding_is_retried_only_for_a_new_taskbar() {

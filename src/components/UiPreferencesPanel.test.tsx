@@ -13,7 +13,7 @@ const preferences: UiPreferences = {
   managed_rules: [], selected_apps: [],
   taskbar_status: { enabled: true, mode: "Rotate" },
 };
-const model = { listeners: [{ id: "l1", name: "监听一" }] };
+const model = { listeners: [{ id: "l1", name: "监听一", user_enabled: true }, { id: "l2", name: "监听二", user_enabled: false }] };
 
 function ModePanel() {
   return <UiPreferencesPanel key={useInterface()?.state?.preferences.mode} />;
@@ -74,6 +74,20 @@ it("disables the taskbar status bar below Windows 11", async () => {
   setup({ taskbar_status_supported: false });
   expect(await screen.findByRole("switch", { name: "任务栏状态栏" })).toBeDisabled();
   expect(screen.getByText("仅支持 Windows 11")).toBeInTheDocument();
+});
+
+it("offers only enabled listeners for pinning", async () => {
+  setup();
+  const select = await screen.findByRole("combobox", { name: "显示内容" });
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_model"));
+  fireEvent.mouseDown(select);
+  expect(await screen.findByRole("option", { name: "固定：监听一" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "固定：监听二" })).not.toBeInTheDocument();
+});
+
+it("shows rotation when the pinned listener is disabled", async () => {
+  setup({ preferences: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: "l2" } } } });
+  expect(await screen.findByRole("combobox", { name: "显示内容" })).toHaveTextContent("轮播");
 });
 
 it("shows rotation when the pinned listener no longer exists", async () => {

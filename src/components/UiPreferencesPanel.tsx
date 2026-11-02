@@ -14,7 +14,8 @@ import { SaveFeedback } from "./SaveFeedback";
 
 export function UiPreferencesPanel() {
   const ui = useInterface();
-  const listeners = useModel().data?.listeners ?? [];
+  // A disabled listener never rotates in, so pinning it would look ignored.
+  const listeners = (useModel().data?.listeners ?? []).filter((l) => l.user_enabled);
   if (!ui?.state) return null;
   const p = ui.state.preferences;
   const feedback = ui.preferenceFeedback;
