@@ -25,6 +25,23 @@ pub enum CaptureMode {
     Apps,
     Tun,
 }
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum TaskbarStatusMode {
+    #[default]
+    Rotate,
+    Fixed(ListenerId),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(default)]
+pub struct TaskbarStatusPrefs {
+    pub enabled: bool,
+    pub mode: TaskbarStatusMode,
+}
+impl Default for TaskbarStatusPrefs {
+    fn default() -> Self {
+        Self { enabled: true, mode: TaskbarStatusMode::Rotate }
+    }
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize, specta::Type)]
 #[serde(default)]
 pub struct UiPreferences {
@@ -37,6 +54,7 @@ pub struct UiPreferences {
     pub close_to_tray: bool,
     pub managed_rules: Vec<ProcessRuleId>,
     pub selected_apps: Vec<ProcessRuleId>,
+    pub taskbar_status: TaskbarStatusPrefs,
 }
 #[derive(Clone, Debug, Serialize, specta::Type)]
 pub struct DesktopState {
@@ -46,6 +64,13 @@ pub struct DesktopState {
     pub error: Option<String>,
     pub is_admin: bool,
     pub system_listener_id: Option<ListenerId>,
+    pub taskbar_status_supported: bool,
+}
+fn taskbar_status_supported() -> bool {
+    #[cfg(windows)]
+    return crate::taskbar_status::host::supported();
+    #[cfg(not(windows))]
+    false
 }
 pub struct Desktop {
     file: PathBuf,
@@ -199,6 +224,7 @@ impl Desktop {
             error: self.error.lock().unwrap().clone(),
             is_admin: is_admin(),
             system_listener_id,
+            taskbar_status_supported: taskbar_status_supported(),
         }
     }
     pub async fn save_preferences(&self, input: UiPreferences) -> Result<UiPreferences, String> {
@@ -208,9 +234,19 @@ impl Desktop {
         p.mode = input.mode;
         p.auto_connect = input.auto_connect;
         p.close_to_tray = input.close_to_tray;
+        p.taskbar_status = input.taskbar_status;
         if self.active.lock().unwrap().is_none() {
             p.capture_mode = input.capture_mode;
         }
+        self.persist(p)
+    }
+    pub fn taskbar_status(&self) -> TaskbarStatusPrefs {
+        self.prefs().taskbar_status
+    }
+    pub async fn disable_taskbar_status(&self) -> Result<UiPreferences, String> {
+        let _guard = self.operation.lock().await;
+        let mut p = self.prefs();
+        p.taskbar_status.enabled = false;
         self.persist(p)
     }
     pub async fn bind(&self, rt: &Runtime, id: Option<ListenerId>) -> Result<UiPreferences, String> {
@@ -819,6 +855,25 @@ mod tests {
         std::fs::write(td.path().join("state.json"), "{}").unwrap();
         let dt = Desktop::open(td.path().into()).unwrap();
         assert_eq!(dt.prefs().mode, Some(InterfaceMode::Full));
+    }
+    #[test]
+    fn old_preferences_file_defaults_taskbar_status_to_on_and_rotate() {
+        let p: UiPreferences = serde_json::from_str(r#"{"close_to_tray":true}"#).unwrap();
+        assert!(p.taskbar_status.enabled);
+        assert_eq!(p.taskbar_status.mode, TaskbarStatusMode::Rotate);
+    }
+    #[tokio::test]
+    async fn taskbar_status_preferences_survive_a_restart() {
+        let td = tempfile::tempdir().unwrap();
+        let dt = Desktop::open(td.path().into()).unwrap();
+        assert!(dt.taskbar_status().enabled);
+        let mut p = dt.prefs();
+        p.taskbar_status.mode = TaskbarStatusMode::Fixed(ListenerId("l1".into()));
+        dt.save_preferences(p).await.unwrap();
+        dt.disable_taskbar_status().await.unwrap();
+        let dt = Desktop::open(td.path().into()).unwrap();
+        assert!(!dt.taskbar_status().enabled);
+        assert_eq!(dt.taskbar_status().mode, TaskbarStatusMode::Fixed(ListenerId("l1".into())));
     }
     #[test]
     fn new_install_asks_once_and_saves_mode() {

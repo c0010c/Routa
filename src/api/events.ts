@@ -27,6 +27,7 @@ export function useRuntimeEvents(): void {
     reg(listen<TrafficTick>("traffic-snapshot", (e) => setTraffic(e.payload, false)));
     reg(listen<ProcRouteStatus>("procroute-status", (e) => qc.setQueryData(["procroute"], e.payload)));
     reg(listen<UpdateView>("update-status", (e) => qc.setQueryData(["update"], e.payload)));
+    reg(listen("ui-preferences-changed", () => void qc.invalidateQueries({ queryKey: ["desktop"] })));
     reg(listen<Flow[]>("procroute-flows", (e) => setFlows(e.payload)));
 
     return () => {

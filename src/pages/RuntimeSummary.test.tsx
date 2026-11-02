@@ -109,6 +109,7 @@ const initialDesktop: DesktopState = {
     capture_mode: "System",
     auto_connect: false,
     close_to_tray: true,
+    taskbar_status: { enabled: true, mode: "Rotate" },
     managed_rules: [],
     selected_apps: [],
   },
@@ -117,6 +118,7 @@ const initialDesktop: DesktopState = {
   error: null,
   is_admin: true,
   system_listener_id: null,
+  taskbar_status_supported: true,
 };
 let model: Model;
 let status: RuntimeStatus;
