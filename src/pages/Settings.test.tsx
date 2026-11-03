@@ -16,6 +16,10 @@ vi.mock("../bindings", () => ({
     saveSettings: vi.fn(),
     coreRestart: vi.fn(),
     openLogDir: vi.fn(),
+    procrouteStatus: vi.fn(),
+    procrouteCleanup: vi.fn(),
+    procrouteUninstall: vi.fn(),
+    saveProcessRoutingSettings: vi.fn(),
   },
 }));
 
@@ -49,6 +53,14 @@ function renderPage(initial = model, simple = false) {
   vi.mocked(commands.coreRestart).mockResolvedValue({
     status: "ok",
     data: null,
+  });
+  vi.mocked(commands.procrouteStatus).mockResolvedValue({
+    component: "Running",
+    actions: {},
+    last_interruption: null,
+    conflicts: [],
+    apply_errors: [],
+    truncated_flows: false,
   });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -431,5 +443,20 @@ describe("Settings", () => {
     ).toBeInTheDocument();
     expect(within(delay).getByText("自动测速")).toBeInTheDocument();
     expect(within(delay).getByLabelText("测速 URL")).toBeInTheDocument();
+  });
+
+  it("holds the rarely changed process routing settings", async () => {
+    vi.mocked(commands.saveProcessRoutingSettings).mockResolvedValue({ status: "ok", data: null });
+    vi.mocked(commands.procrouteCleanup).mockResolvedValue({ status: "error", error: "已取消" });
+    renderPage();
+    const section = await screen.findByRole("region", { name: "进程分流" });
+    expect(within(section).getByRole("radio", { name: "阻断" })).toBeChecked();
+    fireEvent.click(within(section).getByRole("radio", { name: "直连" }));
+    await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(false, "Direct"));
+
+    expect(within(section).getByRole("button", { name: "卸载组件" })).toBeEnabled();
+    fireEvent.click(within(section).getByRole("button", { name: "清理残留阻断规则" }));
+    fireEvent.click(await screen.findByRole("button", { name: "清理" }));
+    expect(await screen.findByText("已取消")).toBeInTheDocument();
   });
 });

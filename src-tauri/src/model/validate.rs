@@ -13,15 +13,33 @@ pub enum ValidationError {
     InvalidProxy { name: String, reason: String },
     /// The generated config was rejected by `mihomo -t`.
     CoreRejected { message: String },
+    /// 同一个程序（按文件名）出现在多处：一个程序只能属于一条规则。
     DuplicateProcessRule { exe_path: String },
     InvalidExePath { exe_path: String, reason: String },
     ListenerTypeNotAllowed { listener: String },
     ListenerAddressNotAllowed { listener: String, listen: String },
+    /// 已启用规则里的进程总数超过上限。
     TooManyProcessRules { max: u32 },
+    EmptyProcessRule { rule: String },
+    /// 按进程名匹配的规则不能在组件故障时阻断（WFP 只认完整路径）。
+    ProcessNameCannotBlock { rule: String },
 }
 
-/// 已启用的进程分流规则数上限（与服务端一致）。
+/// 已启用规则里的进程总数上限（每个进程下发为服务端的一条规则，与服务端一致）。
 pub const MAX_PROCESS_RULES: u32 = 32;
+
+/// 规则的显示名：名称为空时用第一个进程的文件名。
+pub fn process_rule_label(r: &ProcessRule) -> String {
+    if !r.name.is_empty() {
+        return r.name.clone();
+    }
+    r.processes.first().map(|p| process_file_name(p).to_string()).unwrap_or_default()
+}
+
+/// 进程（进程名或完整路径）的文件名部分。
+pub fn process_file_name(p: &str) -> &str {
+    p.rsplit(['\\', '/']).next().unwrap_or(p)
+}
 
 /// ProxyBridge 的上游连接仅支持 IPv4；不能把 IPv6 监听冒充为 IPv4 入口。
 pub(crate) fn process_proxy_host(listen: &str) -> Option<String> {
@@ -38,18 +56,34 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
     let mut seen = std::collections::HashSet::new();
     let mut reported = std::collections::HashSet::new();
     for r in &pr.rules {
-        let path = normalize_exe_path(&r.exe_path);
-        if let Some(reason) = routa_procsvc_proto::exe_path_problem(&path) {
-            errors.push(ValidationError::InvalidExePath { exe_path: r.exe_path.clone(), reason });
-        } else {
-            let key = path.to_lowercase();
+        if r.processes.is_empty() {
+            errors.push(ValidationError::EmptyProcessRule { rule: process_rule_label(r) });
+        }
+        if !r.match_full_path && r.on_fault == FaultPolicy::Block {
+            errors.push(ValidationError::ProcessNameCannotBlock { rule: process_rule_label(r) });
+        }
+        for p in &r.processes {
+            let p = normalize_exe_path(p);
+            let problem = if r.match_full_path {
+                routa_procsvc_proto::exe_path_problem(&p)
+            } else if !routa_procsvc_proto::is_process_name(&p) {
+                Some("按进程名匹配时只填写进程名，如 app.exe".to_string())
+            } else {
+                routa_procsvc_proto::process_name_problem(&p)
+            };
+            if let Some(reason) = problem {
+                errors.push(ValidationError::InvalidExePath { exe_path: p, reason });
+                continue;
+            }
+            // 按文件名判重：按名字的规则会命中所有同名程序，与按路径的规则也不能重叠。
+            let key = process_file_name(&p).to_lowercase();
             if !seen.insert(key.clone()) && reported.insert(key) {
-                errors.push(ValidationError::DuplicateProcessRule { exe_path: path });
+                errors.push(ValidationError::DuplicateProcessRule { exe_path: process_file_name(&p).to_string() });
             }
         }
         match model.listeners.iter().find(|l| l.id == r.listener) {
             None => errors.push(ValidationError::DanglingRef {
-                what: format!("process rule[{}].listener -> {}", r.exe_path, r.listener.0),
+                what: format!("process rule[{}].listener -> {}", process_rule_label(r), r.listener.0),
             }),
             Some(l) if l.listener_type == ListenerType::Http => {
                 errors.push(ValidationError::ListenerTypeNotAllowed { listener: l.name.clone() })
@@ -63,7 +97,7 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
             Some(_) => {}
         }
     }
-    if pr.rules.iter().filter(|r| r.user_enabled).count() > MAX_PROCESS_RULES as usize {
+    if pr.rules.iter().filter(|r| r.user_enabled).map(|r| r.processes.len()).sum::<usize>() > MAX_PROCESS_RULES as usize {
         errors.push(ValidationError::TooManyProcessRules { max: MAX_PROCESS_RULES });
     }
 }
@@ -74,12 +108,17 @@ pub fn validate_forbidden_exes(pr: &ProcessRouting, forbidden: &[std::path::Path
         .iter()
         .map(|p| normalize_exe_path(&p.to_string_lossy()).to_lowercase())
         .collect();
+    // 按进程名的规则比较文件名，按完整路径的规则比较整条路径。
+    let hits = |r: &ProcessRule, p: &str| {
+        let p = normalize_exe_path(p).to_lowercase();
+        keys.iter().any(|k| if r.match_full_path { *k == p } else { process_file_name(k) == p })
+    };
     let errors: Vec<ValidationError> = pr
         .rules
         .iter()
-        .filter(|r| keys.contains(&normalize_exe_path(&r.exe_path).to_lowercase()))
-        .map(|r| ValidationError::InvalidExePath {
-            exe_path: r.exe_path.clone(),
+        .flat_map(|r| r.processes.iter().filter(move |p| hits(r, p)))
+        .map(|p| ValidationError::InvalidExePath {
+            exe_path: p.clone(),
             reason: "不能对 Routa 自身或 mihomo 内核做进程分流".to_string(),
         })
         .collect();
@@ -411,8 +450,46 @@ mod tests {
             .count()
     }
 
+    /// 按完整路径匹配的单进程规则。
     fn prule(path: &str, l: &Listener) -> ProcessRule {
-        ProcessRule { exe_path: path.into(), listener: l.id.clone(), ..ProcessRule::default() }
+        ProcessRule { processes: vec![path.into()], match_full_path: true, listener: l.id.clone(), ..ProcessRule::default() }
+    }
+    /// 按进程名匹配的规则。
+    fn nrule(names: &[&str], l: &Listener) -> ProcessRule {
+        ProcessRule { processes: names.iter().map(|s| s.to_string()).collect(), listener: l.id.clone(), ..ProcessRule::default() }
+    }
+
+    #[test]
+    fn process_name_rule() {
+        assert_eq!(validate(&pmodel(|l| vec![nrule(&["ChatGPT.exe", "codex.exe"], l)])), Ok(()));
+        // 按名字匹配时不能写路径、不能为空、不能在故障时阻断
+        let e = errs(&pmodel(|l| vec![nrule(&[r"C:\a\b.exe"], l)]));
+        assert!(matches!(&e[..], [ValidationError::InvalidExePath { .. }]), "{e:?}");
+        let e = errs(&pmodel(|l| vec![nrule(&[], l)]));
+        assert!(matches!(&e[..], [ValidationError::EmptyProcessRule { .. }]), "{e:?}");
+        let e = errs(&pmodel(|l| vec![ProcessRule { on_fault: FaultPolicy::Block, ..nrule(&["a.exe"], l) }]));
+        assert!(matches!(&e[..], [ValidationError::ProcessNameCannotBlock { rule }] if rule == "a.exe"), "{e:?}");
+        // 同名程序在规则内、跨规则、与按路径的规则之间都不能重复
+        for m in [
+            pmodel(|l| vec![nrule(&["a.exe", "A.EXE"], l)]),
+            pmodel(|l| vec![nrule(&["a.exe"], l), nrule(&["b.exe", "a.exe"], l)]),
+            pmodel(|l| vec![nrule(&["a.exe"], l), prule(r"C:\x\A.exe", l)]),
+        ] {
+            let e = errs(&m);
+            assert!(matches!(&e[..], [ValidationError::DuplicateProcessRule { exe_path }] if exe_path.eq_ignore_ascii_case("a.exe")), "{e:?}");
+        }
+        // 进程总数上限按已启用规则里的进程计
+        let names: Vec<String> = (0..33).map(|i| format!("a{i}.exe")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert!(errs(&pmodel(|l| vec![nrule(&names, l)])).contains(&ValidationError::TooManyProcessRules { max: 32 }));
+        assert_eq!(validate(&pmodel(|l| vec![ProcessRule { user_enabled: false, ..nrule(&names, l) }])), Ok(()));
+    }
+
+    #[test]
+    fn forbidden_exe_by_name() {
+        let m = pmodel(|l| vec![nrule(&["Mihomo.EXE"], l)]);
+        let forbidden = vec![std::path::PathBuf::from("c:\\core\\mihomo.exe")];
+        assert!(validate_forbidden_exes(&m.process_routing, &forbidden).is_err());
     }
     fn pmodel(rules: impl FnOnce(&Listener) -> Vec<ProcessRule>) -> Model {
         let mut m = Model::default();

@@ -2,7 +2,7 @@
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-pub const PROTO_VERSION: u32 = 3;
+pub const PROTO_VERSION: u32 = 4;
 pub const PIPE_NAME: &str = r"\\.\pipe\RoutaProcSvc";
 pub const SERVICE_NAME: &str = "RoutaProcSvc";
 /// 单帧 JSON 正文的最大字节数。
@@ -47,6 +47,8 @@ pub enum Action {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct RuleSpec {
     pub id: String,
+    /// 完整路径（`X:\…\a.exe`），或只写进程名（`a.exe`，见 [`is_process_name`]）。
+    /// 进程名不能用于 WFP 防护，所以按进程名的规则 `on_fault` 只能是 `Direct`。
     pub exe_path: String,
     pub action: Action,
     pub on_fault: FaultPolicy,
@@ -162,6 +164,36 @@ pub fn exe_path_problem(p: &str) -> Option<String> {
     Some(reason.to_string())
 }
 
+/// 只写了进程名（不含路径分隔符或盘符）：按文件名匹配，装在哪里都算。
+pub fn is_process_name(p: &str) -> bool {
+    !p.contains(['\\', '/', ':'])
+}
+
+/// 进程名的共享校验。入参应已去首尾空白。合法返回 None，否则返回中文原因。
+pub fn process_name_problem(p: &str) -> Option<String> {
+    let reason = if p.is_empty() {
+        "进程名不能为空"
+    } else if !is_process_name(p) {
+        "进程名不能包含路径"
+    } else if p.contains([',', ';', '*', '?', '"']) {
+        "进程名不能包含 , ; * ? \""
+    } else if !p.to_lowercase().ends_with(".exe") || p.len() <= 4 {
+        "必须是 .exe 文件"
+    } else {
+        return None;
+    };
+    Some(reason.to_string())
+}
+
+/// 规则里一个进程的校验：进程名按 [`process_name_problem`]，完整路径按 [`exe_path_problem`]。
+pub fn process_problem(p: &str) -> Option<String> {
+    if is_process_name(p) {
+        process_name_problem(p)
+    } else {
+        exe_path_problem(p)
+    }
+}
+
 /// 编码为一帧：u32 小端长度 + JSON 正文。
 pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, String> {
     let body = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
@@ -259,6 +291,18 @@ mod tests {
         for p in [r"C:\a.exe", r"c:\A\B.EXE", r"D:\Program Files\x\y.exe"] {
             assert_eq!(exe_path_problem(p), None, "{p:?}");
         }
+    }
+
+    #[test]
+    fn process_problem_table() {
+        for p in ["a.exe", "ChatGPT.exe", "测试.EXE", r"C:\a.exe"] {
+            assert_eq!(process_problem(p), None, "{p:?}");
+        }
+        for p in ["", ".exe", "a.txt", "a", "a;b.exe", "a,b.exe", "*.exe", "a?.exe", "C:a.exe", r"\\srv\a.exe", "x/a.exe"] {
+            assert!(process_problem(p).is_some(), "{p:?} should be rejected");
+        }
+        assert!(is_process_name("a.exe") && !is_process_name(r"C:\a.exe") && !is_process_name("C:/a.exe"));
+        assert!(!is_process_name("C:a.exe") && process_name_problem("C:a.exe").is_some());
     }
 
     #[test]

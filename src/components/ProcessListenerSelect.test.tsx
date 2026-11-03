@@ -14,7 +14,9 @@ import { ProcessListenerSelect } from "./ProcessListenerSelect";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const rule: ProcessRule = {
   id: "r1",
-  exe_path: "C:\\Apps\\chrome.exe",
+  name: "",
+  processes: ["C:\\Apps\\chrome.exe"],
+  match_full_path: true,
   listener: "l1",
   user_enabled: false,
   on_fault: "Block",

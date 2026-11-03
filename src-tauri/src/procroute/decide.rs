@@ -12,17 +12,33 @@ use crate::runtime::{CoreStopReason, RuntimeStatus};
 
 /// 根据模型和运行状态算出下发给助手的期望状态。全局开关关闭或规则被禁用时，
 /// 规则不出现在结果里（助手不再管理该进程）；其余规则保持原顺序。
+///
+/// 服务端一条规则对应一个程序：每条规则按进程展开，id 为 [`spec_id`]，用 [`rule_of_spec`] 还原。
 pub fn decide(model: &Model, status: &RuntimeStatus, routa_pid: u32) -> DesiredState {
     let rules = active_rules(model)
-        .map(|r| RuleSpec {
-            id: r.id.0.clone(),
-            exe_path: r.exe_path.clone(),
-            action: rule_action(model, status, r).0,
-            on_fault: r.on_fault.clone(),
-            reset_on_change: r.reset_on_change,
+        .flat_map(|r| {
+            let action = rule_action(model, status, r).0;
+            r.processes.iter().map(move |p| RuleSpec {
+                id: spec_id(&r.id, p),
+                exe_path: p.clone(),
+                action: action.clone(),
+                on_fault: r.on_fault.clone(),
+                reset_on_change: r.reset_on_change,
+            })
         })
         .collect();
     DesiredState { rules, on_routa_exit: model.process_routing.on_routa_exit.clone(), routa_pid }
+}
+
+/// 规则 `rule` 中进程 `process` 在服务端的规则 id：`<规则 id>|<进程小写>`。
+/// 按进程而不是序号命名，增删其中一个进程不会牵动其它进程的服务端规则。
+pub fn spec_id(rule: &ProcessRuleId, process: &str) -> String {
+    format!("{}|{}", rule.0, process.to_lowercase())
+}
+
+/// 服务端规则 id 所属的 Routa 规则 id（[`spec_id`] 的逆）。
+pub fn rule_of_spec(spec: &str) -> &str {
+    spec.split_once('|').map_or(spec, |(rule, _)| rule)
 }
 
 /// 与 [`decide`] 同一组规则：不是代理时的原因（中文，可直接展示）；代理时为 None。
@@ -126,7 +142,10 @@ mod tests {
     fn rule(on_fault: FaultPolicy) -> ProcessRule {
         ProcessRule {
             id: ProcessRuleId("r1".into()),
-            exe_path: EXE.into(),
+            name: String::new(),
+            processes: vec![EXE.into()],
+            match_full_path: true,
+            exe_path: String::new(),
             listener: ListenerId("l1".into()),
             on_fault,
             reset_on_change: true,
@@ -199,7 +218,7 @@ mod tests {
         let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Direct), &running(), PID);
         assert_eq!(only_action(&d), proxy("127.0.0.1"));
         let r = &d.rules[0];
-        assert_eq!((r.id.as_str(), r.exe_path.as_str()), ("r1", EXE));
+        assert_eq!((rule_of_spec(&r.id), r.exe_path.as_str()), ("r1", EXE));
         assert_eq!((r.on_fault.clone(), r.reset_on_change), (FaultPolicy::Direct, true));
         assert_eq!((d.on_routa_exit, d.routa_pid), (ExitPolicy::Direct, PID));
     }
@@ -290,7 +309,7 @@ mod tests {
         kept.id = ProcessRuleId("r2".into());
         m.process_routing.rules.push(kept);
         let d = decide(&m, &running(), PID);
-        assert_eq!(d.rules.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["r2"]);
+        assert_eq!(d.rules.iter().map(|r| rule_of_spec(&r.id)).collect::<Vec<_>>(), ["r2"]);
 
         let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
         m.process_routing.enabled = false;
@@ -358,6 +377,20 @@ mod tests {
     }
 
     #[test]
+    fn each_process_becomes_one_spec() {
+        let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        m.process_routing.rules[0].processes = vec!["ChatGPT.exe".into(), "codex.exe".into()];
+        m.process_routing.rules[0].match_full_path = false;
+        let d = decide(&m, &running(), PID);
+        let ids: Vec<&str> = d.rules.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["r1|chatgpt.exe", "r1|codex.exe"]);
+        assert_eq!(d.rules.iter().map(|r| r.exe_path.as_str()).collect::<Vec<_>>(), ["ChatGPT.exe", "codex.exe"]);
+        assert!(d.rules.iter().all(|r| r.action == proxy("127.0.0.1")));
+        assert_eq!(rule_of_spec("r1|chatgpt.exe"), "r1");
+        assert_eq!(rule_of_spec("plain"), "plain");
+    }
+
+    #[test]
     fn rule_order_preserved_and_no_auth_passes_none() {
         let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
         m.listeners[0].auth = None;
@@ -365,7 +398,7 @@ mod tests {
         second.id = ProcessRuleId("r0".into());
         m.process_routing.rules.push(second);
         let d = decide(&m, &running(), PID);
-        assert_eq!(d.rules.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["r1", "r0"]);
+        assert_eq!(d.rules.iter().map(|r| rule_of_spec(&r.id)).collect::<Vec<_>>(), ["r1", "r0"]);
         let Action::Proxy(t) = &d.rules[0].action else { panic!("expected proxy") };
         assert_eq!((t.username.clone(), t.password.clone()), (None, None));
     }

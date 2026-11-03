@@ -12,6 +12,17 @@ pub fn same_path(a: &str, b: &str) -> bool {
     exe_key(a) == exe_key(b)
 }
 
+/// 规则里的进程 `pattern` 是否命中完整映像路径 `exe`：只写进程名时比较文件名，否则比较整条路径。
+/// 与 ProxyBridge 的匹配方式一致。
+pub fn matches_process(pattern: &str, exe: &str) -> bool {
+    if routa_procsvc_proto::is_process_name(pattern.trim()) {
+        let key = exe_key(exe);
+        exe_key(pattern) == key.rsplit('\\').next().unwrap_or(&key)
+    } else {
+        same_path(pattern, exe)
+    }
+}
+
 /// 进程的完整映像路径（Win32 形式）；进程已退出或无权访问时为 None。
 pub fn exe_of_pid(pid: u32) -> Option<String> {
     // 长路径上限：最多 32767 个 UTF-16 单元。
@@ -38,6 +49,16 @@ mod tests {
     fn same_path_variants() {
         assert!(same_path(r"C:\测试\Ä.exe", "c:/测试/ä.EXE "));
         assert!(!same_path(r"C:\a\b.exe", r"C:\a\b.exe.bak"));
+    }
+
+    #[test]
+    fn matches_process_by_name_or_path() {
+        let exe = r"C:\Apps\ChatGPT\ChatGPT.exe";
+        assert!(matches_process("chatgpt.EXE", exe));
+        assert!(matches_process(r"c:/apps/chatgpt/chatgpt.exe", exe));
+        assert!(!matches_process(r"D:\ChatGPT.exe", exe));
+        assert!(!matches_process("GPT.exe", exe));
+        assert!(!matches_process("ChatGPT", exe));
     }
 
     #[test]

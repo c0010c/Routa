@@ -317,27 +317,39 @@ pub struct Model {
     pub process_routing: ProcessRouting,
 }
 
-/// 按进程分流的一条规则：指定 exe 的流量走某个 Listener。
+/// 按进程分流的一条规则：一组程序的流量走某个 Listener。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
 #[serde(default)]
 pub struct ProcessRule {
     pub id: ProcessRuleId,
-    pub exe_path: String,
+    /// 显示名称；为空时界面用第一个进程名代替。
+    pub name: String,
+    /// 进程名（`a.exe`）；`match_full_path` 时为完整路径（`C:\…\a.exe`）。
+    pub processes: Vec<String>,
+    /// 按完整路径匹配。按进程名匹配的规则没法在组件故障时阻断（`on_fault` 只能是 `Direct`）。
+    pub match_full_path: bool,
     pub listener: ListenerId,
     pub on_fault: FaultPolicy,
     pub reset_on_change: bool,
     pub user_enabled: bool,
+    /// 旧版（一条规则一个 exe）的字段，只用于读取旧数据；`normalize` 把它迁移到 `processes`。
+    #[serde(skip_serializing)]
+    #[specta(skip)]
+    pub exe_path: String,
 }
 
 impl Default for ProcessRule {
     fn default() -> Self {
         Self {
             id: ProcessRuleId::new(),
-            exe_path: String::new(),
+            name: String::new(),
+            processes: vec![],
+            match_full_path: false,
             listener: ListenerId(String::new()),
-            on_fault: FaultPolicy::Block,
+            on_fault: FaultPolicy::Direct,
             reset_on_change: false,
             user_enabled: true,
+            exe_path: String::new(),
         }
     }
 }
@@ -400,8 +412,9 @@ mod tests {
         assert_eq!(m.process_routing.on_routa_exit, ExitPolicy::Block);
         assert!(m.process_routing.rules.is_empty());
         // 规则缺字段取默认值
-        let r: ProcessRule = serde_json::from_str(r#"{"exe_path": "C:\\a.exe"}"#).unwrap();
-        assert_eq!((r.on_fault, r.reset_on_change, r.user_enabled), (FaultPolicy::Block, false, true));
+        let r: ProcessRule = serde_json::from_str(r#"{"processes": ["a.exe"]}"#).unwrap();
+        assert_eq!((r.on_fault, r.reset_on_change, r.user_enabled), (FaultPolicy::Direct, false, true));
+        assert!(!r.match_full_path && r.name.is_empty());
     }
 
     #[test]
@@ -482,8 +495,10 @@ mod tests {
                 enabled: true,
                 on_routa_exit: ExitPolicy::Direct,
                 rules: vec![ProcessRule {
-                    exe_path: r"C:\测试\a.exe".into(),
-                    on_fault: FaultPolicy::Direct,
+                    name: "测试".into(),
+                    processes: vec![r"C:\测试\a.exe".into(), r"C:\测试\b.exe".into()],
+                    match_full_path: true,
+                    on_fault: FaultPolicy::Block,
                     reset_on_change: true,
                     ..ProcessRule::default()
                 }],

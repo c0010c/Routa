@@ -1592,7 +1592,7 @@ async fn restart_clears_reason() {
 }
 
 fn process_rule(exe: &str) -> ProcessRule {
-    ProcessRule { exe_path: exe.into(), listener: ListenerId("lis-1".into()), ..ProcessRule::default() }
+    ProcessRule { processes: vec![exe.into()], match_full_path: true, listener: ListenerId("lis-1".into()), ..ProcessRule::default() }
 }
 
 #[tokio::test(start_paused = true)]
@@ -1617,7 +1617,7 @@ async fn process_routing_change_does_not_reload_core() {
     assert_eq!(h.launcher.count(), 1);
     let saved = Store::open(h.data.clone()).unwrap().load_model().unwrap();
     assert!(saved.process_routing.enabled);
-    assert_eq!(saved.process_routing.rules[0].exe_path, r"C:\Apps\game.exe");
+    assert_eq!(saved.process_routing.rules[0].processes, vec![r"C:\Apps\game.exe".to_string()]);
     assert_eq!(h.rt.model(), saved);
     assert!(drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::Status(_))));
     // The engine's copy changed too: a later mutation keeps the rule.

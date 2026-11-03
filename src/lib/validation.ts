@@ -25,16 +25,20 @@ export function fieldErrors(errors: ValidationError[]): FieldErrors {
     } else if ("InvalidProxy" in e) {
       out.form.push(`节点「${e.InvalidProxy.name}」：${e.InvalidProxy.reason}`);
     } else if ("DuplicateProcessRule" in e) {
-      out.form.push(`程序「${e.DuplicateProcessRule.exe_path}」已有分流规则`);
+      out.form.push(`${e.DuplicateProcessRule.exe_path} 已在其他规则中，一个程序只能属于一条规则`);
     } else if ("InvalidExePath" in e) {
-      out.form.push(`程序路径「${e.InvalidExePath.exe_path}」无效：${e.InvalidExePath.reason}`);
+      out.form.push(`「${e.InvalidExePath.exe_path}」无效：${e.InvalidExePath.reason}`);
+    } else if ("EmptyProcessRule" in e) {
+      out.form.push("至少添加一个进程");
+    } else if ("ProcessNameCannotBlock" in e) {
+      out.form.push("按进程名匹配时，组件故障时只能直连；需要阻断请在高级选项里打开「按完整路径匹配」");
     } else if ("ListenerTypeNotAllowed" in e) {
       out.form.push(`Listener「${e.ListenerTypeNotAllowed.listener}」是 HTTP 类型，不能用于进程分流`);
     } else if ("ListenerAddressNotAllowed" in e) {
       const { listener, listen } = e.ListenerAddressNotAllowed;
       out.form.push(`Listener「${listener}」的监听地址「${listen}」不能用于进程分流：仅支持 IPv4 入口，请修改监听地址或选择其他 Listener`);
     } else if ("TooManyProcessRules" in e) {
-      out.form.push(`启用的分流规则最多 ${e.TooManyProcessRules.max} 条`);
+      out.form.push(`启用的规则里最多一共 ${e.TooManyProcessRules.max} 个进程`);
     } else {
       out.form.push(`${e.IntervalOutOfRange.field} 的值 ${e.IntervalOutOfRange.value} 超出允许范围`);
     }

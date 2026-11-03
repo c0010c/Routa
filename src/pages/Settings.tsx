@@ -5,6 +5,9 @@ import {
   Button,
   Card,
   Divider,
+  FormControlLabel,
+  Radio,
+  RadioGroup,
   Stack,
   Switch,
   TextField,
@@ -17,11 +20,21 @@ import {
   useModel,
   useOpenLogDir,
 } from "../api/client";
+import {
+  useProcRouteCleanup,
+  useProcRouteStatus,
+  useProcRouteUninstall,
+  useSaveProcessRoutingSettings,
+} from "../api/procroute";
 import { settingsSaveMessage, useSettingsSave } from "../api/settings";
 import type {
+  ExitPolicy,
   Listener,
+  ProcessRouting,
   Settings as SettingsModel,
 } from "../bindings";
+import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { EXIT_POLICY_HINT, EXIT_POLICY_LABEL } from "./ProcessRouting";
 import { SaveFeedback, useSaveFeedback } from "../components/SaveFeedback";
 import { IntervalInput } from "../components/IntervalInput";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
@@ -89,9 +102,11 @@ function Section({
 function SettingsForm({
   initial,
   listeners,
+  routing,
 }: {
   initial: SettingsModel;
   listeners: Listener[];
+  routing: ProcessRouting;
 }) {
   const save = useSettingsSave();
   const openLogDir = useOpenLogDir();
@@ -259,8 +274,74 @@ function SettingsForm({
             </Row>,
           ]}
         </Section>
+        <ProcessRoutingSection routing={routing} />
       </Stack>
     </Stack>
+  );
+}
+
+/** Process routing settings that are set once and rarely touched; the page itself keeps the switch and status. */
+function ProcessRoutingSection({ routing }: { routing: ProcessRouting }) {
+  const status = useProcRouteStatus();
+  const settings = useSaveProcessRoutingSettings();
+  const uninstall = useProcRouteUninstall();
+  const cleanup = useProcRouteCleanup();
+  const [confirm, setConfirm] = useState<"uninstall" | "cleanup" | null>(null);
+  const component = status.data?.component;
+  const busy = uninstall.isPending || cleanup.isPending;
+  return (
+    <Section title="进程分流">
+      {[
+        <Row key="exit" label={EXIT_POLICY_LABEL} description={EXIT_POLICY_HINT}>
+          <RadioGroup
+            row
+            aria-label={EXIT_POLICY_LABEL}
+            value={routing.on_routa_exit}
+            onChange={(e) => settings.mutate(routing.enabled, e.target.value as ExitPolicy)}
+          >
+            <FormControlLabel value="Direct" control={<Radio size="small" />} label="直连" disabled={settings.isPending} />
+            <FormControlLabel value="Block" control={<Radio size="small" />} label="阻断" disabled={settings.isPending} />
+          </RadioGroup>
+        </Row>,
+        <Row
+          key="component"
+          label="分流组件"
+          description="清理：删除系统中所有 Routa 留下的阻断规则，被阻断的程序会直接联网。卸载：停止并删除分流服务。两者都可能需要管理员授权。"
+        >
+          <Stack direction="row" spacing={1}>
+            <Button variant="outlined" disabled={busy} onClick={() => setConfirm("cleanup")}>
+              清理残留阻断规则
+            </Button>
+            <Button
+              variant="outlined"
+              color="error"
+              disabled={busy || component === "NotInstalled"}
+              onClick={() => setConfirm("uninstall")}
+            >
+              卸载组件
+            </Button>
+          </Stack>
+          {confirm === "uninstall" && (
+            <ConfirmDeleteDialog
+              title="卸载组件"
+              confirmLabel="卸载"
+              text="将停止并删除分流服务，并清除它的所有阻断规则。需要管理员授权。"
+              onConfirm={() => uninstall.mutateAsync()}
+              onClose={() => setConfirm(null)}
+            />
+          )}
+          {confirm === "cleanup" && (
+            <ConfirmDeleteDialog
+              title="清理残留阻断规则"
+              confirmLabel="清理"
+              text="将删除系统中所有 Routa 留下的阻断规则，被阻断的程序会直接联网。服务未运行时需要管理员授权。"
+              onConfirm={() => cleanup.mutateAsync()}
+              onClose={() => setConfirm(null)}
+            />
+          )}
+        </Row>,
+      ]}
+    </Section>
   );
 }
 
@@ -271,6 +352,7 @@ export function Settings() {
     <SettingsForm
       initial={model.data.settings}
       listeners={model.data.listeners}
+      routing={model.data.process_routing}
     />
   );
 }

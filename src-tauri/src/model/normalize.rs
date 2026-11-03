@@ -15,14 +15,29 @@ pub fn normalize_exe_path(p: &str) -> String {
     p.trim().replace('/', "\\")
 }
 
+/// 旧版一条规则一个 exe（完整路径）：迁移成按完整路径匹配的单进程规则，行为不变。
+pub fn migrate_legacy_process_rules(pr: &mut ProcessRouting) {
+    for r in &mut pr.rules {
+        let legacy = std::mem::take(&mut r.exe_path);
+        if r.processes.is_empty() && !legacy.trim().is_empty() {
+            r.processes.push(normalize_exe_path(&legacy));
+            r.match_full_path = true;
+        }
+    }
+}
+
 pub fn normalize(model: &mut Model) {
     for sub in &mut model.subscriptions {
         if let Some(id) = &sub.fallback_listener {
             sub.fallback_exit = model.listeners.iter().find(|l| &l.id == id).and_then(|l| l.exit.clone());
         }
     }
+    migrate_legacy_process_rules(&mut model.process_routing);
     for r in &mut model.process_routing.rules {
-        r.exe_path = normalize_exe_path(&r.exe_path);
+        for p in &mut r.processes {
+            *p = normalize_exe_path(p);
+        }
+        r.name = r.name.trim().to_string();
     }
 
     // Compute against the immutable model first, then apply.
@@ -107,6 +122,21 @@ mod tests {
     }
     fn exit(kind: ExitKind, interface: Option<InterfaceGuid>) -> Exit {
         Exit { id: ExitId::new(), name: "e".into(), kind, interface }
+    }
+
+    #[test]
+    fn legacy_process_rule_migrates_to_full_path_rule() {
+        let mut m: Model = serde_json::from_str(
+            r#"{"process_routing": {"rules": [{"id": "r1", "exe_path": " C:/App/a.exe ", "on_fault": "Block"}]}}"#,
+        )
+        .unwrap();
+        normalize(&mut m);
+        let r = &m.process_routing.rules[0];
+        assert_eq!(r.processes, vec![r"C:\App\a.exe".to_string()]);
+        assert!(r.match_full_path && r.exe_path.is_empty());
+        assert_eq!(r.on_fault, FaultPolicy::Block);
+        // 迁移后不再写出旧字段。
+        assert!(!serde_json::to_string(r).unwrap().contains("exe_path"));
     }
 
     #[test]

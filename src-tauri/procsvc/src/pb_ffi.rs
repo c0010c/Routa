@@ -21,7 +21,7 @@ use routa_procsvc_proto::{Flow, ProxyKind, ProxyTarget};
 
 use crate::engine::{Interceptor, PbAction};
 use crate::lazy::Bridge;
-use crate::paths::{exe_of_pid, same_path};
+use crate::paths::{exe_of_pid, matches_process};
 
 pub const DLL_NAME: &str = "ProxyBridgeCore.dll";
 
@@ -283,7 +283,7 @@ fn to_flow(raw: &PbFlow, exe: Option<String>, rules: &HashMap<String, Entry>) ->
     let rule_id = exe.as_deref().and_then(|exe| {
         rules
             .iter()
-            .find(|(_, e)| e.pb_rule.is_some() && same_path(&e.exe, exe))
+            .find(|(_, e)| e.pb_rule.is_some() && matches_process(&e.exe, exe))
             .map(|(id, _)| id.clone())
     });
     Flow {
@@ -569,6 +569,18 @@ mod tests {
             &rules,
         );
         assert_eq!(f.rule_id, None);
+
+        // 只写进程名的规则按文件名归属。
+        rules.insert(
+            "r3".to_string(),
+            Entry {
+                pb_rule: Some(9),
+                cfg: Some(5),
+                exe: "Baz.exe".into(),
+            },
+        );
+        let f = to_flow(&raw(45, "x", 0, false), Some(r"D:\Any\where\baz.EXE".into()), &rules);
+        assert_eq!(f.rule_id.as_deref(), Some("r3"));
     }
 
     #[test]

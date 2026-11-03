@@ -82,6 +82,7 @@ impl Store {
             if !backup.exists() { fs::copy(self.state_path(), backup)?; }
             crate::model::migrate::private_outbounds(&mut model);
         }
+        crate::model::normalize::migrate_legacy_process_rules(&mut model.process_routing);
         model.settings.core_path = None;
         Ok(model)
     }

@@ -619,9 +619,21 @@ apply_errors: string[];
 truncated_flows: boolean }
 export type ProcessRouting = { enabled: boolean; on_routa_exit: ExitPolicy; rules: ProcessRule[] }
 /**
- * 按进程分流的一条规则：指定 exe 的流量走某个 Listener。
+ * 按进程分流的一条规则：一组程序的流量走某个 Listener。
  */
-export type ProcessRule = { id: ProcessRuleId; exe_path: string; listener: ListenerId; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean }
+export type ProcessRule = { id: ProcessRuleId; 
+/**
+ * 显示名称；为空时界面用第一个进程名代替。
+ */
+name: string; 
+/**
+ * 进程名（`a.exe`）；`match_full_path` 时为完整路径（`C:\…\a.exe`）。
+ */
+processes: string[]; 
+/**
+ * 按完整路径匹配。按进程名匹配的规则没法在组件故障时阻断（`on_fault` 只能是 `Direct`）。
+ */
+match_full_path: boolean; listener: ListenerId; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean }
 export type ProcessRuleId = string
 /**
  * Bytes per second.
@@ -745,7 +757,19 @@ export type ValidationError = { DuplicateName: { kind: string; name: string } } 
 /**
  * The generated config was rejected by `mihomo -t`.
  */
-{ CoreRejected: { message: string } } | { DuplicateProcessRule: { exe_path: string } } | { InvalidExePath: { exe_path: string; reason: string } } | { ListenerTypeNotAllowed: { listener: string } } | { ListenerAddressNotAllowed: { listener: string; listen: string } } | { TooManyProcessRules: { max: number } }
+{ CoreRejected: { message: string } } | 
+/**
+ * 同一个程序（按文件名）出现在多处：一个程序只能属于一条规则。
+ */
+{ DuplicateProcessRule: { exe_path: string } } | { InvalidExePath: { exe_path: string; reason: string } } | { ListenerTypeNotAllowed: { listener: string } } | { ListenerAddressNotAllowed: { listener: string; listen: string } } | 
+/**
+ * 已启用规则里的进程总数超过上限。
+ */
+{ TooManyProcessRules: { max: number } } | { EmptyProcessRule: { rule: string } } | 
+/**
+ * 按进程名匹配的规则不能在组件故障时阻断（WFP 只认完整路径）。
+ */
+{ ProcessNameCannotBlock: { rule: string } }
 
 /** tauri-specta globals **/
 

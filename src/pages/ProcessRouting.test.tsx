@@ -37,7 +37,17 @@ const model: Model = {
     enabled: true,
     on_routa_exit: "Block",
     rules: [
-      { id: "r1", exe_path: "C:\\Apps\\curl.exe", listener: "l1", on_fault: "Block", reset_on_change: false, user_enabled: true },
+      { id: "r1", name: "", processes: ["curl.exe"], match_full_path: false, listener: "l1", on_fault: "Direct", reset_on_change: false, user_enabled: true },
+      {
+        id: "r2",
+        name: "AI 工具",
+        processes: ["ChatGPT.exe", "codex.exe", "Claude.exe", "node.exe", "C:\\Tools\\git.exe"],
+        match_full_path: false,
+        listener: "l1",
+        on_fault: "Direct",
+        reset_on_change: false,
+        user_enabled: true,
+      },
     ],
   },
 };
@@ -125,7 +135,7 @@ describe("ProcessRoutingPage", () => {
 
     unmount();
     renderPage(status);
-    await screen.findByText("分流组件");
+    await screen.findByText("运行中");
     expect(screen.queryByText(/最近一次中断：/)).not.toBeInTheDocument();
   });
 
@@ -148,21 +158,23 @@ describe("ProcessRoutingPage", () => {
     });
     expect(await screen.findByText("已阻断")).toBeInTheDocument();
     expect(screen.getByText("Listener 已停用")).toBeInTheDocument();
-    expect(screen.getByText("curl.exe")).toBeInTheDocument();
+    // The unnamed rule is labelled by its process, which is also listed as a chip.
+    expect(screen.getAllByText("curl.exe")).toHaveLength(2);
   });
 
   it.each([
     ["Unknown", "状态未知"], ["Pending", "应用中"], ["Failed", "应用失败"],
   ])("shows unconfirmed state %s without claiming success", async (action, label) => {
     renderPage({ ...base, actions: { r1: { action, reason: null, up_bps: 0, down_bps: 0 } } });
-    expect(await screen.findByText(label)).toBeInTheDocument();
+    const row = (await screen.findAllByText("curl.exe"))[0].closest("tr")!;
+    expect(within(row).getByText(label)).toBeInTheDocument();
     expect(screen.queryByText("已代理")).not.toBeInTheDocument();
     expect(screen.queryByText("已阻断")).not.toBeInTheDocument();
   });
 
   it("missing service confirmation shows unknown", async () => {
     renderPage({ ...base, component: "NotInstalled" });
-    expect(await screen.findByText("状态未知")).toBeInTheDocument();
+    expect(await screen.findAllByText("状态未知")).toHaveLength(2);
     expect(screen.queryByText("已阻断")).not.toBeInTheDocument();
   });
 
@@ -192,7 +204,7 @@ describe("ProcessRoutingPage", () => {
       truncated_flows: true,
       actions: { r1: { action: "Proxy", reason: null, up_bps: 2048, down_bps: 0 } },
     });
-    fireEvent.click(await screen.findByText("curl.exe"));
+    fireEvent.click((await screen.findAllByText("curl.exe"))[0]);
     act(() =>
       setFlows([
         { pid: 7, rule_id: "r1", exe_path: "C:\\Apps\\curl.exe", host: "example.com", port: 443, udp: false, age_ms: 65000, sent: 10, received: 2048 },
@@ -205,12 +217,41 @@ describe("ProcessRoutingPage", () => {
     expect(within(drawer).queryByText("other.org")).not.toBeInTheDocument();
   });
 
-  it("surfaces a cancelled cleanup in the snackbar", async () => {
-    vi.mocked(commands.procrouteCleanup).mockResolvedValue({ status: "error", error: "已取消" });
+  it("lists each rule with its processes and folds the rest", async () => {
     renderPage(base);
-    fireEvent.click(await screen.findByRole("button", { name: "更多组件操作" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "清理残留阻断规则" }));
-    fireEvent.click(await screen.findByRole("button", { name: "清理" }));
-    expect(await screen.findByText("已取消")).toBeInTheDocument();
+    const row = (await screen.findByText("AI 工具")).closest("tr")!;
+    for (const name of ["ChatGPT.exe", "codex.exe", "Claude.exe", "node.exe"]) {
+      expect(within(row).getByText(name)).toBeInTheDocument();
+    }
+    expect(within(row).getByText("+1")).toBeInTheDocument();
+    expect(within(row).queryByText("git.exe")).not.toBeInTheDocument();
+  });
+
+  it("searches rule names and processes", async () => {
+    renderPage(base);
+    const search = await screen.findByLabelText("搜索规则名称或进程");
+    fireEvent.change(search, { target: { value: "codex" } });
+    expect(screen.getByText("AI 工具")).toBeInTheDocument();
+    expect(screen.queryByText("curl.exe")).not.toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "nothing" } });
+    expect(screen.getByText("没有匹配的规则")).toBeInTheDocument();
+  });
+
+  it("keeps the switch next to the title and explains a paused state", async () => {
+    vi.mocked(commands.saveProcessRoutingSettings).mockResolvedValue({ status: "ok", data: null });
+    renderPage(base, { ...model, process_routing: { ...model.process_routing, enabled: false } });
+    expect(await screen.findByText("进程分流已暂停，下面的规则都不生效。")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "启用进程分流规则" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(true, "Block"));
+    // Exit policy and component maintenance live in Settings now.
+    expect(screen.queryByText("退出行为与故障策略")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "更多组件操作" })).not.toBeInTheDocument();
+  });
+
+  it("hides the switch until the component is installed", async () => {
+    renderPage({ ...base, component: "NotInstalled" });
+    await screen.findByText("未安装");
+    expect(screen.queryByRole("switch", { name: "启用进程分流规则" })).not.toBeInTheDocument();
   });
 });

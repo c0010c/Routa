@@ -35,7 +35,7 @@ use windows_sys::Win32::System::Services::{
     SERVICE_STATUS_PROCESS,
 };
 
-use super::decide::{self, decide};
+use super::decide::{self, decide, rule_of_spec};
 use crate::model::ProcessRuleId;
 use crate::runtime::Runtime;
 
@@ -422,6 +422,18 @@ impl Rates {
 
 // ---------------------------------------------------------------- 会话状态
 
+/// 合并一条规则里各进程的状态时的优先级：越大越需要用户注意。
+fn severity(action: &str) -> u8 {
+    match action {
+        "Proxy" => 0,
+        "Direct" => 1,
+        "Pending" => 2,
+        "Block" => 3,
+        "Unknown" => 4,
+        _ => 5, // Failed 及其它
+    }
+}
+
 /// 同步任务里与服务相关的全部状态（不含定时和 Tauri）。
 struct Link {
     conn: Option<Box<dyn SvcConn>>,
@@ -524,8 +536,14 @@ impl Link {
             }
         }
         match round(conn, &mut self.syncer, desired, poll).await {
-            Ok(Some((flows, status))) => {
+            Ok(Some((mut flows, status))) => {
                 if poll {
+                    // 服务端按进程拆分规则；连接和速率都归回 Routa 的规则。
+                    for f in &mut flows {
+                        if let Some(id) = &mut f.rule_id {
+                            *id = rule_of_spec(id).to_string();
+                        }
+                    }
                     self.bps = self.rates.update(&flows, Instant::now());
                     self.flows = flows;
                 }
@@ -560,29 +578,30 @@ impl Link {
     }
 
     fn view(&self, desired: &DesiredState, reasons: &HashMap<ProcessRuleId, Option<String>>) -> ProcRouteStatus {
-        let actions = desired
-            .rules
-            .iter()
-            .map(|r| {
-                let id = ProcessRuleId(r.id.clone());
-                let (up_bps, down_bps) = self.bps.get(&r.id).copied().unwrap_or_default();
-                let pending = self.syncer.manual_retry || self.syncer.attempted.as_ref() != Some(desired);
-                let confirmed = self.connected() && !pending && self.syncer.last_sent.as_ref() == Some(desired);
-                let actual = confirmed.then(|| self.svc.as_ref()?.rules.iter().find(|a| a.id == r.id)).flatten();
-                let (action, reason) = if let Some(actual) = actual {
-                    (actual.action.as_deref().unwrap_or("Unknown"), actual.reason.clone().or_else(|| reasons.get(&id).cloned().flatten()))
-                } else if !self.connected() {
-                    ("Unknown", Some("无法连接分流服务，状态未知".into()))
-                } else if pending {
-                    ("Pending", Some("等待服务确认当前设置".into()))
-                } else if !self.syncer.errors.is_empty() {
-                    ("Failed", Some("应用失败；请手动重试".into()))
-                } else {
-                    ("Pending", Some("等待服务确认当前设置".into()))
-                };
-                (id, RuleView { action: action.into(), reason, up_bps, down_bps })
-            })
-            .collect();
+        let pending = self.syncer.manual_retry || self.syncer.attempted.as_ref() != Some(desired);
+        let confirmed = self.connected() && !pending && self.syncer.last_sent.as_ref() == Some(desired);
+        // 每个进程（服务端规则）的状态，再按所属 Routa 规则合并：取其中最需要用户注意的一个。
+        let mut actions: HashMap<ProcessRuleId, RuleView> = HashMap::new();
+        for r in &desired.rules {
+            let id = ProcessRuleId(rule_of_spec(&r.id).to_string());
+            let actual = confirmed.then(|| self.svc.as_ref()?.rules.iter().find(|a| a.id == r.id)).flatten();
+            let (action, reason) = if let Some(actual) = actual {
+                (actual.action.as_deref().unwrap_or("Unknown"), actual.reason.clone().or_else(|| reasons.get(&id).cloned().flatten()))
+            } else if !self.connected() {
+                ("Unknown", Some("无法连接分流服务，状态未知".into()))
+            } else if pending {
+                ("Pending", Some("等待服务确认当前设置".into()))
+            } else if !self.syncer.errors.is_empty() {
+                ("Failed", Some("应用失败；请手动重试".into()))
+            } else {
+                ("Pending", Some("等待服务确认当前设置".into()))
+            };
+            if actions.get(&id).is_some_and(|v| severity(&v.action) >= severity(action)) {
+                continue;
+            }
+            let (up_bps, down_bps) = self.bps.get(&id.0).copied().unwrap_or_default();
+            actions.insert(id, RuleView { action: action.into(), reason, up_bps, down_bps });
+        }
         let svc = self.svc.as_ref();
         ProcRouteStatus {
             component: self.component.clone(),
@@ -1366,5 +1385,36 @@ mod tests {
         );
         assert_eq!(v.last_interruption, Some(InterruptionView { at_unix: 5, reason: "崩溃".into() }));
         assert_eq!((v.conflicts, v.truncated_flows), (vec!["冲突".to_string()], true));
+    }
+
+    #[test]
+    fn view_merges_processes_of_one_rule() {
+        let mut desired = state("a.exe");
+        desired.rules[0].id = "r1|a.exe".into();
+        let mut b = desired.rules[0].clone();
+        (b.id, b.exe_path) = ("r1|b.exe".into(), "b.exe".into());
+        desired.rules.push(b);
+        let mut link = Link::default();
+        let (conn, _) = FakeConn::new(vec![]);
+        link.attach(Ok(Box::new(conn)));
+        link.syncer.last_sent = Some(desired.clone());
+        link.syncer.attempted = Some(desired.clone());
+        link.bps.insert("r1".into(), (1, 2));
+        let status = |id: &str, action: &str, reason: Option<&str>| routa_procsvc_proto::RuleStatus {
+            id: id.into(),
+            action: Some(action.into()),
+            reason: reason.map(Into::into),
+        };
+        link.svc = Some(SvcStatus {
+            version: PROTO_VERSION, owner_sid: "test".into(), last_interruption: None,
+            truncated_flows: false, conflicts: vec![],
+            rules: vec![status("r1|a.exe", "Proxy", None), status("r1|b.exe", "Block", Some("b 失败"))],
+        });
+        let v = link.view(&desired, &HashMap::new());
+        assert_eq!(v.actions.len(), 1);
+        assert_eq!(
+            v.actions[&ProcessRuleId("r1".into())],
+            RuleView { action: "Block".into(), reason: Some("b 失败".into()), up_bps: 1, down_bps: 2 }
+        );
     }
 }

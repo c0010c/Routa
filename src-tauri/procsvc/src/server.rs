@@ -36,6 +36,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::engine::{ConnKiller, Guard, Interceptor};
 use crate::fallback::{fallback, RoutaGone};
 use crate::persist;
+use crate::paths::matches_process;
 use crate::reconcile::{exe_key, Reconciler};
 
 /// ProxyBridge 最多 32 个代理配置（ruling R13）。
@@ -359,11 +360,15 @@ fn validate(state: &DesiredState) -> Result<(), String> {
             return Err(format!("规则 id 重复：{}", r.id));
         }
         let exe = &r.exe_path;
-        if let Some(reason) = routa_procsvc_proto::exe_path_problem(exe) {
+        if let Some(reason) = routa_procsvc_proto::process_problem(exe) {
             return Err(format!("程序路径无效（{reason}）：{exe}"));
         }
-        if own.contains(&exe_key(exe)) {
+        if own.iter().any(|o| matches_process(exe, o)) {
             return Err(format!("不能对进程分流组件自身设置规则：{exe}"));
+        }
+        // WFP 只能按完整路径识别程序，按进程名的规则没法在故障时阻断。
+        if routa_procsvc_proto::is_process_name(exe) && r.on_fault == FaultPolicy::Block {
+            return Err(format!("按进程名匹配的规则不能在故障时阻断：{exe}"));
         }
         if !exes.insert(exe_key(exe)) {
             return Err(format!("程序路径重复：{exe}"));
@@ -1207,6 +1212,17 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn apply_accepts_process_name_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut srv, world) = boot(dir.path(), &[], true);
+        let mut s = hello(&mut srv);
+        let mut st = state(ExitPolicy::Direct);
+        st.rules[1].exe_path = "Chat.exe".into();
+        applied(&mut srv, &mut s, st);
+        assert_eq!(action(&world, "b"), Some(PbAction::Proxy));
+    }
+
+    #[test]
     fn apply_rejects_invalid_state() {
         type Edit = fn(&mut DesiredState);
         fn set_target(s: &mut DesiredState, f: fn(&mut ProxyTarget)) {
@@ -1278,6 +1294,20 @@ pub(crate) mod tests {
                 "32",
             ),
             ("dead routa", |s| s.routa_pid = 0, "Routa 进程"),
+            (
+                "name with fault block",
+                |s| s.rules[0].exe_path = "a.exe".into(),
+                "不能在故障时阻断",
+            ),
+            ("bad name", |s| s.rules[1].exe_path = "*.exe".into(), "不能包含"),
+            (
+                "service exe by name",
+                |s| {
+                    let p = std::env::current_exe().unwrap();
+                    s.rules[1].exe_path = p.file_name().unwrap().to_string_lossy().to_uppercase();
+                },
+                "组件自身",
+            ),
             (
                 "installed service exe",
                 |s| {

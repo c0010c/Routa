@@ -13,7 +13,7 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 
 use crate::engine::ConnKiller;
-use crate::paths::{exe_of_pid, same_path};
+use crate::paths::{exe_of_pid, matches_process};
 
 /// `SetTcpEntry` 使用的 `MIB_TCPROW`：与 `MIB_TCPROW_OWNER_PID` 前五个字段布局一致。
 #[repr(C)]
@@ -25,7 +25,7 @@ struct TcpRow {
     remote_port: u32,
 }
 
-/// 映像路径等于 `exe`（不区分大小写）的所有进程 PID。
+/// 命中 `exe`（完整路径，或只写进程名，见 [`matches_process`]）的所有进程 PID。
 pub fn pids_for_exe(exe: &str) -> Vec<u32> {
     let mut pids = Vec::new();
     // SAFETY: 快照句柄只在本函数内使用并关闭；entry 的 dwSize 已按要求初始化。
@@ -39,7 +39,7 @@ pub fn pids_for_exe(exe: &str) -> Vec<u32> {
         let mut ok = Process32FirstW(snap, &mut entry);
         while ok != 0 {
             let pid = entry.th32ProcessID;
-            if pid != 0 && exe_of_pid(pid).is_some_and(|p| same_path(&p, exe)) {
+            if pid != 0 && exe_of_pid(pid).is_some_and(|p| matches_process(exe, &p)) {
                 pids.push(pid);
             }
             ok = Process32NextW(snap, &mut entry);

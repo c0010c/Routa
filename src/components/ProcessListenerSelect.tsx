@@ -11,6 +11,7 @@ import type { Listener, ProcessRule } from "../bindings";
 import { desktopApi, useDesktopMutation } from "../api/desktop";
 import { errorMessage } from "../api/client";
 import { ListenerDialog, newListener } from "../pages/ListenerDialog";
+import { ruleLabel } from "../lib/processRule";
 
 export function ProcessListenerSelect({
   rule,
@@ -58,7 +59,7 @@ export function ProcessListenerSelect({
         disabled={save.isPending}
         aria-busy={save.isPending}
         inputProps={{
-          "aria-label": `${rule.exe_path.split(/[\\/]/).pop()}监听器`,
+          "aria-label": `${ruleLabel(rule)}监听器`,
         }}
         onChange={(e) => {
           if (e.target.value === "__new__") setEditing(newListener(listeners));

@@ -36,9 +36,12 @@ const model: Model = {
   process_routing: { enabled: true, on_routa_exit: "Block", rules: [] },
 };
 
+/** A rule migrated from the old one-exe shape: matched by full path, blocks on fault. */
 const rule: ProcessRule = {
   id: "r1",
-  exe_path: "C:\\Apps\\curl.exe",
+  name: "",
+  processes: ["C:\\Apps\\curl.exe"],
+  match_full_path: true,
   listener: "l1",
   on_fault: "Block",
   reset_on_change: false,
@@ -116,8 +119,8 @@ describe("ProcessRuleDialog", () => {
     const onClose = renderDialog(rule);
     await loaded();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByText("程序「C:\\Apps\\curl.exe」已有分流规则")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "程序路径" })).toHaveAttribute("aria-invalid", "true");
+    expect(await screen.findByText("C:\\Apps\\curl.exe 已在其他规则中，一个程序只能属于一条规则")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "进程" })).toHaveAttribute("aria-invalid", "true");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -133,16 +136,64 @@ describe("ProcessRuleDialog", () => {
     expect(await screen.findByText("Listener「浏览器」是 HTTP 类型，不能用于进程分流")).toBeInTheDocument();
   });
 
-  it("saves a typed path and closes", async () => {
+  it("saves typed process names and closes", async () => {
     vi.mocked(commands.saveProcessRule).mockResolvedValue({ status: "ok", data: null });
     vi.mocked(commands.saveProcessRule).mockClear();
     const onClose = renderDialog();
     await loaded();
-    fireEvent.change(screen.getByRole("combobox", { name: "程序路径" }), { target: { value: "D:\\Tools\\app.exe" } });
+    const input = screen.getByRole("combobox", { name: "进程" });
+    fireEvent.change(input, { target: { value: "ChatGPT.exe" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // A pasted path is cut down to its file name when matching by name; text left in the box is saved too.
+    fireEvent.change(input, { target: { value: "D:\\Tools\\codex.exe" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     const saved = vi.mocked(commands.saveProcessRule).mock.calls[0][0];
-    expect(saved).toMatchObject({ exe_path: "D:\\Tools\\app.exe", listener: "l1", on_fault: "Block", reset_on_change: false });
+    expect(saved).toMatchObject({
+      name: "",
+      processes: ["ChatGPT.exe", "codex.exe"],
+      match_full_path: false,
+      listener: "l1",
+      on_fault: "Direct",
+      reset_on_change: false,
+    });
+  });
+
+  it("warns about name matching and only allows blocking with full paths", async () => {
+    renderDialog();
+    await loaded();
+    expect(screen.getByText(/按进程名匹配：同名程序装在哪里都会被分流/)).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "直连" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "阻断" })).toBeDisabled();
+    // Turning on full paths swaps a running program's name for its path and allows blocking.
+    const input = screen.getByRole("combobox", { name: "进程" });
+    fireEvent.change(input, { target: { value: "curl.exe" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByRole("switch", { name: "按完整路径匹配" }));
+    expect(screen.getByRole("button", { name: "C:\\Apps\\curl.exe" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "阻断" })).toBeEnabled();
+    expect(screen.queryByText(/按进程名匹配：同名程序装在哪里都会被分流/)).not.toBeInTheDocument();
+  });
+
+  it("refuses a program that already belongs to another rule", async () => {
+    const other: ProcessRule = { ...rule, id: "r2", name: "AI 工具", processes: ["ChatGPT.exe"], match_full_path: false, on_fault: "Direct" };
+    vi.mocked(commands.getModel).mockResolvedValue({ ...model, process_routing: { ...model.process_routing, rules: [other] } });
+    renderDialog();
+    await loaded();
+    const input = screen.getByRole("combobox", { name: "进程" });
+    fireEvent.change(input, { target: { value: "chatgpt.EXE" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("chatgpt.EXE 已在规则「AI 工具」中，一个程序只能属于一条规则")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "chatgpt.EXE" })).not.toBeInTheDocument();
+  });
+
+  it("requires at least one process", async () => {
+    vi.mocked(commands.saveProcessRule).mockClear();
+    renderDialog();
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("至少添加一个进程")).toBeInTheDocument();
+    expect(commands.saveProcessRule).not.toHaveBeenCalled();
   });
 
   it("shows unsupported IPv6 entry errors on the listener field", async () => {

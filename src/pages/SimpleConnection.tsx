@@ -55,6 +55,7 @@ import { NodePicker } from "../components/NodePicker";
 import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
 import { ManualNodeDialog, newManualNode } from "./ManualNodeDialog";
 import { nodeLabel, proxyNameOf } from "../lib/refs";
+import { ruleLabel } from "../lib/processRule";
 import { delayText, formatRate } from "../lib/format";
 import type { NodeRef } from "../bindings";
 
@@ -387,8 +388,8 @@ export function SimpleConnection() {
                   >
                     <AppsOutlined color="action" />
                     <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography noWrap title={r.exe_path}>
-                        {r.exe_path.split(/[\\/]/).pop()}
+                      <Typography noWrap title={r.processes.join("\n")}>
+                        {ruleLabel(r)}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
                         {r.listener !== p.listener_id
@@ -407,12 +408,12 @@ export function SimpleConnection() {
                       checked={p.selected_apps.includes(r.id)}
                       disabled={appSave.isPending}
                       slotProps={{
-                        input: { "aria-label": `${r.exe_path}走代理` },
+                        input: { "aria-label": `${r.processes[0] ?? ""}走代理` },
                       }}
                       onChange={async (_, selected) => {
                         try {
                           await appSave.mutateAsync({
-                            path: r.exe_path,
+                            path: r.processes[0] ?? "",
                             selected,
                           });
                         } catch (e) {
