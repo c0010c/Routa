@@ -4,13 +4,23 @@ import { SearchField } from "../components/SearchField";
 import { BatchNodeDialog } from "./BatchNodeDialog";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
+import NetworkCheck from "@mui/icons-material/NetworkCheck";
+import SwapVert from "@mui/icons-material/SwapVert";
+import UnfoldLess from "@mui/icons-material/UnfoldLess";
+import UnfoldMore from "@mui/icons-material/UnfoldMore";
 import {
   Alert,
   Box,
   Button,
   Chip,
+  Divider,
+  IconButton,
+  Menu,
+  MenuItem,
   Paper,
   Stack,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import {
@@ -69,7 +79,11 @@ export function ResourceCenter({
   }, [editId, model.data, setParams]);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Per-group open state set by the user; groups without an entry use defaultOpen.
+  const [openOverride, setOpenOverride] = useState<Map<string, boolean>>(new Map());
+  // Open state chosen while searching; only applies to the query it was made under, so clearing the search restores openOverride.
+  const [searchOverride, setSearchOverride] = useState<{ query: string; open: Map<string, boolean> }>({ query: "", open: new Map() });
+  const [newMenu, setNewMenu] = useState<HTMLElement | null>(null);
   const [sub, setSub] = useState<Subscription | null>(null),
     [manual, setManual] = useState<ManualNode | null>(null),
     [ts, setTs] = useState<ManualNode | null>(null),
@@ -150,15 +164,37 @@ export function ResourceCenter({
   ].filter(
     (g) => g.id !== "ungrouped" || g.nodes.length > 0 || nodes.length === 0,
   );
-  const toggle = (id: string) =>
-    setCollapsed((old) => {
-      const next = new Set(old);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
   const delay = (name: string) => {
     const d = st.delays[name];
     return d?.stale ? Infinity : d?.ms ?? Infinity;
+  };
+  const q = search.trim().toLowerCase();
+  // Subscription sections start collapsed (unless opened from 订阅 → 查看节点); groups and 未分组 start open.
+  const defaultOpen = (id: string) => !id.startsWith("subscription:") || !!source;
+  // A search opens every matching section unless the user collapsed it during this same search.
+  const searchOpen = searchOverride.query === q ? searchOverride.open : new Map<string, boolean>();
+  const isOpen = (id: string) =>
+    q ? searchOpen.get(id) ?? true : openOverride.get(id) ?? defaultOpen(id);
+  const setOpen = (entries: [string, boolean][]) =>
+    q
+      ? setSearchOverride({ query: q, open: new Map([...searchOpen, ...entries]) })
+      : setOpenOverride((old) => new Map([...old, ...entries]));
+  const sections = grouped.flatMap((g) => {
+    let shown = g.nodes.filter(
+      (n) =>
+        (!source || n.sourceId === source) &&
+        `${n.name} ${n.source} ${n.type} ${g.name}`.toLowerCase().includes(q),
+    );
+    if (sort) shown = [...shown].sort((a, b) => delay(a.proxy) - delay(b.proxy));
+    if ((q || source) && !shown.length) return [];
+    return [{ ...g, shown, open: isOpen(g.id) }];
+  });
+  const toggle = (id: string) => setOpen([[id, !isOpen(id)]]);
+  const anyCollapsed = sections.some((g) => !g.open);
+  const setAll = (open: boolean) => setOpen(grouped.map((g) => [g.id, open]));
+  const create = (run: () => void) => () => {
+    setNewMenu(null);
+    run();
   };
   return (
     <Stack spacing={2}>
@@ -207,17 +243,28 @@ export function ResourceCenter({
                   订阅
                 </Button>
               )}
-              <Button onClick={() => setGroup(newNodeGroup())}>新建分组</Button>
-              <Button onClick={() => setTs(newTailscaleNode())}>
-                新增 Tailscale
-              </Button>
-              <Button onClick={() => setBatch(true)}>导入 YAML</Button>
               <Button
                 variant="contained"
-                onClick={() => setManual(newManualNode())}
+                endIcon={<ArrowDropDownIcon />}
+                aria-haspopup="menu"
+                aria-expanded={newMenu !== null}
+                onClick={(e) => setNewMenu(e.currentTarget)}
               >
-                新增节点
+                新增
               </Button>
+              <Menu
+                anchorEl={newMenu}
+                open={newMenu !== null}
+                onClose={() => setNewMenu(null)}
+                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                transformOrigin={{ vertical: "top", horizontal: "right" }}
+              >
+                <MenuItem onClick={create(() => setManual(newManualNode()))}>新增节点</MenuItem>
+                <MenuItem onClick={create(() => setTs(newTailscaleNode()))}>新增 Tailscale</MenuItem>
+                <MenuItem onClick={create(() => setBatch(true))}>导入 YAML</MenuItem>
+                <Divider />
+                <MenuItem onClick={create(() => setGroup(newNodeGroup()))}>新建分组</MenuItem>
+              </Menu>
             </>
           )}
         </Box>
@@ -338,10 +385,9 @@ export function ResourceCenter({
               onChange={setSearch}
               sx={{ flex: 1, minWidth: 220 }}
             />
-            <Button onClick={() => setSort(!sort)}>
-              {sort ? "恢复默认排序" : "延迟排序"}
-            </Button>
             <Button
+              variant="outlined"
+              startIcon={<NetworkCheck />}
               disabled={test.isPending}
               onClick={() =>
                 test.mutate(
@@ -353,12 +399,25 @@ export function ResourceCenter({
             >
               {test.isPending ? "测量中…" : "测延迟"}
             </Button>
-            <Button onClick={() => setCollapsed(new Set())}>全部展开</Button>
-            <Button
-              onClick={() => setCollapsed(new Set(grouped.map((g) => g.id)))}
-            >
-              全部折叠
-            </Button>
+            <Tooltip title={sort ? "恢复默认排序" : "按延迟排序"}>
+              <IconButton
+                aria-label="按延迟排序"
+                aria-pressed={sort}
+                color={sort ? "primary" : "default"}
+                onClick={() => setSort(!sort)}
+                sx={sort ? { bgcolor: "action.selected" } : undefined}
+              >
+                <SwapVert />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title={anyCollapsed ? "全部展开" : "全部折叠"}>
+              <IconButton
+                aria-label={anyCollapsed ? "全部展开" : "全部折叠"}
+                onClick={() => setAll(anyCollapsed)}
+              >
+                {anyCollapsed ? <UnfoldMore /> : <UnfoldLess />}
+              </IconButton>
+            </Tooltip>
           </Stack>
           {source && (
             <Chip
@@ -375,21 +434,7 @@ export function ResourceCenter({
               scrollbarGutter: "stable",
             }}
           >
-            {grouped.map((g) => {
-              const q = search.trim().toLowerCase();
-              let shown = g.nodes.filter(
-                (n) =>
-                  (!source || n.sourceId === source) &&
-                  `${n.name} ${n.source} ${n.type} ${g.name}`
-                    .toLowerCase()
-                    .includes(q),
-              );
-              if (sort)
-                shown = [...shown].sort(
-                  (a, b) => delay(a.proxy) - delay(b.proxy),
-                );
-              if ((q || source) && !shown.length) return null;
-              const open = !!q || !collapsed.has(g.id);
+            {sections.map(({ shown, open, ...g }) => {
               return (
                 <Paper key={g.id} sx={{ mb: 1.5, overflow: "hidden" }}>
                   <Box
@@ -509,16 +554,7 @@ export function ResourceCenter({
                 </Paper>
               );
             })}
-            {(search || source) &&
-              !grouped.some((g) =>
-                g.nodes.some(
-                  (n) =>
-                    (!source || n.sourceId === source) &&
-                    `${n.name} ${n.source} ${n.type} ${g.name}`
-                      .toLowerCase()
-                      .includes(search.trim().toLowerCase()),
-                ),
-              ) && (
+            {(q || source) && !sections.length && (
                 <Typography sx={{ p: 5, textAlign: "center" }}>
                   未找到匹配项
                 </Typography>

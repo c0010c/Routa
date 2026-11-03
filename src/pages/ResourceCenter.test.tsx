@@ -114,7 +114,8 @@ it("filters a subscription source across groups", async () => {
 
 it("shows subscription nodes under their source instead of 未分组 when no custom group is assigned", async () => {
   setup(false, "/nodes", { ...model, node_groups: [] });
-  const source = await screen.findByRole("button", { name: "▾ 来源甲 · 1" });
+  fireEvent.click(await screen.findByRole("button", { name: "▸ 来源甲 · 1" }));
+  const source = screen.getByRole("button", { name: "▾ 来源甲 · 1" });
   const section = source.closest(".MuiPaper-root") as HTMLElement;
   expect(
     within(section).getByRole("article", { name: "订阅节点" }),
@@ -146,7 +147,8 @@ it("keeps nodes with the same name in different subscription sections", async ()
     manual_nodes: [],
     subscriptions: [...model.subscriptions, second],
   });
-  const first = await screen.findByRole("button", { name: "▾ 来源甲 · 1" });
+  fireEvent.click(await screen.findByRole("button", { name: "全部展开" }));
+  const first = screen.getByRole("button", { name: "▾ 来源甲 · 1" });
   const other = screen.getByRole("button", { name: "▾ 来源乙 · 1" });
   for (const button of [first, other])
     expect(
@@ -161,7 +163,7 @@ it("keeps nodes with the same name in different subscription sections", async ()
 });
 it("searches collapsed subscription sections and restores collapse on clear", async () => {
   setup(false, "/nodes", { ...model, node_groups: [] });
-  fireEvent.click(await screen.findByRole("button", { name: "全部折叠" }));
+  expect(await screen.findByRole("button", { name: "▸ 来源甲 · 1" })).toBeInTheDocument();
   expect(
     screen.queryByRole("article", { name: "订阅节点" }),
   ).not.toBeInTheDocument();
@@ -199,6 +201,74 @@ it("filters source fallback sections without including other sources or manual n
   expect(
     screen.queryByRole("article", { name: "游离节点" }),
   ).not.toBeInTheDocument();
+});
+
+it("collapses subscription sections by default and keeps groups and 未分组 open", async () => {
+  setup(false, "/nodes", {
+    ...model,
+    subscriptions: [
+      ...model.subscriptions,
+      { ...model.subscriptions[0], id: "s2", name: "来源乙", nodes: [{ ...model.subscriptions[0].nodes[0], name: "乙节点" }] },
+    ],
+  });
+  expect(await screen.findByRole("button", { name: "▸ 来源乙 · 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "▾ 跨来源组 · 2" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "▾ 未分组 · 1" })).toBeInTheDocument();
+  expect(screen.queryByRole("article", { name: "乙节点" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "全部展开" }));
+  expect(screen.getByRole("article", { name: "乙节点" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "全部折叠" }));
+  expect(screen.getByRole("button", { name: "▸ 跨来源组 · 2" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "▸ 未分组 · 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "全部展开" })).toBeInTheDocument();
+});
+
+it("collapses search results visibly and restores the pre-search state on clear", async () => {
+  setup();
+  const search = await screen.findByLabelText("搜索名称、来源、协议或分组");
+  fireEvent.change(search, { target: { value: "节点" } });
+  fireEvent.click(screen.getByRole("button", { name: "全部折叠" }));
+  expect(screen.getByRole("button", { name: "▸ 跨来源组 · 2" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "▸ 未分组 · 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "全部展开" })).toBeInTheDocument();
+  fireEvent.change(search, { target: { value: "" } });
+  expect(screen.getByRole("button", { name: "▾ 跨来源组 · 2" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "▾ 未分组 · 1" })).toBeInTheDocument();
+});
+
+it("toggles a section header during search without touching the pre-search state", async () => {
+  setup();
+  const search = await screen.findByLabelText("搜索名称、来源、协议或分组");
+  fireEvent.change(search, { target: { value: "游离" } });
+  fireEvent.click(screen.getByRole("button", { name: "▾ 未分组 · 1" }));
+  expect(screen.queryByRole("article", { name: "游离节点" })).not.toBeInTheDocument();
+  fireEvent.change(search, { target: { value: "游离节" } });
+  expect(screen.getByRole("article", { name: "游离节点" })).toBeInTheDocument();
+  fireEvent.change(search, { target: { value: "" } });
+  expect(screen.getByRole("button", { name: "▾ 未分组 · 1" })).toBeInTheDocument();
+});
+
+it("opens the subscription section when arriving from 查看节点", async () => {
+  setup(false, "/nodes?source=s1", { ...model, node_groups: [] });
+  expect(await screen.findByRole("button", { name: "▾ 来源甲 · 1" })).toBeInTheDocument();
+});
+
+it("groups every creation action under one 新增 menu", async () => {
+  setup();
+  for (const name of ["新建分组", "新增 Tailscale", "导入 YAML", "新增节点"])
+    expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "新增" }));
+  const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+  expect(items).toEqual(["新增节点", "新增 Tailscale", "导入 YAML", "新建分组"]);
+});
+
+it("toggles delay sorting as a pressed icon button", async () => {
+  setup();
+  const sort = await screen.findByRole("button", { name: "按延迟排序" });
+  expect(sort).toHaveAttribute("aria-pressed", "false");
+  fireEvent.click(sort);
+  expect(sort).toHaveAttribute("aria-pressed", "true");
 });
 
 it("moves node actions into the right-click menu and tests the selected node", async () => {

@@ -145,26 +145,32 @@ it("shows effective strategy members as node cards with sources and delay", asyn
   expect(screen.getByLabelText("42 ms")).toBeInTheDocument();
   expect(commands.selectGroupMember).not.toHaveBeenCalled();
 });
-it("commits only the confirmed node selection through the real command contract", async () => {
+it("switches as soon as a node is clicked, without a confirm button", async () => {
   const close = setup();
-  fireEvent.click(
-    await screen.findByRole("radio", { name: "节点乙 · 来源甲" }),
-  );
-  expect(commands.selectGroupMember).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "确认切换" }));
+  expect(await screen.findByRole("radio", { name: "节点乙 · 来源甲" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "确认切换" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("radio", { name: "节点乙 · 来源甲" }));
   await waitFor(() =>
     expect(commands.selectGroupMember).toHaveBeenCalledWith("e", b),
   );
   await waitFor(() => expect(close).toHaveBeenCalledOnce());
 });
 
-it("navigates candidate radios from the keyboard without committing", async () => {
+it("moves keyboard focus between candidates without switching", async () => {
   setup();
   const first = await screen.findByRole("radio", { name: "节点甲 · 手动节点" });
   fireEvent.keyDown(first, { key: "ArrowRight" });
-  expect(screen.getByRole("radio", { name: "节点乙 · 来源甲" })).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("radio", { name: "节点乙 · 来源甲" })).toHaveFocus();
+  expect(first).toHaveAttribute("aria-checked", "true");
   expect(screen.getByText("2 / 2 个候选节点")).toBeInTheDocument();
   expect(commands.selectGroupMember).not.toHaveBeenCalled();
+});
+
+it("still moves the draft selection with the keyboard inside the editing form", async () => {
+  setup({ draft: { members: [a, b], selected: a }, onSelect: vi.fn() });
+  const first = await screen.findByRole("radio", { name: "节点甲 · 手动节点" });
+  fireEvent.keyDown(first, { key: "ArrowRight" });
+  expect(screen.getByRole("radio", { name: "节点乙 · 来源甲" })).toHaveAttribute("aria-checked", "true");
 });
 
 it("measures a candidate from its menu without changing the chosen node", async () => {
@@ -176,17 +182,18 @@ it("measures a candidate from its menu without changing the chosen node", async 
   expect(screen.getByRole("radio", { name: "节点甲 · 手动节点" })).toHaveAttribute("aria-checked", "true");
   expect(commands.selectGroupMember).not.toHaveBeenCalled();
 });
-it("cancels draft selection without committing", async () => {
+it("closes without switching from 关闭 or by clicking the node in use", async () => {
   const close = setup();
-  fireEvent.click(
-    await screen.findByRole("radio", { name: "节点乙 · 来源甲" }),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "取消" }));
-  expect(close).toHaveBeenCalledOnce();
+  // The footer button (the dialog title also has an icon close button).
+  const closeButtons = await screen.findAllByRole("button", { name: "关闭" });
+  fireEvent.click(closeButtons[closeButtons.length - 1]);
+  fireEvent.click(screen.getByRole("radio", { name: "节点甲 · 手动节点" }));
+  expect(close).toHaveBeenCalledTimes(2);
   expect(commands.selectGroupMember).not.toHaveBeenCalled();
+  expect(commands.saveExit).not.toHaveBeenCalled();
 });
-it("searches members without losing the pending selection", async () => {
-  setup();
+it("searches members without losing the pending draft selection", async () => {
+  setup({ draft: { members: [a, b], selected: a }, onSelect: vi.fn() });
   fireEvent.click(
     await screen.findByRole("radio", { name: "节点乙 · 来源甲" }),
   );
@@ -212,7 +219,6 @@ it("leaves the popup open and shows backend validation failures", async () => {
   fireEvent.click(
     await screen.findByRole("radio", { name: "节点乙 · 来源甲" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "确认切换" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("策略成员已失效");
   expect(close).not.toHaveBeenCalled();
 });
@@ -241,8 +247,64 @@ it("opens the large picker directly from a manual-strategy proxy card", async ()
   expect(screen.getAllByRole("radio")).toHaveLength(2);
 });
 
+const fixed: Model = { ...model, exits: [{ ...model.exits[0], kind: { Node: { node: a } } }] };
+
+it("opens the picker from a fixed-node proxy card and offers every node", async () => {
+  setup({}, true, fixed);
+  fireEvent.click(screen.getByRole("button", { name: "切换 浏览器 的节点" }));
+  expect(await screen.findByRole("dialog", { name: "切换节点 · 浏览器" })).toBeInTheDocument();
+  expect(screen.getAllByRole("radio")).toHaveLength(3);
+  expect(screen.getByRole("radio", { name: "节点甲 · 手动节点" })).toHaveAttribute("aria-checked", "true");
+  expect(screen.queryByRole("button", { name: "确认切换" })).not.toBeInTheDocument();
+});
+
+it("re-points a fixed-node exit at the clicked node", async () => {
+  const close = setup({}, false, fixed);
+  fireEvent.click(await screen.findByRole("radio", { name: "节点乙 · 来源甲" }));
+  await waitFor(() => expect(commands.saveExit).toHaveBeenCalledWith({ ...fixed.exits[0], kind: { Node: { node: b } } }));
+  expect(commands.selectGroupMember).not.toHaveBeenCalled();
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+});
+
+it("measures the proxy once a switch from its card takes effect", async () => {
+  vi.mocked(commands.testDelays).mockReset().mockResolvedValue({ status: "ok", data: [] });
+  setup({}, true, fixed);
+  fireEvent.click(screen.getByRole("button", { name: "切换 浏览器 的节点" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "节点乙 · 来源甲" }));
+  await waitFor(() => expect(commands.testDelays).toHaveBeenCalledWith(["private"]));
+});
+
+it("keeps the picker open on a fixed-node validation error", async () => {
+  const close = setup({}, false, fixed);
+  vi.mocked(commands.saveExit).mockResolvedValue({ status: "error", error: [{ DanglingRef: { what: "节点已失效" } }] });
+  fireEvent.click(await screen.findByRole("radio", { name: "节点乙 · 来源甲" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("节点已失效");
+  expect(close).not.toHaveBeenCalled();
+});
+
+it("reports a saved fixed-node switch that has not taken effect", async () => {
+  const switched = vi.fn();
+  const close = setup({ onSwitched: switched }, false, fixed);
+  vi.mocked(commands.saveExit).mockResolvedValue({ status: "ok", data: { FailedKeptPrevious: { error: "内核拒绝" } } });
+  fireEvent.click(await screen.findByRole("radio", { name: "节点乙 · 来源甲" }));
+  expect(await screen.findByText("选择已保存，尚未生效，请检查内核状态。")).toBeInTheDocument();
+  expect(close).not.toHaveBeenCalled();
+  expect(switched).not.toHaveBeenCalled();
+});
+
+it("explains an empty fixed-node picker without mentioning a strategy", async () => {
+  setup({}, false, { ...fixed, subscriptions: [], manual_nodes: [] });
+  expect(await screen.findByText("暂无可选节点，请先添加订阅或节点。")).toBeInTheDocument();
+});
+
+it("keeps automatic groups in the editor instead of the picker", async () => {
+  setup({}, true, { ...model, exits: [{ ...model.exits[0], kind: { Group: { strategy: "UrlTest", members: [a, b], selected: null } } }] });
+  expect(screen.getByRole("button", { name: "编辑 浏览器 的节点配置" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "切换 浏览器 的节点" })).not.toBeInTheDocument();
+});
+
 it("intersects real custom groups with candidates without losing a pending selection", async () => {
-  setup({}, false, {
+  setup({ draft: { members: [a, { group: { Subscription: "s" } }], selected: a }, onSelect: vi.fn() }, false, {
     ...model,
     node_groups: [
       { id: "common", name: "常用节点", members: [a, { manual_id: "outside" }] },
@@ -255,7 +317,7 @@ it("intersects real custom groups with candidates without losing a pending selec
   expect(screen.getAllByRole("radio")).toHaveLength(1);
   expect(screen.getByRole("radio", { name: "节点甲 · 手动节点" })).toBeInTheDocument();
   expect(screen.getByText("已选择：节点乙")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "确认切换" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "选择节点" })).toBeEnabled();
   expect(screen.queryByRole("button", { name: "无关分组" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "仅可用" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "备用节点" }));
@@ -274,15 +336,12 @@ const withUngroupedNode: Model = {
   }],
 };
 
-it("shows ungrouped manual nodes and adds only the confirmed node to the current exit", async () => {
+it("shows ungrouped manual nodes and adds only the clicked node to the current exit", async () => {
   const close = setup({}, false, withUngroupedNode);
   fireEvent.click(await screen.findByRole("button", { name: "未分组" }));
   expect(screen.getAllByRole("radio")).toHaveLength(2);
   expect(screen.queryByRole("radio", { name: /非成员节点/ })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("radio", { name: "未分组的新节点 · 手动节点" }));
-  expect(screen.getByText("确认后加入当前代理并切换")).toBeInTheDocument();
-  expect(commands.saveExit).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "确认切换" }));
   await waitFor(() => expect(commands.saveExit).toHaveBeenCalledWith({
     ...model.exits[0],
     kind: { Group: { strategy: "Select", members: [a, { group: { Subscription: "s" } }, freeNode], selected: freeNode } },
@@ -291,9 +350,10 @@ it("shows ungrouped manual nodes and adds only the confirmed node to the current
   await waitFor(() => expect(close).toHaveBeenCalledOnce());
 });
 
-it("cancels a new ungrouped selection without changing exit membership", async () => {
-  const close = setup({}, false, withUngroupedNode);
+it("cancels a new ungrouped draft selection without changing exit membership", async () => {
+  const close = setup({ draft: { members: [a], selected: a }, onSelect: vi.fn() }, false, withUngroupedNode);
   fireEvent.click(await screen.findByRole("radio", { name: "未分组的新节点 · 手动节点" }));
+  expect(screen.getByText("保存时加入当前代理")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
   expect(close).toHaveBeenCalledOnce();
   expect(commands.saveExit).not.toHaveBeenCalled();

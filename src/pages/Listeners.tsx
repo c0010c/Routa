@@ -69,9 +69,12 @@ export function Listeners() {
           const target = m.exits.find((exit) => exit.id === listener.exit), health = s.health.listeners[listener.id], kind = target?.kind;
           const group = kind && typeof kind === "object" && "Group" in kind ? kind.Group : null;
           const manualGroup = group?.strategy === "Select";
+          const fixedNode = kind && typeof kind === "object" && "Node" in kind ? kind.Node.node : null;
+          // Manual groups switch members; fixed nodes switch by re-pointing the exit. Automatic groups stay in the editor.
+          const switchable = manualGroup || !!fixedNode;
           const strategy = group ? { UrlTest: "自动测速", Fallback: "故障转移", LoadBalance: "负载均衡", Select: "手动选择" }[group.strategy]
             : kind === "Direct" ? "直连" : kind ? "固定节点" : "未设置";
-          const selected = (manualGroup ? group.selected : null) ?? (kind && typeof kind === "object" && "Node" in kind ? kind.Node.node : null);
+          const selected = (manualGroup ? group.selected : null) ?? fixedNode;
           const name = selected ? nodeLabel(m, selected) : group ? manualGroup ? "尚未选择" : "由内核选择" : strategy;
           const source = selected && "subscription_id" in selected ? m.subscriptions.find((sub) => sub.id === selected.subscription_id)?.name : selected ? "手动节点" : "";
           const interfaceName = target?.interface ? s.interfaces.find((item) => item.guid === target.interface)?.friendly_name ?? "网卡不可用" : "系统默认网卡";
@@ -108,9 +111,9 @@ export function Listeners() {
                   {target && <Chip label={strategy} sx={{ height: 20, fontSize: 11 }} />}
                   {listener.routing && <Chip label="规则分流" sx={{ height: 20, fontSize: 11 }} />}
                 </Box>
-                {target && kind !== "Direct" ? <Tooltip title={manualGroup ? "点击切换节点" : "点击编辑节点配置"}>
-                  <ButtonBase aria-label={manualGroup ? `切换 ${listener.name} 的节点` : `编辑 ${listener.name} 的节点配置`} aria-haspopup="dialog"
-                    onClick={() => manualGroup ? setChoosing({ exitId: target.id, listenerName: listener.name }) : setEditing(listener)}
+                {target && kind !== "Direct" ? <Tooltip title={switchable ? "点击切换节点" : "点击编辑节点配置"}>
+                  <ButtonBase aria-label={switchable ? `切换 ${listener.name} 的节点` : `编辑 ${listener.name} 的节点配置`} aria-haspopup="dialog"
+                    onClick={() => switchable ? setChoosing({ exitId: target.id, listenerName: listener.name }) : setEditing(listener)}
                     sx={{ ...clickFeedback, maxWidth: "100%", minHeight: 30, gap: 0.5, color: "primary.main", textAlign: "left", justifyContent: "flex-start" }}>
                     <Typography noWrap sx={{ fontWeight: 600, fontSize: 18 }}>{name}</Typography><ExpandMore sx={{ fontSize: 16 }} />
                   </ButtonBase>
@@ -142,7 +145,12 @@ export function Listeners() {
     </Box>
     <Typography variant="caption" color="text.secondary">{shown.length} / {m.listeners.length} 个代理</Typography>
     {editing && <ListenerDialog key={editing.id} listener={editing} onClose={() => setEditing(null)} />}
-    {choosing && <ListenerNodeDialog key={choosing.exitId} {...choosing} onClose={() => setChoosing(null)} />}
+    {choosing && <ListenerNodeDialog key={choosing.exitId} {...choosing} onClose={() => setChoosing(null)}
+      onSwitched={() => {
+        // The old result is marked stale by the backend; measure the new path right away.
+        const exit = m.exits.find((e) => e.id === choosing.exitId);
+        if (exit) void measureProxy(exit.name);
+      }} />}
     {deleting && <ConfirmDeleteDialog text={`确定删除代理「${deleting.name}」吗？引用它的订阅备用连接将取消；进程分流引用需先解除。`} onConfirm={() => del.mutateAsync(deleting.id)} onClose={() => setDeleting(null)} />}
   </Stack>;
 }

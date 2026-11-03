@@ -33,12 +33,15 @@ export function ListenerNodeDialog({
   onClose,
   draft,
   onSelect,
+  onSwitched,
 }: {
   exitId: string;
   listenerName: string;
   onClose: () => void;
   draft?: { members: ExitMember[]; selected: NodeRef | null };
   onSelect?: (node: NodeRef, members: ExitMember[]) => void;
+  /** Called after a saved (non-draft) switch has taken effect. */
+  onSwitched?: () => void;
 }) {
   const model = useModel(),
     status = useStatus(),
@@ -61,12 +64,26 @@ export function ListenerNodeDialog({
       ? target.kind.Group
       : null;
   const group = draft ?? savedGroup;
+  // Without a manual group, a fixed-node exit offers every node; confirming re-points the exit at the chosen one.
+  const fixedNode =
+    !group && target && typeof target.kind === "object" && "Node" in target.kind
+      ? target.kind.Node.node
+      : null;
+  const available = !!group || !!fixedNode;
   const configuredMembers = m && group ? expandMembers(m, group.members) : [];
-  const members = m && group ? expandMembers(m, [...group.members, ...ungroupedManualNodes(m)]) : [];
-  const currentKey = group?.selected ? nodeKey(group.selected) : null;
-  const chosen = selected ?? group?.selected ?? null;
+  const members = !m ? []
+    : group ? expandMembers(m, [...group.members, ...ungroupedManualNodes(m)])
+    : fixedNode ? expandMembers(m, [
+      ...m.subscriptions.map((s): ExitMember => ({ group: { Subscription: s.id } })),
+      ...m.manual_nodes.map((n): ExitMember => ({ manual_id: n.id })),
+    ])
+    : [];
+  const current = group?.selected ?? fixedNode;
+  const currentKey = current ? nodeKey(current) : null;
+  const chosen = selected ?? current;
   const chosenKey = chosen ? nodeKey(chosen) : null;
-  const chosenConfigured = chosenKey !== null && configuredMembers.some((ref) => nodeKey(ref) === chosenKey);
+  // Only a manual group can grow: picking a node outside its members adds it on confirmation.
+  const joinsGroup = !!group && chosenKey !== null && !configuredMembers.some((ref) => nodeKey(ref) === chosenKey);
   const busy = change.isPending || saveExit.isPending;
   const nodes = members.map((ref) => {
     const sub =
@@ -126,6 +143,8 @@ export function ListenerNodeDialog({
   };
   const valid =
     chosenKey !== null && members.some((r) => nodeKey(r) === chosenKey);
+  // On the proxy page a click switches right away; inside the editing form it only picks a draft value.
+  const direct = !draft;
   const tabKey = shown.some((n) => nodeKey(n.ref) === chosenKey) ? chosenKey : shown[0] ? nodeKey(shown[0].ref) : null;
   const navigate = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
@@ -136,28 +155,38 @@ export function ListenerNodeDialog({
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns }[e.key] ?? 0;
     const at = buttons.indexOf(e.currentTarget);
     const next = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, at + step));
-    e.preventDefault(); buttons[next]?.click(); buttons[next]?.focus();
+    e.preventDefault();
+    // Picking switches immediately on the proxy page, so arrows only move focus there; Enter/Space switch.
+    if (!direct) buttons[next]?.click();
+    buttons[next]?.focus();
   };
-  const submit = async () => {
-    if (!group || !chosen || !valid || busy) return;
+  const submit = async (node: NodeRef | null = chosen) => {
+    if (!available || !node || busy || !members.some((r) => nodeKey(r) === nodeKey(node))) return;
     setError("");
-    const nextMembers = chosenConfigured ? group.members : [...group.members, chosen];
-    if (onSelect) {
-      onSelect(chosen, nextMembers);
+    const joins = !!group && !configuredMembers.some((r) => nodeKey(r) === nodeKey(node));
+    if (draft) {
+      onSelect?.(node, joins ? [...draft.members, node] : draft.members);
       onClose();
       return;
     }
+    if (!target) return;
     try {
-      if (!target || !savedGroup) return;
-      // Preserve the strict member-selection command; newly exposed nodes join only on confirmation.
-      const outcome = chosenConfigured
-        ? await change.mutateAsync(exitId, chosen)
-        : await saveExit.mutateAsync({ ...target, kind: { Group: { ...savedGroup, members: nextMembers, selected: chosen } } });
-      if (!("NotRunning" in outcome) && applyOutcomeMessages(outcome).length) {
+      const outcome = savedGroup
+        // Preserve the strict member-selection command; newly exposed nodes join only when picked.
+        ? joins
+          ? await saveExit.mutateAsync({ ...target, kind: { Group: { ...savedGroup, members: [...savedGroup.members, node], selected: node } } })
+          : await change.mutateAsync(exitId, node)
+        : await saveExit.mutateAsync({ ...target, kind: { Node: { node } } });
+      if ("NotRunning" in outcome) {
+        onClose();
+        return;
+      }
+      if (applyOutcomeMessages(outcome).length) {
         setError("选择已保存，尚未生效，请检查内核状态。");
         return;
       }
       onClose();
+      onSwitched?.();
     } catch (e) {
       if (isValidationError(e)) {
         const f = fieldErrors(e.errors);
@@ -201,9 +230,9 @@ export function ListenerNodeDialog({
         </Box>
       </Box>
       <DialogContent dividers sx={{ px: 3, py: 2, borderBottom: 0, scrollbarGutter: "stable" }}>
-        {!group && (
+        {!available && (
           <Alert severity="warning">
-            该手动选择策略已变更或被删除，请关闭后重新选择。
+            该代理的出口已变更，请关闭后重新打开。
           </Alert>
         )}
         {error && (
@@ -232,6 +261,9 @@ export function ListenerNodeDialog({
                 onSelect={() => {
                   setSelected(n.ref);
                   setError("");
+                  if (!direct) return;
+                  if (key === currentKey) onClose();
+                  else void submit(n.ref);
                 }}
               />
             );
@@ -241,16 +273,20 @@ export function ListenerNodeDialog({
           <Typography
             sx={{ p: 5, textAlign: "center", color: "text.secondary" }}
           >
-            {search || activeFilter ? "未找到匹配节点" : "策略暂无候选节点，请先编辑代理配置。"}
+            {search || activeFilter ? "未找到匹配节点" : group ? "策略暂无候选节点，请先编辑代理配置。" : "暂无可选节点，请先添加订阅或节点。"}
           </Typography>
         )}
       </DialogContent>
       <DialogActions sx={{ justifyContent: "space-between" }}>
         <Box sx={{ mr: "auto", minWidth: 0, flex: 1, height: 44, overflow: "hidden" }} aria-live="polite">
-        <Typography variant="body2" noWrap>已选择：{chosen && m ? nodeLabel(m, chosen) : "未选择"}</Typography>
+        <Typography variant="body2" noWrap>
+          {direct ? `正在使用：${current && m ? nodeLabel(m, current) : "未选择"}` : `已选择：${chosen && m ? nodeLabel(m, chosen) : "未选择"}`}
+        </Typography>
         <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
         <Typography variant="caption" color="text.secondary" noWrap sx={{ minWidth: 0 }}>
-          {!chosenConfigured && chosen ? draft ? "保存时加入当前代理" : "确认后加入当前代理并切换" : draft ? "保存代理后生效" : `正在使用：${group?.selected && m ? nodeLabel(m, group.selected) : "未选择"}`}
+          {direct
+            ? busy ? `正在切换到 ${chosen && m ? nodeLabel(m, chosen) : ""}…` : "点击节点即切换"
+            : joinsGroup ? "保存时加入当前代理" : "保存代理后生效"}
         </Typography>
         <Typography component="span"
           variant="caption"
@@ -262,16 +298,14 @@ export function ListenerNodeDialog({
         </Box>
         </Box>
         <Box sx={{ display: "flex", gap: 1, flexShrink: 0 }}>
-        <Button onClick={onClose}>取消</Button>
-        <Button
+        <Button onClick={onClose}>{direct ? "关闭" : "取消"}</Button>
+        {!direct && <Button
           variant="contained"
-          disabled={
-            !group || !valid || chosenKey === currentKey || busy
-          }
+          disabled={!available || !valid || chosenKey === currentKey}
           onClick={() => void submit()}
         >
-          {busy ? "切换中…" : draft ? "选择节点" : "确认切换"}
-        </Button>
+          选择节点
+        </Button>}
         </Box>
       </DialogActions>
     </FormDialog>
