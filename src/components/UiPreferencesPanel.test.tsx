@@ -11,7 +11,7 @@ const preferences: UiPreferences = {
   mode: "Full", listener_id: null, exit_id: null, system_listener_id: null,
   capture_mode: "System", auto_connect: false, close_to_tray: true,
   managed_rules: [], selected_apps: [],
-  taskbar_status: { enabled: true, mode: "Rotate" },
+  taskbar_status: { enabled: true, mode: "Rotate", traffic: "Values" },
 };
 const model = { listeners: [
   { id: "l1", name: "监听一", port: 7890, user_enabled: true },
@@ -59,7 +59,7 @@ it("turns the taskbar status bar off", async () => {
   setup();
   fireEvent.click(await screen.findByRole("switch", { name: "任务栏状态栏" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_ui_preferences", {
-    input: { ...preferences, taskbar_status: { enabled: false, mode: "Rotate" } },
+    input: { ...preferences, taskbar_status: { enabled: false, mode: "Rotate", traffic: "Values" } },
   }));
 });
 
@@ -81,12 +81,12 @@ it("pins the first enabled proxy when switching to fixed", async () => {
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_model"));
   await pick("显示内容", "固定");
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_ui_preferences", {
-    input: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: "l1" } } },
+    input: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: "l1" }, traffic: "Values" } },
   }));
 });
 
 it("picks the pinned proxy from enabled proxies labelled with their port", async () => {
-  setup({ preferences: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: "l1" } } } });
+  setup({ preferences: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: "l1" }, traffic: "Values" } } });
   expect(await screen.findByRole("combobox", { name: "显示内容" })).toHaveTextContent("固定");
   expect(await screen.findByRole("combobox", { name: "固定的代理" })).toHaveTextContent("监听一（7890）");
   fireEvent.mouseDown(screen.getByRole("combobox", { name: "固定的代理" }));
@@ -94,17 +94,36 @@ it("picks the pinned proxy from enabled proxies labelled with their port", async
   expect(options.map((o) => o.textContent)).toEqual(["监听一（7890）", "监听三（7892）"]);
   fireEvent.click(options[1]);
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_ui_preferences", {
-    input: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: "l3" } } },
+    input: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: "l3" }, traffic: "Values" } },
   }));
 });
 
 it("returns to rotation from fixed", async () => {
-  setup({ preferences: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: "l1" } } } });
+  setup({ preferences: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: "l1" }, traffic: "Values" } } });
   await screen.findByRole("combobox", { name: "固定的代理" });
   await pick("显示内容", "轮播");
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_ui_preferences", {
-    input: { ...preferences, taskbar_status: { enabled: true, mode: "Rotate" } },
+    input: { ...preferences, taskbar_status: { enabled: true, mode: "Rotate", traffic: "Values" } },
   }));
+});
+
+it("offers numbers or chart for traffic, numbers by default", async () => {
+  setup();
+  const select = await screen.findByRole("combobox", { name: "流量显示" });
+  expect(select).toHaveTextContent("数值");
+  fireEvent.mouseDown(select);
+  const options = await screen.findAllByRole("option");
+  expect(options.map((o) => o.textContent)).toEqual(["数值", "折线图"]);
+  fireEvent.click(options[1]);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_ui_preferences", {
+    input: { ...preferences, taskbar_status: { enabled: true, mode: "Rotate", traffic: "Chart" } },
+  }));
+});
+
+it("hides the traffic choice while the bar is off", async () => {
+  setup({ preferences: { ...preferences, taskbar_status: { enabled: false, mode: "Rotate", traffic: "Values" } } });
+  await screen.findByRole("switch", { name: "任务栏状态栏" });
+  expect(screen.queryByRole("combobox", { name: "流量显示" })).not.toBeInTheDocument();
 });
 
 it("disables the taskbar status bar below Windows 11", async () => {
@@ -115,7 +134,7 @@ it("disables the taskbar status bar below Windows 11", async () => {
 
 it("shows rotation when the pinned proxy is disabled or gone", async () => {
   for (const id of ["l2", "gone"]) {
-    const { unmount } = setup({ preferences: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: id } } } });
+    const { unmount } = setup({ preferences: { ...preferences, taskbar_status: { enabled: true, mode: { Fixed: id }, traffic: "Values" } } });
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_model"));
     expect(await screen.findByRole("combobox", { name: "显示内容" })).toHaveTextContent("轮播");
     expect(screen.queryByRole("combobox", { name: "固定的代理" })).not.toBeInTheDocument();

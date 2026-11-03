@@ -31,15 +31,23 @@ pub enum TaskbarStatusMode {
     Rotate,
     Fixed(ListenerId),
 }
+/// The bar shows one of the two, to stay narrow.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum TaskbarTraffic {
+    #[default]
+    Values,
+    Chart,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(default)]
 pub struct TaskbarStatusPrefs {
     pub enabled: bool,
     pub mode: TaskbarStatusMode,
+    pub traffic: TaskbarTraffic,
 }
 impl Default for TaskbarStatusPrefs {
     fn default() -> Self {
-        Self { enabled: true, mode: TaskbarStatusMode::Rotate }
+        Self { enabled: true, mode: TaskbarStatusMode::Rotate, traffic: TaskbarTraffic::Values }
     }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, specta::Type)]
@@ -861,6 +869,9 @@ mod tests {
         let p: UiPreferences = serde_json::from_str(r#"{"close_to_tray":true}"#).unwrap();
         assert!(p.taskbar_status.enabled);
         assert_eq!(p.taskbar_status.mode, TaskbarStatusMode::Rotate);
+        assert_eq!(p.taskbar_status.traffic, TaskbarTraffic::Values);
+        let p: UiPreferences = serde_json::from_str(r#"{"taskbar_status":{"enabled":false}}"#).unwrap();
+        assert_eq!(p.taskbar_status.traffic, TaskbarTraffic::Values);
     }
     #[tokio::test]
     async fn taskbar_status_preferences_survive_a_restart() {

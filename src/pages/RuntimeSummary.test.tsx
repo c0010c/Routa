@@ -109,7 +109,7 @@ const initialDesktop: DesktopState = {
     capture_mode: "System",
     auto_connect: false,
     close_to_tray: true,
-    taskbar_status: { enabled: true, mode: "Rotate" },
+    taskbar_status: { enabled: true, mode: "Rotate", traffic: "Values" },
     managed_rules: [],
     selected_apps: [],
   },

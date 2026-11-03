@@ -125,6 +125,18 @@ export function UiPreferencesPanel() {
             <Stack direction="row" spacing={1}>
               <Select
                 size="small"
+                aria-label="流量显示"
+                value={taskbar.traffic}
+                disabled={feedback.pending || ui.saving}
+                onChange={(e) =>
+                  void update({ taskbar_status: { ...taskbar, traffic: e.target.value as typeof taskbar.traffic } })
+                }
+              >
+                <MenuItem value="Values">数值</MenuItem>
+                <MenuItem value="Chart">折线图</MenuItem>
+              </Select>
+              <Select
+                size="small"
                 aria-label="显示内容"
                 value={shown === "rotate" ? "rotate" : "fixed"}
                 disabled={feedback.pending || ui.saving}

@@ -10,8 +10,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::Foundation::SIZE;
 
 use super::view::{chart_points, format_rate, DelayView, Screen, Tone};
+use crate::desktop::TaskbarTraffic;
 
-const WIDTH: i32 = 95;
 const HEIGHT: i32 = 36;
 const CHART_W: i32 = 26;
 const VALUES_W: i32 = 27;
@@ -52,6 +52,9 @@ pub fn palette(light: bool) -> Palette {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
+    pub traffic: TaskbarTraffic,
+    /// The left column: the chart or the rate numbers.
+    pub traffic_w: i32,
     pub width: i32,
     pub height: i32,
     pub chart_w: i32,
@@ -61,10 +64,16 @@ pub struct Layout {
     pub font_h: i32,
 }
 
-pub fn layout(dpi: u32) -> Layout {
+pub fn layout(dpi: u32, traffic: TaskbarTraffic) -> Layout {
     let scale = |v: i32| v * dpi as i32 / 96;
+    let traffic_w = scale(match traffic {
+        TaskbarTraffic::Values => VALUES_W,
+        TaskbarTraffic::Chart => CHART_W,
+    });
     Layout {
-        width: scale(WIDTH),
+        traffic,
+        traffic_w,
+        width: traffic_w + scale(GAP) + scale(NODE_W),
         height: scale(HEIGHT),
         chart_w: scale(CHART_W),
         values_w: scale(VALUES_W),
@@ -251,7 +260,7 @@ impl<'a> Painter<'a> {
     }
 
     fn screen(&mut self, screen: &Screen, dy: i32, name_elapsed: Duration) -> Painted {
-        let Layout { width, height, chart_w, values_w, node_w, gap, .. } = self.layout;
+        let Layout { traffic, width, height, values_w, node_w, .. } = self.layout;
         let (top, bottom) = (height / 4 + dy, height * 3 / 4 + dy);
         let node_x = width - node_w;
         let palette = self.palette;
@@ -262,11 +271,14 @@ impl<'a> Painter<'a> {
                 Painted { scroll_done: true, name_width: 0 }
             }
             Screen::Listener(view) => {
-                self.chart(&view.series, dy);
-                let values_x = chart_w + gap;
-                let clip = (values_x, values_x + values_w);
-                self.text(&format_rate(view.up), values_x, top, clip, palette.up, 0);
-                self.text(&format_rate(view.down), values_x, bottom, clip, palette.down, 0);
+                match traffic {
+                    TaskbarTraffic::Chart => self.chart(&view.series, dy),
+                    TaskbarTraffic::Values => {
+                        let clip = (0, values_w);
+                        self.text(&format_rate(view.up), 0, top, clip, palette.up, 0);
+                        self.text(&format_rate(view.down), 0, bottom, clip, palette.down, 0);
+                    }
+                }
                 let name: Vec<u16> = view.node.encode_utf16().collect();
                 let name_width = self.text_size(&name).cx;
                 let (offset, scroll_done) = scroll_offset(name_width, node_w, name_elapsed);
@@ -303,6 +315,7 @@ impl Drop for Painter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop::TaskbarTraffic::{self, Chart, Values};
     use crate::model::ListenerId;
     use crate::stats::traffic::Rate;
     use crate::taskbar_status::view::{DelayView, ListenerView, Tone};
@@ -323,19 +336,25 @@ mod tests {
     }
 
     fn painted(frame: &Frame) -> (Vec<u32>, Painted) {
-        let layout = layout(96);
+        painted_in(frame, Values)
+    }
+
+    fn painted_in(frame: &Frame, traffic: TaskbarTraffic) -> (Vec<u32>, Painted) {
+        let layout = layout(96, traffic);
         let mut pixels = vec![0; (layout.width * layout.height) as usize];
         let done = paint(frame, &layout, &mut pixels);
         (pixels, done)
     }
 
     #[test]
-    fn layout_scales_with_dpi() {
-        let one = layout(96);
-        assert!((90..=100).contains(&one.width));
-        assert_eq!((one.node_w, one.chart_w), (36, 26));
-        let two = layout(192);
-        assert_eq!((two.width, two.height, two.node_w, two.chart_w), (one.width * 2, one.height * 2, 72, 52));
+    fn layout_keeps_only_the_chosen_traffic_view() {
+        assert_eq!((layout(96, Values).width, layout(96, Values).traffic_w), (66, 27));
+        assert_eq!((layout(96, Chart).width, layout(96, Chart).traffic_w), (65, 26));
+        for traffic in [Values, Chart] {
+            let (one, two) = (layout(96, traffic), layout(192, traffic));
+            assert_eq!(one.node_w, 36);
+            assert_eq!((two.width, two.height, two.node_w), (one.width * 2, one.height * 2, 72));
+        }
     }
 
     #[test]
@@ -367,17 +386,39 @@ mod tests {
     }
 
     #[test]
-    fn paint_draws_chart_and_text() {
-        let (pixels, _) = painted(&frame(listener_screen()));
-        let layout = layout(96);
-        let column = |range: std::ops::Range<i32>| {
-            pixels
-                .chunks(layout.width as usize)
-                .any(|row| range.clone().any(|x| row[x as usize] >> 24 > 1))
-        };
-        assert!(column(0..layout.chart_w));
-        assert!(column(layout.chart_w..layout.width - layout.node_w));
-        assert!(column(layout.width - layout.node_w..layout.width));
+    fn paint_draws_traffic_and_node_columns() {
+        for traffic in [Values, Chart] {
+            let (pixels, _) = painted_in(&frame(listener_screen()), traffic);
+            let layout = layout(96, traffic);
+            let column = |range: std::ops::Range<i32>| {
+                pixels
+                    .chunks(layout.width as usize)
+                    .any(|row| range.clone().any(|x| row[x as usize] >> 24 > 1))
+            };
+            assert!(column(0..layout.traffic_w));
+            assert!(column(layout.width - layout.node_w..layout.width));
+        }
+    }
+
+    fn with_traffic(series: Vec<Rate>, up: u64, down: u64) -> Screen {
+        let Screen::Listener(mut view) = listener_screen() else { unreachable!() };
+        (view.series, view.up, view.down) = (series, up, down);
+        Screen::Listener(view)
+    }
+
+    #[test]
+    fn values_view_ignores_the_chart_series() {
+        let a = painted_in(&frame(with_traffic(vec![Rate::default(); 10], 5, 5)), Values).0;
+        let b = painted_in(&frame(with_traffic(vec![Rate { up: 9, down: 9 }; 10], 5, 5)), Values).0;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn chart_view_ignores_the_rate_numbers() {
+        let series = (0..10).map(|i| Rate { up: i, down: i * 10 }).collect::<Vec<_>>();
+        let a = painted_in(&frame(with_traffic(series.clone(), 1, 1)), Chart).0;
+        let b = painted_in(&frame(with_traffic(series, 3_000_000, 3_000_000)), Chart).0;
+        assert_eq!(a, b);
     }
 
     #[test]
@@ -420,21 +461,21 @@ mod tests {
 
     /// Whether anything but the transparent hit-test pixel lies in these chart rows.
     fn chart_inked(screen: Screen, rows: std::ops::Range<i32>) -> bool {
-        let (pixels, _) = painted(&frame(screen));
-        let layout = layout(96);
-        rows.flat_map(|y| (0..layout.chart_w).map(move |x| (y * layout.width + x) as usize))
+        let (pixels, _) = painted_in(&frame(screen), Chart);
+        let layout = layout(96, Chart);
+        rows.flat_map(|y| (0..layout.traffic_w).map(move |x| (y * layout.width + x) as usize))
             .any(|i| pixels[i] >> 24 > 1)
     }
 
     #[test]
     fn chart_is_empty_without_traffic() {
         // A flat line on the bottom edge reads as another app's running indicator.
-        assert!(!chart_inked(listener_with(vec![Rate::default(); 10]), 0..layout(96).height));
+        assert!(!chart_inked(listener_with(vec![Rate::default(); 10]), 0..layout(96, Chart).height));
     }
 
     #[test]
     fn chart_stays_clear_of_the_taskbar_running_indicator() {
-        let h = layout(96).height;
+        let h = layout(96, Chart).height;
         let series = (0..10).map(|i| Rate { up: 0, down: i % 2 * 1000 }).collect();
         assert!(chart_inked(listener_with(series), 0..h));
         let series = (0..10).map(|i| Rate { up: 0, down: i % 2 * 1000 }).collect();
@@ -443,7 +484,7 @@ mod tests {
 
     #[test]
     fn paint_reports_the_node_name_width() {
-        assert!(painted(&frame(listener_screen())).1.name_width > layout(96).node_w);
+        assert!(painted(&frame(listener_screen())).1.name_width > layout(96, Values).node_w);
         assert_eq!(painted(&frame(Screen::NotRunning)).1.name_width, 0);
     }
 
