@@ -42,7 +42,8 @@ fn snapshot(rt: &Runtime, desktop: &Desktop, history: &mut History) -> Snapshot 
             _ => None,
         })
         .collect();
-    Snapshot { running, views, mode: desktop.taskbar_status().mode }
+    let prefs = desktop.taskbar_status();
+    Snapshot { running, views, mode: prefs.mode, traffic: prefs.traffic }
 }
 
 /// `None` where the bar is unsupported (below Windows 11).

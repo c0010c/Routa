@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use super::paint::{layout, paint, scroll_offset, Frame, Layout, Painted};
 use super::view::{ListenerView, Rotation, Screen};
-use crate::desktop::TaskbarStatusMode;
+use crate::desktop::{TaskbarStatusMode, TaskbarTraffic};
 use crate::model::ListenerId;
 
 const WM_SNAPSHOT: u32 = WM_APP + 1;
@@ -46,6 +46,7 @@ pub struct Snapshot {
     /// The rotation candidates, in display order.
     pub views: Vec<ListenerView>,
     pub mode: TaskbarStatusMode,
+    pub traffic: TaskbarTraffic,
 }
 
 impl Snapshot {
@@ -168,6 +169,7 @@ struct State {
     visible: bool,
     bounds: (i32, i32, i32, i32),
     layout: Layout,
+    traffic: TaskbarTraffic,
     light: bool,
     taskbar_created: u32,
     on_close: Box<dyn Fn() + Send>,
@@ -239,7 +241,8 @@ fn run(
                 embed_failed_for: std::ptr::null_mut(),
                 visible: true,
                 bounds: (0, 0, 0, 0),
-                layout: layout(96),
+                layout: layout(96, TaskbarTraffic::Values),
+                traffic: TaskbarTraffic::Values,
                 light: system_uses_light_theme(),
                 taskbar_created,
                 on_close,
@@ -281,8 +284,15 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
         }
         WM_SNAPSHOT => {
             with_state(|s| {
-                if let Some(snapshot) = s.incoming.lock().unwrap().take() {
+                let incoming = s.incoming.lock().unwrap().take();
+                if let Some(snapshot) = incoming {
+                    let resized = snapshot.traffic != s.traffic;
+                    s.traffic = snapshot.traffic;
                     s.snapshot = Some(snapshot);
+                    if resized {
+                        // A narrower or wider bar: reposition, which also repaints.
+                        return reconcile(s);
+                    }
                 }
                 render(s);
             });
@@ -433,7 +443,7 @@ fn reconcile(s: &mut State) {
                 s.embed_failed_for = tray;
             }
         }
-        s.layout = layout(GetDpiForWindow(tray).max(96));
+        s.layout = layout(GetDpiForWindow(tray).max(96), s.traffic);
         let tray_height = tray_rect.bottom - tray_rect.top;
         let notify_left = rect_of(find(tray, "TrayNotifyWnd")).map_or(0, |r| r.left - tray_rect.left);
         let mut x = place_x(notify_left, tray_rect.right - tray_rect.left, s.layout.width);
@@ -626,7 +636,12 @@ mod tests {
             down: 0,
             series: vec![],
         };
-        let mut snapshot = Snapshot { running: true, views: vec![view.clone()], mode: TaskbarStatusMode::Rotate };
+        let mut snapshot = Snapshot {
+            running: true,
+            views: vec![view.clone()],
+            mode: TaskbarStatusMode::Rotate,
+            traffic: TaskbarTraffic::Values,
+        };
         assert_eq!(snapshot.screen(Some(&ListenerId("a".into()))), Screen::Listener(view));
         assert_eq!(snapshot.screen(None), Screen::NoListeners);
         snapshot.running = false;

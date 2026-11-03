@@ -715,7 +715,11 @@ export type TailscaleOpts = { hostname: string; exit_node: string; ephemeral: bo
 interface: InterfaceGuid | null }
 export type TailscaleState = "Unknown" | { NeedsLogin: { url: string | null } } | { LoggedIn: { ip: string | null } } | { Failed: { reason: string } }
 export type TaskbarStatusMode = "Rotate" | { Fixed: ListenerId }
-export type TaskbarStatusPrefs = { enabled: boolean; mode: TaskbarStatusMode }
+export type TaskbarStatusPrefs = { enabled: boolean; mode: TaskbarStatusMode; traffic: TaskbarTraffic }
+/**
+ * The bar shows one of the two, to stay narrow.
+ */
+export type TaskbarTraffic = "Values" | "Chart"
 export type TrafficTick = { total_rate: Rate; 
 /**
  * Every listener that had a delta in this tick.
