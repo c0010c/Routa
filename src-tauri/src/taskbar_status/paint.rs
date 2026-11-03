@@ -16,13 +16,19 @@ const HEIGHT: i32 = 36;
 const CHART_W: i32 = 26;
 const VALUES_W: i32 = 27;
 const NODE_W: i32 = 36;
-const GAP: i32 = 3;
+const GAP: i32 = 6;
+/// Breathing room from the last task button and from the tray arrow.
+const PAD_LEFT: i32 = 2;
+const PAD_RIGHT: i32 = 4;
 const FONT_H: i32 = 12;
 const SCROLL_PAUSE: Duration = Duration::from_secs(1);
 const SCROLL_PX_PER_SEC: f32 = 24.0;
 /// Keeps transparent pixels clickable: a zero alpha lets the mouse through.
 const HIT_TEST_PIXEL: u32 = 0x0100_0000;
-const AREA_COVERAGE: u32 = 77;
+const AREA_COVERAGE: u32 = 255;
+/// Chart colors taken from Proxifier's tray graph, on either taskbar theme.
+const CHART_UP: u32 = 0x4676d5;
+const CHART_DOWN: u32 = 0x2ec46e;
 /// Chart margins at 96 DPI; the bottom one clears the running-app indicator.
 const CHART_TOP: f32 = 4.0;
 const CHART_BOTTOM: f32 = 6.0;
@@ -41,18 +47,21 @@ pub struct Palette {
     pub bad: u32,
 }
 
-/// Darker series colors on a light taskbar, where the bright ones wash out.
+/// Rate numbers use the chart's blue (up) and green (down), a shade darker on a
+/// light taskbar where the bright ones wash out.
 pub fn palette(light: bool) -> Palette {
     if light {
-        Palette { text: 0x1f2937, dim: 0x6b7280, up: 0xb45309, down: 0x0369a1, good: 0x15803d, warn: 0xa16207, bad: 0xb91c1c }
+        Palette { text: 0x0f172a, dim: 0x64748b, up: 0x3563c9, down: 0x128a48, good: 0x059669, warn: 0xd97706, bad: 0xe11d48 }
     } else {
-        Palette { text: 0xf2f5f8, dim: 0x9fb0bf, up: 0xfbbf24, down: 0x38bdf8, good: 0x4ade80, warn: 0xfacc15, bad: 0xf87171 }
+        Palette { text: 0xffffff, dim: 0xa5b4c3, up: 0x6b93ee, down: 0x2ec46e, good: 0x34e89e, warn: 0xffd43b, bad: 0xff6b81 }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub traffic: TaskbarTraffic,
+    pub pad_left: i32,
+    pub pad_right: i32,
     /// The left column: the chart or the rate numbers.
     pub traffic_w: i32,
     pub width: i32,
@@ -73,7 +82,9 @@ pub fn layout(dpi: u32, traffic: TaskbarTraffic) -> Layout {
     Layout {
         traffic,
         traffic_w,
-        width: traffic_w + scale(GAP) + scale(NODE_W),
+        pad_left: scale(PAD_LEFT),
+        pad_right: scale(PAD_RIGHT),
+        width: scale(PAD_LEFT) + traffic_w + scale(GAP) + scale(NODE_W) + scale(PAD_RIGHT),
         height: scale(HEIGHT),
         chart_w: scale(CHART_W),
         values_w: scale(VALUES_W),
@@ -136,13 +147,6 @@ fn blend(pixel: &mut u32, rgb: u32, coverage: u32) {
     *pixel = (alpha << 24) | mix(16) | mix(8) | mix(0);
 }
 
-fn segment_distance(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let length = dx * dx + dy * dy;
-    let t = if length > 0.0 { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / length).clamp(0.0, 1.0) } else { 0.0 };
-    ((p.0 - a.0 - t * dx).powi(2) + (p.1 - a.1 - t * dy).powi(2)).sqrt()
-}
-
 struct Painter<'a> {
     layout: Layout,
     palette: Palette,
@@ -176,7 +180,7 @@ impl<'a> Painter<'a> {
             SelectObject(dc, bitmap);
             let face: Vec<u16> = "Microsoft YaHei UI".encode_utf16().chain(Some(0)).collect();
             let font = CreateFontW(
-                -layout.font_h * TEXT_SUPERSAMPLE, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, ANTIALIASED_QUALITY as _, 0, face.as_ptr(),
+                -layout.font_h * TEXT_SUPERSAMPLE, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, ANTIALIASED_QUALITY as _, 0, face.as_ptr(),
             );
             SelectObject(dc, font);
             SetBkMode(dc, TRANSPARENT as _);
@@ -224,10 +228,15 @@ impl<'a> Painter<'a> {
         }
         let (w, h, chart_w) = (self.layout.width, self.layout.height, self.layout.chart_w);
         let scale = h as f32 / HEIGHT as f32;
-        let thickness = scale.max(1.0);
         // The baseline sits above the strip where Windows draws running indicators.
         let (top, base) = (CHART_TOP * scale, h as f32 - CHART_BOTTOM * scale);
-        let (up, down) = chart_points(series, (chart_w - 1) as f32, base - top);
+        // Stacked like Proxifier's tray graph: up at the bottom, down on top of it,
+        // so neither hides the other and the outline is the total.
+        let stacked: Vec<_> = series
+            .iter()
+            .map(|r| crate::stats::traffic::Rate { up: r.up, down: r.up + r.down })
+            .collect();
+        let (up, down) = chart_points(&stacked, (chart_w - 1) as f32, base - top);
         let shift = |line: Vec<(f32, f32)>| line.into_iter().map(|(x, y)| (x, y + top)).collect::<Vec<_>>();
         let (up, down) = (shift(up), shift(down));
         for py in 0..h {
@@ -235,24 +244,20 @@ impl<'a> Painter<'a> {
             if local < 0.0 || local > base {
                 continue;
             }
-            for px in 0..chart_w {
-                let point = (px as f32 + 0.5, local);
+            for cx in 0..chart_w {
+                let px = cx + self.layout.pad_left;
+                let point = (cx as f32 + 0.5, local);
                 let index = (py * w + px) as usize;
-                let surface = down
-                    .windows(2)
-                    .find(|s| point.0 >= s[0].0 && point.0 <= s[1].0)
-                    .map(|s| s[0].1 + (s[1].1 - s[0].1) * (point.0 - s[0].0) / (s[1].0 - s[0].0));
-                if surface.is_some_and(|y| local > y) {
-                    blend(&mut self.pixels[index], self.palette.down, AREA_COVERAGE);
-                }
-                for (line, rgb) in [(&down, self.palette.down), (&up, self.palette.up)] {
-                    let distance = line
+                for (line, rgb) in [(&down, CHART_DOWN), (&up, CHART_UP)] {
+                    let surface = line
                         .windows(2)
-                        .map(|s| segment_distance(point, s[0], s[1]))
-                        .fold(f32::MAX, f32::min);
-                    let coverage = (thickness * 0.5 + 0.5 - distance).clamp(0.0, 1.0);
-                    if coverage > 0.0 {
-                        blend(&mut self.pixels[index], rgb, (coverage * 255.0) as u32);
+                        .find(|s| point.0 >= s[0].0 && point.0 <= s[1].0)
+                        .map(|s| s[0].1 + (s[1].1 - s[0].1) * (point.0 - s[0].0) / (s[1].0 - s[0].0));
+                    if let Some(y) = surface {
+                        let edge = (local - y + 0.5).clamp(0.0, 1.0);
+                        if edge > 0.0 {
+                            blend(&mut self.pixels[index], rgb, (edge * AREA_COVERAGE as f32) as u32);
+                        }
                     }
                 }
             }
@@ -262,27 +267,29 @@ impl<'a> Painter<'a> {
     fn screen(&mut self, screen: &Screen, dy: i32, name_elapsed: Duration) -> Painted {
         let Layout { traffic, width, height, values_w, node_w, .. } = self.layout;
         let (top, bottom) = (height / 4 + dy, height * 3 / 4 + dy);
-        let node_x = width - node_w;
+        let node_x = width - self.layout.pad_right - node_w;
+        let node_clip = (node_x, node_x + node_w);
+        let left = self.layout.pad_left;
         let palette = self.palette;
         match screen {
             Screen::NotRunning | Screen::NoListeners => {
                 let label = if matches!(screen, Screen::NotRunning) { "未运行" } else { "无监听" };
-                self.text(label, node_x, height / 2 + dy, (node_x, width), palette.dim, 0);
+                self.text(label, node_x, height / 2 + dy, node_clip, palette.dim, 0);
                 Painted { scroll_done: true, name_width: 0 }
             }
             Screen::Listener(view) => {
                 match traffic {
                     TaskbarTraffic::Chart => self.chart(&view.series, dy),
                     TaskbarTraffic::Values => {
-                        let clip = (0, values_w);
-                        self.text(&format_rate(view.up), 0, top, clip, palette.up, 0);
-                        self.text(&format_rate(view.down), 0, bottom, clip, palette.down, 0);
+                        let clip = (left, left + values_w);
+                        self.text(&format_rate(view.up), left, top, clip, palette.up, 0);
+                        self.text(&format_rate(view.down), left, bottom, clip, palette.down, 0);
                     }
                 }
                 let name: Vec<u16> = view.node.encode_utf16().collect();
                 let name_width = self.text_size(&name).cx;
                 let (offset, scroll_done) = scroll_offset(name_width, node_w, name_elapsed);
-                self.text(&view.node, node_x, top, (node_x, width), palette.text, offset);
+                self.text(&view.node, node_x, top, node_clip, palette.text, offset);
                 let (delay, rgb) = match view.delay {
                     DelayView::Ms(ms, tone) => (
                         format!("● {ms}"),
@@ -295,7 +302,7 @@ impl<'a> Painter<'a> {
                     DelayView::Failed => ("● --".to_string(), palette.bad),
                     DelayView::Unknown => ("● --".to_string(), palette.dim),
                 };
-                self.text(&delay, node_x, bottom, (node_x, width), rgb, 0);
+                self.text(&delay, node_x, bottom, node_clip, rgb, 0);
                 Painted { scroll_done, name_width }
             }
         }
@@ -348,8 +355,8 @@ mod tests {
 
     #[test]
     fn layout_keeps_only_the_chosen_traffic_view() {
-        assert_eq!((layout(96, Values).width, layout(96, Values).traffic_w), (66, 27));
-        assert_eq!((layout(96, Chart).width, layout(96, Chart).traffic_w), (65, 26));
+        assert_eq!((layout(96, Values).width, layout(96, Values).traffic_w), (75, 27));
+        assert_eq!((layout(96, Chart).width, layout(96, Chart).traffic_w), (74, 26));
         for traffic in [Values, Chart] {
             let (one, two) = (layout(96, traffic), layout(192, traffic));
             assert_eq!(one.node_w, 36);
@@ -499,7 +506,29 @@ mod tests {
     #[test]
     fn palette_changes_with_the_theme() {
         assert_ne!(palette(true).text, palette(false).text);
-        assert_eq!(palette(false).up, 0xfbbf24);
-        assert_eq!(palette(false).down, 0x38bdf8);
+        assert_eq!((palette(false).up, palette(false).down), (0x6b93ee, 0x2ec46e));
+        assert_eq!((palette(true).up, palette(true).down), (0x3563c9, 0x128a48));
+    }
+
+    #[test]
+    fn bar_keeps_clear_margins_to_its_neighbours() {
+        for traffic in [Values, Chart] {
+            let (pixels, _) = painted_in(&frame(listener_screen()), traffic);
+            let l = layout(96, traffic);
+            let margin = (0..l.pad_left).chain(l.width - l.pad_right..l.width);
+            let inked = margin.flat_map(|x| (0..l.height).map(move |y| (y * l.width + x) as usize)).any(|i| pixels[i] >> 24 > 1);
+            assert!(!inked, "{traffic:?}");
+        }
+    }
+
+    #[test]
+    fn stacked_chart_puts_up_below_down_in_proxifier_colors() {
+        let (pixels, _) = painted_in(&frame(with_traffic(vec![Rate { up: 1000, down: 1000 }; 10], 0, 0)), Chart);
+        let l = layout(96, Chart);
+        let x = l.pad_left + l.traffic_w / 2;
+        let rows = |rgb: u32| (0..l.height).filter(|y| pixels[(y * l.width + x) as usize] == 0xff00_0000 | rgb).collect::<Vec<_>>();
+        let (up, down) = (rows(CHART_UP), rows(CHART_DOWN));
+        assert!(!up.is_empty() && !down.is_empty());
+        assert!(up.iter().min() > down.iter().max());
     }
 }
