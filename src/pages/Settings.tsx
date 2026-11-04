@@ -1,20 +1,21 @@
 import mihomoVersion from "../../src-tauri/binaries/MIHOMO_VERSION?raw";
+import ChevronRight from "@mui/icons-material/ChevronRight";
 import {
   Alert,
   Box,
   Button,
-  Card,
-  Divider,
   FormControlLabel,
   Radio,
   RadioGroup,
   Stack,
   Switch,
+  Tab,
+  Tabs,
   TextField,
   Typography,
 } from "@mui/material";
-import { Fragment, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { useState, type ReactNode } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   isValidationError,
   useModel,
@@ -41,61 +42,28 @@ import { fieldErrors, type FieldErrors } from "../lib/validation";
 import { applyOutcomeMessages } from "../lib/format";
 import { UpdatePanel } from "../components/UpdatePanel";
 import { UiPreferencesPanel } from "../components/UiPreferencesPanel";
+import { Row, Section } from "../components/SettingsSection";
 
-/** One Win11-style settings row: label and explanation on the left, control on the right. */
-function Row({
-  label,
-  description,
-  children,
-}: {
-  label: string;
-  description?: string;
-  children: ReactNode;
-}) {
+const TABS = [
+  { value: "general", label: "常规" },
+  { value: "network", label: "网络与内核" },
+  { value: "procroute", label: "进程分流" },
+  { value: "about", label: "关于" },
+] as const;
+type TabValue = (typeof TABS)[number]["value"];
+
+/** Keeps every panel mounted so drafts such as the control port survive switching tabs. */
+function TabPanel({ value, current, children }: { value: TabValue; current: TabValue; children: ReactNode }) {
+  // The `hidden` attribute sits on a plain Box: a flex Stack would override its display: none.
   return (
-    <Stack
-      spacing={1}
-      sx={{ alignItems: "flex-start", px: 2, py: 1.5 }}
+    <Box
+      role="tabpanel"
+      id={`settings-panel-${value}`}
+      aria-labelledby={`settings-tab-${value}`}
+      hidden={value !== current}
     >
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography>{label}</Typography>
-        {description && (
-          <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            {description}
-          </Typography>
-        )}
-      </Box>
-      {children}
-    </Stack>
-  );
-}
-
-function Section({
-  title,
-  children,
-  footer,
-}: {
-  title: string;
-  children: ReactNode[];
-  footer?: ReactNode;
-}) {
-  return (
-    <Stack component="section" aria-label={title} spacing={1}>
-      <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-        {title}
-      </Typography>
-      <Card sx={footer ? { display: "flex", flexDirection: "column", height: "min(420px, calc(100dvh - 96px))", minHeight: 220 } : undefined}>
-        <Box sx={footer ? { flex: 1, minHeight: 0, overflowY: "auto" } : undefined}>
-          {children.map((c, i) => (
-            <Fragment key={i}>
-              {i > 0 && <Divider />}
-              {c}
-            </Fragment>
-          ))}
-        </Box>
-        {footer}
-      </Card>
-    </Stack>
+      <Stack spacing={2.5}>{children}</Stack>
+    </Box>
   );
 }
 
@@ -117,6 +85,8 @@ function SettingsForm({
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
   const [portLocal, setPortLocal] = useState<string>();
   const portError = portLocal ?? errs.port;
+  const [params, setParams] = useSearchParams();
+  const tab: TabValue = TABS.find((t) => t.value === params.get("tab"))?.value ?? "general";
 
   const dirty = port !== String(initial.controller_port);
   const pending = save.isPending || feedback.pending;
@@ -174,24 +144,32 @@ function SettingsForm({
   };
 
   return (
-    <Stack spacing={2} sx={{ maxWidth: 760 }}>
+    <Stack spacing={1} sx={{ maxWidth: 760 }}>
       <Typography variant="h5">设置</Typography>
-      <UiPreferencesPanel />
-      <UpdatePanel />
-      <Button
-        component={Link}
-        to="/diagnostics"
-        sx={{ alignSelf: "flex-start" }}
+      <Tabs
+        value={tab}
+        onChange={(_, value: TabValue) => setParams({ tab: value }, { replace: true })}
+        aria-label="设置分类"
+        sx={{ borderBottom: 1, borderColor: "divider", mb: 1.5 }}
       >
-        故障诊断
-      </Button>
-      <Stack spacing={2} sx={{ maxWidth: 760 }}>
-        <Section title="常规">
-          {[
+        {TABS.map((t) => (
+          <Tab
+            key={t.value}
+            value={t.value}
+            label={t.label}
+            id={`settings-tab-${t.value}`}
+            aria-controls={`settings-panel-${t.value}`}
+          />
+        ))}
+      </Tabs>
+      <TabPanel value="general" current={tab}>
+        <UiPreferencesPanel
+          startupRows={[
             <Row
               key="autostart"
               label="开机自启"
               description="登录 Windows 后自动启动 Routa"
+              feedback={<SaveFeedback notice={feedback.notices.autostart} />}
             >
               <Switch
                 checked={initial.autostart}
@@ -199,13 +177,19 @@ function SettingsForm({
                 onChange={(_, value) => void saveImmediate("autostart", { autostart: value })}
                 slotProps={{ input: { "aria-label": "开机自启" } }}
               />
-              <SaveFeedback notice={feedback.notices.autostart} />
             </Row>,
           ]}
-        </Section>
+        />
+      </TabPanel>
+      <TabPanel value="network" current={tab}>
         <Section title="测速">
           {[
-            <Row key="auto" label="自动测速" description="按间隔对所有出口测延迟">
+            <Row
+              key="auto"
+              label="自动测速"
+              description="按间隔对所有出口测延迟"
+              feedback={<SaveFeedback notice={feedback.notices.interval} />}
+            >
               <IntervalInput
                 key={`${initial.delay_test_interval_mins}:${intervalRevision}`}
                 value={initial.delay_test_interval_mins}
@@ -217,10 +201,14 @@ function SettingsForm({
                 disabled={pending}
                 commitOnBlur
               />
-              <SaveFeedback notice={feedback.notices.interval} />
             </Row>,
-            <Row key="url" label="测速 URL">
+            <Row
+              key="url"
+              label="测速 URL"
+              feedback={<SaveFeedback notice={feedback.notices.url} onRetry={saveUrl} />}
+            >
               <TextField
+                size="small"
                 value={url}
                 disabled={pending}
                 onChange={(e) => { setUrl(e.target.value); feedback.clear("url"); }}
@@ -229,7 +217,6 @@ function SettingsForm({
                 slotProps={{ htmlInput: { "aria-label": "测速 URL" } }}
                 sx={{ width: 320, maxWidth: "100%" }}
               />
-              <SaveFeedback notice={feedback.notices.url} onRetry={saveUrl} />
             </Row>,
           ]}
         </Section>
@@ -238,19 +225,27 @@ function SettingsForm({
             role="group"
             aria-label="内核保存操作"
             spacing={0.5}
-            sx={{ flexShrink: 0, p: 2, borderTop: 1, borderColor: "divider", bgcolor: "background.paper" }}
+            sx={{ px: 2, py: 1.5, borderTop: 1, borderColor: "divider", bgcolor: "action.hover" }}
           >
             <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
+                {dirty ? "有未保存的修改" : ""}
+              </Typography>
               <Button variant="contained" disabled={pending || !dirty} onClick={() => void submit()}>保存并重启</Button>
-              <Typography variant="body2" color="text.secondary">{dirty ? "有未保存的修改" : ""}</Typography>
             </Stack>
-            <SaveFeedback notice={feedback.notices.core} />
+            {feedback.notices.core && <SaveFeedback notice={feedback.notices.core} />}
           </Stack>
         }>
           {[
             <Row key="path" label="内置 mihomo"><Typography color="text.secondary">{mihomoVersion.trim()} · 随 Routa 提供</Typography></Row>,
-            <Row key="port" label="控制端口" description="修改后 mihomo 会重启">
+            <Row
+              key="port"
+              label="控制端口"
+              description="修改后 mihomo 会重启"
+              below={errs.form.length > 0 && <Alert severity="error">{errs.form.join("；")}</Alert>}
+            >
               <TextField
+                size="small"
                 type="number"
                 disabled={pending}
                 value={port}
@@ -261,11 +256,10 @@ function SettingsForm({
                   feedback.clear("core");
                 }}
                 error={!!portError}
-                helperText={portError ?? " "}
+                helperText={portError}
                 slotProps={{ htmlInput: { "aria-label": "控制端口" } }}
                 sx={{ width: 140 }}
               />
-              {errs.form.length > 0 && <Alert severity="error">{errs.form.join("；")}</Alert>}
             </Row>,
             <Row key="log" label="日志">
               <Button variant="outlined" onClick={() => openLogDir.mutate()}>
@@ -274,8 +268,22 @@ function SettingsForm({
             </Row>,
           ]}
         </Section>
+      </TabPanel>
+      <TabPanel value="procroute" current={tab}>
         <ProcessRoutingSection routing={routing} />
-      </Stack>
+      </TabPanel>
+      <TabPanel value="about" current={tab}>
+        <UpdatePanel />
+        <Section title="支持">
+          {[
+            <Row key="diagnostics" label="故障诊断" description="查看内核、监听端口、系统代理和分流组件状态">
+              <Button variant="outlined" component={Link} to="/diagnostics" endIcon={<ChevronRight />}>
+                打开
+              </Button>
+            </Row>,
+          ]}
+        </Section>
+      </TabPanel>
     </Stack>
   );
 }
@@ -290,58 +298,74 @@ function ProcessRoutingSection({ routing }: { routing: ProcessRouting }) {
   const component = status.data?.component;
   const busy = uninstall.isPending || cleanup.isPending;
   return (
-    <Section title="进程分流">
-      {[
-        <Row key="exit" label={EXIT_POLICY_LABEL} description={EXIT_POLICY_HINT}>
-          <RadioGroup
-            row
-            aria-label={EXIT_POLICY_LABEL}
-            value={routing.on_routa_exit}
-            onChange={(e) => settings.mutate(routing.enabled, e.target.value as ExitPolicy)}
+    <>
+      <Section title="行为">
+        {[
+          <Row key="exit" label={EXIT_POLICY_LABEL} description={EXIT_POLICY_HINT}>
+            <RadioGroup
+              row
+              aria-label={EXIT_POLICY_LABEL}
+              value={routing.on_routa_exit}
+              onChange={(e) => settings.mutate(routing.enabled, e.target.value as ExitPolicy)}
+            >
+              <FormControlLabel value="Direct" control={<Radio size="small" />} label="直连" disabled={settings.isPending} />
+              <FormControlLabel value="Block" control={<Radio size="small" />} label="阻断" disabled={settings.isPending} />
+            </RadioGroup>
+          </Row>,
+        ]}
+      </Section>
+      <Section title="分流组件">
+        {[
+          <Row
+            key="cleanup"
+            label="清理残留阻断规则"
+            description="删除系统中所有 Routa 留下的阻断规则，被阻断的程序会直接联网。可能需要管理员授权。"
           >
-            <FormControlLabel value="Direct" control={<Radio size="small" />} label="直连" disabled={settings.isPending} />
-            <FormControlLabel value="Block" control={<Radio size="small" />} label="阻断" disabled={settings.isPending} />
-          </RadioGroup>
-        </Row>,
-        <Row
-          key="component"
-          label="分流组件"
-          description="清理：删除系统中所有 Routa 留下的阻断规则，被阻断的程序会直接联网。卸载：停止并删除分流服务。两者都可能需要管理员授权。"
-        >
-          <Stack direction="row" spacing={1}>
-            <Button variant="outlined" disabled={busy} onClick={() => setConfirm("cleanup")}>
-              清理残留阻断规则
+            <Button
+              variant="outlined"
+              aria-label="清理残留阻断规则"
+              disabled={busy}
+              onClick={() => setConfirm("cleanup")}
+            >
+              清理
             </Button>
+          </Row>,
+          <Row
+            key="uninstall"
+            label="卸载组件"
+            description="停止并删除分流服务。需要管理员授权。"
+          >
             <Button
               variant="outlined"
               color="error"
+              aria-label="卸载组件"
               disabled={busy || component === "NotInstalled"}
               onClick={() => setConfirm("uninstall")}
             >
-              卸载组件
+              卸载
             </Button>
-          </Stack>
-          {confirm === "uninstall" && (
-            <ConfirmDeleteDialog
-              title="卸载组件"
-              confirmLabel="卸载"
-              text="将停止并删除分流服务，并清除它的所有阻断规则。需要管理员授权。"
-              onConfirm={() => uninstall.mutateAsync()}
-              onClose={() => setConfirm(null)}
-            />
-          )}
-          {confirm === "cleanup" && (
-            <ConfirmDeleteDialog
-              title="清理残留阻断规则"
-              confirmLabel="清理"
-              text="将删除系统中所有 Routa 留下的阻断规则，被阻断的程序会直接联网。服务未运行时需要管理员授权。"
-              onConfirm={() => cleanup.mutateAsync()}
-              onClose={() => setConfirm(null)}
-            />
-          )}
-        </Row>,
-      ]}
-    </Section>
+          </Row>,
+        ]}
+      </Section>
+      {confirm === "uninstall" && (
+        <ConfirmDeleteDialog
+          title="卸载组件"
+          confirmLabel="卸载"
+          text="将停止并删除分流服务，并清除它的所有阻断规则。需要管理员授权。"
+          onConfirm={() => uninstall.mutateAsync()}
+          onClose={() => setConfirm(null)}
+        />
+      )}
+      {confirm === "cleanup" && (
+        <ConfirmDeleteDialog
+          title="清理残留阻断规则"
+          confirmLabel="清理"
+          text="将删除系统中所有 Routa 留下的阻断规则，被阻断的程序会直接联网。服务未运行时需要管理员授权。"
+          onConfirm={() => cleanup.mutateAsync()}
+          onClose={() => setConfirm(null)}
+        />
+      )}
+    </>
   );
 }
 

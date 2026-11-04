@@ -1,5 +1,6 @@
 import InfoOutlined from "@mui/icons-material/InfoOutlined";
-import { Button, IconButton, Paper, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, Button, IconButton, Tooltip, Typography } from "@mui/material";
+import { Row, Section } from "./SettingsSection";
 import { useState } from "react";
 import type { UpdateState } from "../bindings";
 import { checkUpdate, installUpdate, useUpdate } from "../api/update";
@@ -44,59 +45,60 @@ export function UpdatePanel() {
     }
   };
   const text = statusText(state, data.last_checked_unix);
+  const unsupported = state.kind === "Unsupported";
   return (
-    <Stack spacing={2}>
-      <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-        <Typography sx={{ fontWeight: 600 }}>更新</Typography>
+    <Section
+      title="更新"
+      action={
         <Tooltip title="仅安装版（NSIS）支持自动更新；安装前会校验签名">
           <IconButton size="small" aria-label="更新说明" sx={{ p: 0.25 }}>
             <InfoOutlined sx={{ fontSize: 16 }} />
           </IconButton>
         </Tooltip>
-      </Stack>
-      <Paper>
-        <Stack spacing={1} sx={{ p: 2, alignItems: "flex-start" }}>
-          <Typography>当前版本 v{data.current_version}</Typography>
-          {state.kind === "Unsupported" ? (
-            <Typography variant="body2" color="text.secondary">
-              当前安装方式不支持自动更新
-            </Typography>
-          ) : (
-            <>
-              <Stack direction="row" spacing={1} sx={{ alignItems: "center", minHeight: 32 }}>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  disabled={busy}
-                  onClick={() => void run(checkUpdate)}
-                >
-                  检查更新
-                </Button>
-                {state.kind === "Ready" && (
-                  <Button size="small" variant="contained" onClick={() => void run(installUpdate)}>
-                    现在安装
-                  </Button>
-                )}
-              </Stack>
-              {state.kind === "Ready" && (
-                <Typography variant="body2" color="text.secondary">
-                  {UAC_NOTE}
-                </Typography>
-              )}
-              {text && (
-                <Typography variant="body2" color="text.secondary">
+      }
+    >
+      {[
+        <Row
+          key="version"
+          label={`当前版本 v${data.current_version}`}
+          description={
+            unsupported ? (
+              "当前安装方式不支持自动更新"
+            ) : (
+              (text || state.kind === "Ready") && (
+                <>
                   {text}
-                </Typography>
-              )}
-              {error && (
-                <Typography variant="body2" color="error">
-                  {error}
-                </Typography>
+                  {state.kind === "Ready" && <Box component="span" sx={{ display: "block" }}>{UAC_NOTE}</Box>}
+                </>
+              )
+            )
+          }
+          below={
+            error && (
+              <Typography variant="body2" color="error">
+                {error}
+              </Typography>
+            )
+          }
+        >
+          {!unsupported && (
+            <>
+              <Button
+                variant="outlined"
+                disabled={busy}
+                onClick={() => void run(checkUpdate)}
+              >
+                检查更新
+              </Button>
+              {state.kind === "Ready" && (
+                <Button variant="contained" onClick={() => void run(installUpdate)}>
+                  现在安装
+                </Button>
               )}
             </>
           )}
-        </Stack>
-      </Paper>
-    </Stack>
+        </Row>,
+      ]}
+    </Section>
   );
 }

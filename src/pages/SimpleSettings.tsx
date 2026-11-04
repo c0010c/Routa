@@ -1,15 +1,9 @@
-import {
-  Box,
-  Button,
-  Paper,
-  Stack,
-  Switch,
-  Typography,
-} from "@mui/material";
+import { Button, Stack, Switch, Typography } from "@mui/material";
 import { Link } from "react-router-dom";
 import { BackHeading } from "../components/BackHeading";
 import { UpdatePanel } from "../components/UpdatePanel";
 import { UiPreferencesPanel } from "../components/UiPreferencesPanel";
+import { Row, Section } from "../components/SettingsSection";
 import { useModel } from "../api/client";
 import { settingsSaveMessage, useSettingsSave } from "../api/settings";
 import { SaveFeedback, useSaveFeedback } from "../components/SaveFeedback";
@@ -19,43 +13,38 @@ export function SimpleSettings() {
   const save = useSettingsSave();
   const feedback = useSaveFeedback<"autostart">();
   return (
-    <Stack spacing={3} sx={{ maxWidth: 720, mx: "auto" }}>
+    <Stack spacing={2.5} sx={{ maxWidth: 720, mx: "auto" }}>
       <BackHeading title="设置" />
-      <UiPreferencesPanel />
+      <UiPreferencesPanel
+        startupRows={[
+          <Row
+            key="autostart"
+            label="开机启动"
+            description="登录 Windows 后启动 Routa"
+            feedback={<SaveFeedback notice={feedback.notices.autostart} />}
+          >
+            <Switch
+              checked={model.data?.settings.autostart ?? false}
+              disabled={!model.data || save.isPending || feedback.pending}
+              slotProps={{ input: { "aria-label": "开机启动" } }}
+              onChange={(_, v) => void feedback.run("autostart", async () => {
+                try { await save.mutateAsync({ autostart: v }); }
+                catch (error) { throw new Error(settingsSaveMessage(error)); }
+              })}
+            />
+          </Row>,
+        ]}
+      />
       <UpdatePanel />
-      <Paper>
-        <Stack direction="row" sx={{ p: 2, alignItems: "center" }}>
-          <Box sx={{ flex: 1 }}>
-            <Typography>开机启动</Typography>
-            <Typography variant="body2" color="text.secondary">
-              登录 Windows 后启动 Routa
-            </Typography>
-          </Box>
-          <Switch
-            checked={model.data?.settings.autostart ?? false}
-            disabled={!model.data || save.isPending || feedback.pending}
-            slotProps={{ input: { "aria-label": "开机启动" } }}
-            onChange={(_, v) => void feedback.run("autostart", async () => {
-              try { await save.mutateAsync({ autostart: v }); }
-              catch (error) { throw new Error(settingsSaveMessage(error)); }
-            })}
-          />
-        </Stack>
-        <Box sx={{ px: 2, pb: 1 }}><SaveFeedback notice={feedback.notices.autostart} /></Box>
-      </Paper>
-      <Paper
-        sx={{
-          p: 2,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <Typography>故障诊断</Typography>
-        <Button component={Link} to="/diagnostics">
-          打开
-        </Button>
-      </Paper>
+      <Section title="支持">
+        {[
+          <Row key="diagnostics" label="故障诊断">
+            <Button component={Link} to="/diagnostics">
+              打开
+            </Button>
+          </Row>,
+        ]}
+      </Section>
       <Typography variant="caption" color="text.secondary">
         Routa v{pkg.version}
       </Typography>

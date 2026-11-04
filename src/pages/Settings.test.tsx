@@ -44,7 +44,7 @@ const model: Model = {
   process_routing: { enabled: false, on_routa_exit: "Block", rules: [] },
 };
 
-function renderPage(initial = model, simple = false) {
+function renderPage(initial = model, simple = false, tab = "network") {
   vi.mocked(commands.getModel).mockResolvedValue(initial);
   vi.mocked(commands.saveSettings).mockResolvedValue({
     status: "ok",
@@ -66,12 +66,16 @@ function renderPage(initial = model, simple = false) {
   render(
     <QueryClientProvider client={qc}>
       <ApplyResultProvider>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={[`/settings?tab=${tab}`]}>
           {simple ? <SimpleSettings /> : <Settings />}
         </MemoryRouter>
       </ApplyResultProvider>
     </QueryClientProvider>,
   );
+}
+
+async function showTab(name: string) {
+  fireEvent.click(await screen.findByRole("tab", { name }));
 }
 
 describe("Settings", () => {
@@ -119,9 +123,11 @@ describe("Settings", () => {
   it("isolates an invalid core draft from immediate saves and keeps later saves current", async () => {
     renderPage();
     fireEvent.change(await screen.findByLabelText("控制端口"), { target: { value: "99999" } });
+    await showTab("常规");
     fireEvent.click(screen.getByRole("switch", { name: "开机自启" }));
     await screen.findByText("已保存");
     expect(commands.saveSettings).toHaveBeenLastCalledWith({ ...model.settings, autostart: true });
+    await showTab("网络与内核");
     expect(screen.getByLabelText("控制端口")).toHaveValue(99999);
     const url = screen.getByLabelText("测速 URL");
     fireEvent.change(url, { target: { value: "https://new.test" } });
@@ -139,7 +145,7 @@ describe("Settings", () => {
   });
 
   it("locks immediate and explicit submissions until the request completes", async () => {
-    renderPage();
+    renderPage(model, false, "general");
     const autostart = await screen.findByRole("switch", { name: "开机自启" });
     let finish!: (result: Awaited<ReturnType<typeof commands.saveSettings>>) => void;
     vi.mocked(commands.saveSettings).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
@@ -147,9 +153,10 @@ describe("Settings", () => {
     fireEvent.click(autostart);
     expect(screen.getByText("保存中…")).toBeInTheDocument();
     expect(autostart).toBeDisabled();
+    fireEvent.click(autostart);
+    await showTab("网络与内核");
     expect(screen.getByLabelText("测速 URL")).toBeDisabled();
     expect(screen.getByRole("button", { name: "保存并重启" })).toBeDisabled();
-    fireEvent.click(autostart);
     fireEvent.click(screen.getByRole("button", { name: "保存并重启" }));
     await waitFor(() => expect(commands.saveSettings).toHaveBeenCalledTimes(1));
     await act(async () => finish({ status: "ok", data: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } }));
@@ -159,11 +166,11 @@ describe("Settings", () => {
   });
 
   it("shows a local autostart failure, keeps the committed value, and lets the user retry", async () => {
-    renderPage();
+    renderPage(model, false, "general");
     const autostart = await screen.findByRole("switch", { name: "开机自启" });
     vi.mocked(commands.saveSettings).mockResolvedValueOnce({ status: "error", error: "开机自启未能保存，请重试" });
     fireEvent.click(autostart);
-    const general = screen.getByRole("region", { name: "常规" });
+    const general = screen.getByRole("region", { name: "启动与窗口" });
     expect(await within(general).findByRole("alert")).toHaveTextContent("开机自启未能保存，请重试");
     expect(autostart).not.toBeChecked();
     expect(screen.queryByText("已保存")).not.toBeInTheDocument();
@@ -200,7 +207,7 @@ describe("Settings", () => {
   });
 
   it("fades only the success feedback without shifting the control", async () => {
-    renderPage();
+    renderPage(model, false, "general");
     const autostart = await screen.findByRole("switch", { name: "开机自启" });
     vi.useFakeTimers();
     try {
@@ -212,7 +219,7 @@ describe("Settings", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
       expect(screen.queryByText("已保存")).not.toBeInTheDocument();
       expect(autostart).toBeChecked();
-      expect(screen.getByRole("region", { name: "常规" }).querySelector('[role="status"]')).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "启动与窗口" }).querySelector('[role="status"]')).toBeInTheDocument();
     } finally { vi.useRealTimers(); }
   });
 
@@ -429,12 +436,17 @@ describe("Settings", () => {
     expect(commands.saveSettings).toHaveBeenCalledWith({ ...model.settings, controller_port: 19100 });
   });
 
-  it("groups settings into 常规 / 内核 / 测速 sections", async () => {
-    renderPage();
-    const general = await screen.findByRole("region", { name: "常规" });
+  it("opens on 常规 and groups the rest into tabs", async () => {
+    renderPage(model, false, "");
+    expect(await screen.findByRole("tab", { name: "常规" })).toHaveAttribute("aria-selected", "true");
+    const general = await screen.findByRole("region", { name: "启动与窗口" });
+    expect(within(general).getByText("开机自启")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "内核" })).not.toBeInTheDocument();
+
+    await showTab("网络与内核");
     const core = screen.getByRole("region", { name: "内核" });
     const delay = screen.getByRole("region", { name: "测速" });
-    expect(within(general).getByText("开机自启")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "启动与窗口" })).not.toBeInTheDocument();
     expect(within(core).getByText("内置 mihomo")).toBeInTheDocument();
     expect(within(core).queryByLabelText("mihomo 内核路径")).not.toBeInTheDocument();
     expect(within(core).getByLabelText("控制端口")).toBeInTheDocument();
@@ -443,19 +455,32 @@ describe("Settings", () => {
     ).toBeInTheDocument();
     expect(within(delay).getByText("自动测速")).toBeInTheDocument();
     expect(within(delay).getByLabelText("测速 URL")).toBeInTheDocument();
+
+    await showTab("关于");
+    expect(screen.getByRole("link", { name: "打开" })).toHaveAttribute("href", "/diagnostics");
+  });
+
+  it("keeps an unsaved core draft when switching tabs", async () => {
+    renderPage();
+    fireEvent.change(await screen.findByLabelText("控制端口"), { target: { value: "19100" } });
+    await showTab("常规");
+    await showTab("网络与内核");
+    expect(screen.getByLabelText("控制端口")).toHaveValue(19100);
+    expect(screen.getByRole("button", { name: "保存并重启" })).toBeEnabled();
   });
 
   it("holds the rarely changed process routing settings", async () => {
     vi.mocked(commands.saveProcessRoutingSettings).mockResolvedValue({ status: "ok", data: null });
     vi.mocked(commands.procrouteCleanup).mockResolvedValue({ status: "error", error: "已取消" });
-    renderPage();
-    const section = await screen.findByRole("region", { name: "进程分流" });
-    expect(within(section).getByRole("radio", { name: "阻断" })).toBeChecked();
-    fireEvent.click(within(section).getByRole("radio", { name: "直连" }));
+    renderPage(model, false, "procroute");
+    const behaviour = await screen.findByRole("region", { name: "行为" });
+    expect(within(behaviour).getByRole("radio", { name: "阻断" })).toBeChecked();
+    fireEvent.click(within(behaviour).getByRole("radio", { name: "直连" }));
     await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(false, "Direct"));
 
-    expect(within(section).getByRole("button", { name: "卸载组件" })).toBeEnabled();
-    fireEvent.click(within(section).getByRole("button", { name: "清理残留阻断规则" }));
+    const component = screen.getByRole("region", { name: "分流组件" });
+    expect(within(component).getByRole("button", { name: "卸载组件" })).toBeEnabled();
+    fireEvent.click(within(component).getByRole("button", { name: "清理残留阻断规则" }));
     fireEvent.click(await screen.findByRole("button", { name: "清理" }));
     expect(await screen.findByText("已取消")).toBeInTheDocument();
   });
