@@ -17,6 +17,7 @@ import {
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { BrandLockup } from "./BrandLockup";
+import { UpdateNavButton } from "./UpdateNavButton";
 import { UpdateNotice } from "./UpdateNotice";
 import pkg from "../../package.json";
 
@@ -71,25 +72,39 @@ export function Layout({ children }: { children: ReactNode }) {
           aria-label="主导航"
           sx={{ px: 1, flex: 1, display: "flex", flexDirection: "column" }}
         >
-          {pages.map((p) => (
-            <ListItemButton
-              key={p.path}
-              component={Link}
-              to={p.path}
-              selected={isCurrent(p.path, pathname)}
-              sx={{
-                mb: 0.5,
-                flexGrow: 0,
-                minHeight: 42,
-                mt: p.path === "/settings" ? "auto" : 0,
-              }}
-            >
-              <ListItemIcon sx={{ minWidth: 36, color: "inherit" }}>
-                {p.icon}
-              </ListItemIcon>
-              <ListItemText primary={p.label} />
-            </ListItemButton>
-          ))}
+          {pages.map((p) => {
+            const isSettings = p.path === "/settings";
+            const item = (
+              <ListItemButton
+                key={p.path}
+                component={Link}
+                to={p.path}
+                selected={isCurrent(p.path, pathname)}
+                sx={{
+                  mb: 0.5,
+                  flexGrow: 0,
+                  minHeight: 42,
+                  mt: isSettings ? "auto" : 0,
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 36, color: "inherit" }}>
+                  {p.icon}
+                </ListItemIcon>
+                <ListItemText primary={p.label} />
+              </ListItemButton>
+            );
+            if (!isSettings) return item;
+            // The update button is a sibling, not a child: a <button> inside the
+            // row's <a> would be invalid and its clicks would also navigate.
+            return (
+              <Box key={p.path} sx={{ position: "relative", mt: "auto", display: "flex", flexDirection: "column" }}>
+                {item}
+                <Box sx={{ position: "absolute", right: 10, top: 21, transform: "translateY(-50%)" }}>
+                  <UpdateNavButton />
+                </Box>
+              </Box>
+            );
+          })}
         </List>
         <Typography
           variant="caption"
