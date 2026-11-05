@@ -95,13 +95,8 @@ function ApplicationShell() {
         <Route path="/" element={<FullOverview />} />
         <Route path="/listeners" element={<Listeners />} />
         <Route path="/process-routing" element={<ProcessRoutingPage />} />
-        <Route path="/exits" element={<Navigate to="/listeners" replace />} />
         <Route path="/subscriptions" element={<ResourceCenter subscriptionsOnly />} />
         <Route path="/nodes" element={<ResourceCenter />} />
-        <Route
-          path="/tailscale"
-          element={<Navigate to="/nodes?tab=tailscale" replace />}
-        />
         <Route path="/settings" element={<Settings />} />
         <Route path="/diagnostics" element={<Diagnostics />} />
         <Route path="*" element={<Navigate to="/" replace />} />

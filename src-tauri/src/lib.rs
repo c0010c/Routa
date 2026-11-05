@@ -5,6 +5,7 @@ pub mod desktop;
 pub mod model;
 pub mod netif;
 pub mod procroute;
+pub mod relaunch;
 pub mod runtime;
 pub mod scheduler;
 pub mod stats;
@@ -178,6 +179,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             updater::update_status,
             updater::update_check,
             updater::update_install,
+            relaunch::relaunch_as_admin,
         ])
         // Payload of the "procroute-flows" event (not returned by any command).
         .typ::<routa_procsvc_proto::Flow>()
@@ -208,6 +210,8 @@ pub fn run() {
         }
     }
 
+    // An elevated relaunch waits here for the old instance, which still holds the single-instance lock.
+    relaunch::wait_for_previous_instance();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
@@ -263,7 +267,11 @@ pub fn run() {
                 }
                 desktop.clone().spawn_monitor(rt.clone());
                 let preferences = desktop.state(&rt).preferences;
-                if preferences.auto_connect {
+                if relaunch::connect_tun_requested() && desktop::is_admin() {
+                    if let Err(e) = desktop.connect(&rt, Some(desktop::CaptureMode::Tun)).await {
+                        eprintln!("connect TUN after relaunch: {e}");
+                    }
+                } else if preferences.auto_connect {
                     let result = if preferences.mode == Some(desktop::InterfaceMode::Full)
                         && preferences.capture_mode == desktop::CaptureMode::System
                     {

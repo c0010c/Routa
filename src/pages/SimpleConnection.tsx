@@ -26,6 +26,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import { AdminRelaunchDialog } from "../components/AdminRelaunchDialog";
 import { BrandMark } from "../components/BrandMark";
 import LanguageOutlined from "@mui/icons-material/LanguageOutlined";
 import ChevronRightOutlined from "@mui/icons-material/ChevronRightOutlined";
@@ -89,6 +90,7 @@ export function SimpleConnection() {
     | "permission"
     | "bind"
     | "port"
+    | "admin"
     | null
   >(null);
   const [pendingNode, setPendingNode] = useState<NodeRef | null>(null);
@@ -143,6 +145,11 @@ export function SimpleConnection() {
     setDialog(listener ? "node" : "bind");
   };
   const setScope = async (next: CaptureMode) => {
+    if (next === "Tun" && !desktop.is_admin) {
+      setError("");
+      setDialog("admin");
+      return;
+    }
     if (next === "Apps" && !componentReady) {
       setDialog("permission");
       return;
@@ -170,6 +177,10 @@ export function SimpleConnection() {
     if (!requested && !selected) {
       setPendingNode(null);
       setDialog("node");
+      return;
+    }
+    if (!requested && mode === "Tun" && !desktop.is_admin) {
+      setDialog("admin");
       return;
     }
     if (!requested && mode === "Apps" && !componentReady) {
@@ -336,10 +347,10 @@ export function SimpleConnection() {
           >
             <Stack direction="row" sx={{ alignItems: "center" }}>
               <Typography variant="body2" color="text.secondary">
-                代理范围
+                接管方式
               </Typography>
-              <Tooltip title="系统代理只影响遵循系统代理设置的应用；指定应用通过分流组件接管。">
-                <IconButton size="small" aria-label="代理范围说明">
+              <Tooltip title="系统代理只影响遵循系统代理设置的应用；指定应用通过分流组件接管；TUN 用虚拟网卡接管全部流量，需要管理员权限。">
+                <IconButton size="small" aria-label="接管方式说明">
                   <InfoOutlined sx={{ fontSize: 16 }} />
                 </IconButton>
               </Tooltip>
@@ -347,14 +358,13 @@ export function SimpleConnection() {
             <ToggleButtonGroup
               size="small"
               exclusive
-              value={mode === "Apps" ? "Apps" : "System"}
+              value={mode}
               onChange={(_, v) => v && void setScope(v)}
               disabled={busy}
             >
-              <ToggleButton value="System">
-                {mode === "Tun" ? "TUN 代理" : "系统代理"}
-              </ToggleButton>
+              <ToggleButton value="System">系统代理</ToggleButton>
               <ToggleButton value="Apps">指定应用</ToggleButton>
+              <ToggleButton value="Tun">TUN</ToggleButton>
             </ToggleButtonGroup>
           </Stack>
           {mode === "Apps" ? (
@@ -468,16 +478,6 @@ export function SimpleConnection() {
           </Button>
           <Collapse in={options}>
             <Stack spacing={1.5}>
-              <ToggleButtonGroup
-                size="small"
-                exclusive
-                value={mode}
-                disabled={busy}
-                onChange={(_, v) => v && void setScope(v)}
-              >
-                <ToggleButton value="System">系统代理</ToggleButton>
-                <ToggleButton value="Tun">TUN（需要管理员权限）</ToggleButton>
-              </ToggleButtonGroup>
               <Stack
                 direction="row"
                 sx={{ alignItems: "center", justifyContent: "space-between" }}
@@ -600,6 +600,9 @@ export function SimpleConnection() {
             await appSave.mutateAsync({ path, selected: true });
           }}
         />
+      )}
+      {dialog === "admin" && (
+        <AdminRelaunchDialog onClose={() => setDialog(null)} />
       )}
       {dialog === "permission" && (
         <Dialog open onClose={() => !install.isPending && setDialog(null)}>

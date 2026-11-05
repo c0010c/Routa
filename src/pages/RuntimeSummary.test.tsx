@@ -485,17 +485,72 @@ it("distinguishes app capture from system proxy and TUN", async () => {
   ).toBeInTheDocument();
 });
 
-it("requires administrator permission to enable TUN but still allows closing an active TUN", async () => {
+it("offers an elevated restart instead of a disabled TUN button, and still allows closing an active TUN", async () => {
   desktop.is_admin = false;
+  const calls: string[] = [];
+  const base = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    calls.push(command);
+    if (command === "relaunch_as_admin") {
+      expect(args).toEqual({ connectTun: true });
+      throw "已取消";
+    }
+    return base(command, args);
+  });
   const { client } = renderSummary();
   await ready();
-  expect(screen.getByRole("button", { name: "开启 TUN" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "开启系统代理" })).toBeEnabled();
+  expect(screen.getByText("TUN 需要管理员权限，开启时会以管理员身份重启 Routa")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "开启 TUN" }));
+  const dialog = await screen.findByRole("dialog", { name: "TUN 需要管理员权限" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "以管理员身份重启" }));
+  expect(await within(dialog).findByText("已取消授权，保持当前连接方式。")).toBeInTheDocument();
+  expect(calls).toContain("relaunch_as_admin");
+  expect(calls).not.toContain("set_desktop_connection");
+  fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
   desktop.connection = desktop.requested = "Tun";
   await act(async () => {
     await client.invalidateQueries({ queryKey: ["desktop"] });
   });
   expect(await screen.findByRole("button", { name: "关闭 TUN" })).toBeEnabled();
+  expect(screen.queryByText("TUN 需要管理员权限，开启时会以管理员身份重启 Routa")).not.toBeInTheDocument();
+});
+
+it("does not show the getting-started card once a proxy exists", async () => {
+  renderSummary();
+  await ready();
+  expect(screen.queryByRole("region", { name: "开始使用" })).not.toBeInTheDocument();
+});
+
+it("walks a new user from no proxy to system proxy on, then hides the getting-started card", async () => {
+  model.listeners = [];
+  model.exits = [];
+  model.manual_nodes = [];
+  desktop.preferences.listener_id = null;
+  desktop.preferences.exit_id = null;
+  const base = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "save_proxy") {
+      const { l, target } = args as { l: Model["listeners"][number]; target: Model["exits"][number] };
+      model.exits.push(target);
+      model.listeners.push({ ...l, exit: target.id });
+      status.health.listeners[l.id] = "Active";
+      return { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } };
+    }
+    return base(command, args);
+  });
+  renderSummary();
+  const card = within(await screen.findByRole("region", { name: "开始使用" }));
+  expect(card.getByText("0 / 3")).toBeInTheDocument();
+  fireEvent.click(card.getByRole("button", { name: "只用直连" }));
+  expect(await card.findByText("2 / 3")).toBeInTheDocument();
+  expect(card.getByText("已跳过，只用直连；以后可在节点页添加")).toBeInTheDocument();
+  expect(desktop.preferences.listener_id).toBe(model.listeners[0].id);
+  await waitFor(() => expect(card.getByRole("button", { name: "开启系统代理" })).toBeEnabled());
+  fireEvent.click(card.getByRole("button", { name: "开启系统代理" }));
+  await waitFor(() => expect(screen.queryByRole("region", { name: "开始使用" })).not.toBeInTheDocument());
+  expect(desktop.requested).toBe("System");
 });
 
 it("does not allow a SOCKS proxy to be used as a Windows system proxy", async () => {

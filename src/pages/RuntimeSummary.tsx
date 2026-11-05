@@ -24,6 +24,7 @@ import {
   useResetTraffic,
   errorMessage,
   unwrap,
+  useSaveProxy,
 } from "../api/client";
 import {
   desktopApi,
@@ -33,7 +34,10 @@ import {
 import { commands, type Exit, type Listener, type Model } from "../bindings";
 import { useInterface } from "../components/InterfaceProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
-import { collectProblems } from "./Overview";
+import { AdminRelaunchDialog } from "../components/AdminRelaunchDialog";
+import { Onboarding } from "../components/Onboarding";
+import { ListenerDialog, newListener } from "./ListenerDialog";
+import { collectProblems } from "../lib/problems";
 import { formatBytes, formatRate } from "../lib/format";
 import { expandMembers, nodeLabel } from "../lib/refs";
 
@@ -173,6 +177,10 @@ export function RuntimeSummary() {
   const core = useCoreControl();
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState(false);
+  const [adminDialog, setAdminDialog] = useState(false);
+  const [creating, setCreating] = useState<Listener | null>(null);
+  const [onboarding, setOnboarding] = useState<boolean | null>(null);
+  const saveProxy = useSaveProxy();
   // Guard the short interval before React paints a mutation's pending state.
   const operation = useRef(false);
   const m = model.data,
@@ -293,10 +301,12 @@ export function RuntimeSummary() {
     ? "请等待状态读取成功"
     : !validListener
       ? "请先选择可用的默认代理和节点"
-      : !desktop?.is_admin
-        ? "TUN 需要管理员权限，请以管理员身份运行 Routa"
-        : "";
+      : "";
   const changeCapture = async (mode: CaptureMode) => {
+    if (mode === "Tun" && requested !== "Tun" && !desktop?.is_admin) {
+      setAdminDialog(true);
+      return;
+    }
     if (operation.current) return;
     operation.current = true;
     setError("");
@@ -316,8 +326,37 @@ export function RuntimeSummary() {
     desktop?.error ||
     (model.error ? `代理配置读取失败：${errorMessage(model.error)}` : "") ||
     (status.error ? `内核状态读取失败：${errorMessage(status.error)}` : "");
+  const nodeCount = m ? m.manual_nodes.length + m.subscriptions.reduce((n, x) => n + x.nodes.length, 0) : 0;
+  const hasProxy = !!m?.listeners.some((l) => l.exit !== null);
+  // Decided once per visit: shown to a user who has no working proxy yet, kept until capture is on.
+  if (onboarding === null && m && desktop) setOnboarding(!hasProxy);
+  const quickStart = async () => {
+    if (!m) return;
+    const l = { ...newListener(m.listeners), name: "直连" };
+    await saveProxy.mutateAsync(l, { id: `proxy-${l.id}`, name: `代理-${l.id}`, interface: null, kind: "Direct" });
+    await bind.mutateAsync(l.id);
+  };
   return (
     <Stack spacing={2}>
+      {onboarding && !active && m && (
+        <Onboarding
+          nodes={nodeCount}
+          proxyReady={validListener}
+          systemReason={systemReason}
+          busy={busy || saveProxy.isPending}
+          onNewProxy={() => setCreating(newListener(m.listeners))}
+          onQuickStart={() => void quickStart().catch((e) => setError(errorMessage(e)))}
+          onCapture={() => void changeCapture("System")}
+        />
+      )}
+      {creating && (
+        <ListenerDialog
+          listener={creating}
+          onClose={() => setCreating(null)}
+          onSaved={(l) => void bind.mutateAsync(l.id).catch((e) => setError(errorMessage(e)))}
+        />
+      )}
+      {adminDialog && <AdminRelaunchDialog onClose={() => setAdminDialog(false)} />}
       <Box
         sx={{
           display: "grid",
@@ -590,6 +629,11 @@ export function RuntimeSummary() {
               指定应用
             </Button>
           </Box>
+          {desktop && !desktop.is_admin && requested !== "Tun" && (
+            <Typography variant="caption" color="text.secondary">
+              TUN 需要管理员权限，开启时会以管理员身份重启 Routa
+            </Typography>
+          )}
           <Box sx={{ height: 48, overflow: "auto" }}>
             {busy && (
               <Typography variant="body2" color="text.secondary" role="status">

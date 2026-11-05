@@ -420,6 +420,17 @@ async updateInstall() : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Starts the elevated copy, then exits through the normal shutdown path.
+ */
+async relaunchAsAdmin(connectTun: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("relaunch_as_admin", { connectTun }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
