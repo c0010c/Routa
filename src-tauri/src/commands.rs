@@ -523,6 +523,34 @@ pub fn open_login_url(url: String) -> Result<(), String> {
         .map_err(|e| format!("无法打开浏览器: {e}"))
 }
 
+/// A project page linked from Settings → About; the URLs live here so the
+/// frontend can only open these two.
+#[derive(serde::Deserialize, Clone, Copy, Debug, PartialEq, specta::Type)]
+pub enum ProjectLink {
+    Website,
+    GitHub,
+}
+
+impl ProjectLink {
+    pub fn url(self) -> &'static str {
+        match self {
+            ProjectLink::Website => "https://www.routa.cn",
+            ProjectLink::GitHub => "https://github.com/c0010c/Routa",
+        }
+    }
+}
+
+/// Opens the project website or GitHub repository in the default browser.
+#[tauri::command]
+#[specta::specta]
+pub fn open_project_link(link: ProjectLink) -> Result<(), String> {
+    std::process::Command::new("explorer.exe")
+        .arg(link.url())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("无法打开浏览器: {e}"))
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn save_process_rule(rt: Rt<'_>, rule: ProcessRule) -> Result<(), Vec<ValidationError>> {
@@ -583,6 +611,23 @@ pub async fn list_running_processes() -> Vec<RunningProcess> {
     tauri::async_runtime::spawn_blocking(procroute::processes::running_processes)
         .await
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod project_link_tests {
+    use super::ProjectLink;
+
+    #[test]
+    fn project_links_point_to_fixed_https_pages() {
+        assert_eq!(ProjectLink::Website.url(), "https://www.routa.cn");
+        assert_eq!(ProjectLink::GitHub.url(), "https://github.com/c0010c/Routa");
+    }
+
+    #[test]
+    fn project_link_deserializes_from_variant_name_only() {
+        assert_eq!(serde_json::from_str::<ProjectLink>("\"GitHub\"").unwrap(), ProjectLink::GitHub);
+        assert!(serde_json::from_str::<ProjectLink>("\"https://evil.example\"").is_err());
+    }
 }
 
 #[cfg(test)]

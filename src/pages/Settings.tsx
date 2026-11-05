@@ -43,6 +43,7 @@ import { applyOutcomeMessages } from "../lib/format";
 import { UpdatePanel } from "../components/UpdatePanel";
 import { UiPreferencesPanel } from "../components/UiPreferencesPanel";
 import { Row, Section } from "../components/SettingsSection";
+import { PROJECT_LINKS, ProjectLinkRow } from "../components/ProjectLinkRow";
 
 const TABS = [
   { value: "general", label: "常规" },
@@ -281,6 +282,7 @@ function SettingsForm({
                 打开
               </Button>
             </Row>,
+            ...PROJECT_LINKS.map((link) => <ProjectLinkRow key={link} link={link} />),
           ]}
         </Section>
       </TabPanel>

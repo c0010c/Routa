@@ -155,6 +155,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::open_log_dir,
             commands::tailnet_peers,
             commands::open_login_url,
+            commands::open_project_link,
             commands::retry_tailscale_exit_nodes,
             commands::save_process_rule,
             commands::delete_process_rule,

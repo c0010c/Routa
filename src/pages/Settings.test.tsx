@@ -20,6 +20,7 @@ vi.mock("../bindings", () => ({
     procrouteCleanup: vi.fn(),
     procrouteUninstall: vi.fn(),
     saveProcessRoutingSettings: vi.fn(),
+    openProjectLink: vi.fn(),
   },
 }));
 
@@ -483,5 +484,34 @@ describe("Settings", () => {
     fireEvent.click(within(component).getByRole("button", { name: "清理残留阻断规则" }));
     fireEvent.click(await screen.findByRole("button", { name: "清理" }));
     expect(await screen.findByText("已取消")).toBeInTheDocument();
+  });
+  it("links the website and GitHub from 关于 → 支持", async () => {
+    vi.mocked(commands.openProjectLink).mockResolvedValue({ status: "ok", data: null });
+    renderPage(model, false, "about");
+    const support = await screen.findByRole("region", { name: "支持" });
+    expect(within(support).getByText("使用文档与下载 · www.routa.cn")).toBeInTheDocument();
+    expect(within(support).getByText("源码与问题反馈 · github.com/c0010c/Routa")).toBeInTheDocument();
+    fireEvent.click(within(support).getByRole("button", { name: "打开官网" }));
+    fireEvent.click(within(support).getByRole("button", { name: "打开GitHub" }));
+    await waitFor(() => expect(commands.openProjectLink).toHaveBeenCalledTimes(2));
+    expect(commands.openProjectLink).toHaveBeenNthCalledWith(1, "Website");
+    expect(commands.openProjectLink).toHaveBeenNthCalledWith(2, "GitHub");
+  });
+
+  it("shows why a project link could not be opened", async () => {
+    vi.mocked(commands.openProjectLink).mockResolvedValue({ status: "error", error: "无法打开浏览器: 拒绝访问" });
+    renderPage(model, false, "about");
+    fireEvent.click(await screen.findByRole("button", { name: "打开官网" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法打开浏览器: 拒绝访问");
+  });
+
+  it("links the website and GitHub from the simple settings support section", async () => {
+    vi.mocked(commands.openProjectLink).mockResolvedValue({ status: "ok", data: null });
+    renderPage(model, true);
+    const support = await screen.findByRole("region", { name: "支持" });
+    expect(within(support).getByText("官网")).toBeInTheDocument();
+    expect(within(support).queryByText(/www.routa.cn/)).not.toBeInTheDocument();
+    fireEvent.click(within(support).getByRole("button", { name: "打开GitHub" }));
+    await waitFor(() => expect(commands.openProjectLink).toHaveBeenCalledWith("GitHub"));
   });
 });

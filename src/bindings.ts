@@ -230,6 +230,17 @@ async openLoginUrl(url: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Opens the project website or GitHub repository in the default browser.
+ */
+async openProjectLink(link: ProjectLink) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_project_link", { link }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Restarts every Tailscale instance (one reload) so each applies its exit
  * node again; also renews the automatic retries.
  */
@@ -646,6 +657,11 @@ processes: string[];
  */
 match_full_path: boolean; listener: ListenerId; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean }
 export type ProcessRuleId = string
+/**
+ * A project page linked from Settings → About; the URLs live here so the
+ * frontend can only open these two.
+ */
+export type ProjectLink = "Website" | "GitHub"
 /**
  * Bytes per second.
  */

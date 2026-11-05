@@ -4,6 +4,7 @@ import { BackHeading } from "../components/BackHeading";
 import { UpdatePanel } from "../components/UpdatePanel";
 import { UiPreferencesPanel } from "../components/UiPreferencesPanel";
 import { Row, Section } from "../components/SettingsSection";
+import { PROJECT_LINKS, ProjectLinkRow } from "../components/ProjectLinkRow";
 import { useModel } from "../api/client";
 import { settingsSaveMessage, useSettingsSave } from "../api/settings";
 import { SaveFeedback, useSaveFeedback } from "../components/SaveFeedback";
@@ -43,6 +44,7 @@ export function SimpleSettings() {
               打开
             </Button>
           </Row>,
+          ...PROJECT_LINKS.map((link) => <ProjectLinkRow key={link} link={link} compact />),
         ]}
       </Section>
       <Typography variant="caption" color="text.secondary">
