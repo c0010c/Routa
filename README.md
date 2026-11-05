@@ -24,7 +24,7 @@ A Windows desktop proxy manager built on [mihomo](https://github.com/MetaCubeX/m
 
 Download `routa_<version>_x64-setup.exe` from [Releases](https://github.com/c0010c/Routa/releases) and run it. Verify downloads against `SHA256SUMS.txt` on the corresponding release. Builds bundle mihomo; the source pins its version in [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION).
 
-The [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/) is required.
+The [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/) is required. Windows 11 and up-to-date Windows 10 already include it; otherwise the regular installer downloads it from Microsoft during setup. For PCs without WebView2 that cannot reach Microsoft, use `routa_<version>_x64-offline-setup.exe` instead: it is much larger because it bundles the WebView2 offline installer. Auto-updates always use the regular installer.
 
 ## Quick start
 

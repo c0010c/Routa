@@ -29,3 +29,9 @@ test("pickAssets throws Chinese errors for missing sig or assets", () => {
   assert.throws(() => pickAssets({ tag_name: "v1", assets: [{ name: "routa_1_x64-setup.exe" }, { name: "other.exe.sig" }] }), /找不到.*\.sig/);
   assert.throws(() => pickAssets({ tag_name: "v1" }), (e) => !(e instanceof TypeError) && /找不到/.test(e.message));
 });
+
+test("pickAssets ignores the offline installer (it bundles WebView2 and is not signed)", () => {
+  const { setup } = pickAssets({ tag_name: "v1", assets: [
+    { name: "routa_1_x64-offline-setup.exe" }, { name: "routa_1_x64-setup.exe" }, { name: "routa_1_x64-setup.exe.sig" }] });
+  assert.equal(setup.name, "routa_1_x64-setup.exe");
+});
