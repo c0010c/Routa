@@ -17,7 +17,8 @@ pub fn tailscale_state_dir(id: &ManualNodeId) -> String {
 
 pub enum Resolved<'a> {
     /// Copyable per exit; base_name = "<订阅>/<节点>" or "手动/<名>".
-    Copyable { base_name: String, raw: &'a serde_json::Value },
+    /// `manual`: a manual proxy node (gets the manual-node defaults).
+    Copyable { base_name: String, raw: &'a serde_json::Value, manual: bool },
     Tailscale { node: &'a ManualNode, opts: &'a TailscaleOpts },
 }
 
@@ -26,13 +27,13 @@ pub fn resolve<'a>(model: &'a Model, r: &NodeRef) -> Option<Resolved<'a>> {
         NodeRef::Subscription { subscription_id, name } => {
             let sub = model.subscriptions.iter().find(|s| &s.id == subscription_id)?;
             let node = sub.nodes.iter().find(|n| &n.name == name)?;
-            Some(Resolved::Copyable { base_name: format!("{}/{}", sub.name, node.name), raw: &node.raw })
+            Some(Resolved::Copyable { base_name: format!("{}/{}", sub.name, node.name), raw: &node.raw, manual: false })
         }
         NodeRef::Manual { manual_id } => {
             let node = model.manual_nodes.iter().find(|n| &n.id == manual_id)?;
             match &node.kind {
                 ManualNodeKind::Proxy { raw } => {
-                    Some(Resolved::Copyable { base_name: manual_proxy_name(node), raw })
+                    Some(Resolved::Copyable { base_name: manual_proxy_name(node), raw, manual: true })
                 }
                 ManualNodeKind::Tailscale(opts) => Some(Resolved::Tailscale { node, opts }),
             }

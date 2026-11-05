@@ -115,6 +115,25 @@ fn proxy_copy(raw: &serde_json::Value, name: &str, interface: Option<&str>) -> O
     Some(Value::Mapping(m))
 }
 
+/// Manual nodes (proxy and Tailscale) default to `ip-version: dual`; an
+/// explicit value is kept.
+fn manual_defaults(proxy: Option<Value>) -> Option<Value> {
+    proxy.map(|mut v| {
+        if let Value::Mapping(m) = &mut v {
+            if !m.contains_key("ip-version") {
+                m.insert(s("ip-version"), s("dual"));
+            }
+        }
+        v
+    })
+}
+
+/// Copy of a resolved copyable node; manual nodes get [`manual_defaults`].
+fn resolved_copy(raw: &serde_json::Value, manual: bool, name: &str, interface: Option<&str>) -> Option<Value> {
+    let p = proxy_copy(raw, name, interface);
+    if manual { manual_defaults(p) } else { p }
+}
+
 /// The instance's own NIC. `None`: configured but absent or unusable, so the
 /// instance must not be written (fail closed, never the default NIC).
 /// `Some(None)`: none configured, i.e. the system default.
@@ -156,7 +175,7 @@ fn tailscale_proxy(node: &ManualNode, opts: &TailscaleOpts, iface: Option<&str>)
 
 /// `None` when the instance must not be written (see `tailscale_iface`).
 fn tailscale_def(node: &ManualNode, opts: &TailscaleOpts, nics: &[NetInterface]) -> Option<Value> {
-    tailscale_iface(opts, nics).map(|i| tailscale_proxy(node, opts, i))
+    manual_defaults(tailscale_iface(opts, nics).map(|i| tailscale_proxy(node, opts, i)))
 }
 
 /// Proxy names (`手动/<名>`) of the Tailscale instances `generate` writes for
@@ -193,8 +212,8 @@ fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth, nics: &[NetInterface])
     let iface = h.interface.as_ref().map(|n| n.mihomo_name.as_str());
     let parts = match &exit.kind {
         ExitKind::Node { .. } => match h.effective_members.first().and_then(|r| resolve(model, r)) {
-            Some(Resolved::Copyable { raw, .. }) => ExitParts {
-                proxies: proxy_copy(raw, &exit.name, iface).into_iter().collect(),
+            Some(Resolved::Copyable { raw, manual, .. }) => ExitParts {
+                proxies: resolved_copy(raw, manual, &exit.name, iface).into_iter().collect(),
                 group: None,
                 shared: vec![],
             },
@@ -219,9 +238,9 @@ fn exit_parts(model: &Model, exit: &Exit, h: &ExitHealth, nics: &[NetInterface])
             let mut names = Vec::new();
             for r in &h.effective_members {
                 match resolve(model, r) {
-                    Some(Resolved::Copyable { base_name, raw }) => {
+                    Some(Resolved::Copyable { base_name, raw, manual }) => {
                         let name = member_proxy_name(exit, &base_name);
-                        if let Some(p) = proxy_copy(raw, &name, iface) {
+                        if let Some(p) = resolved_copy(raw, manual, &name, iface) {
                             proxies.push(p);
                             names.push(s(&name));
                         }
@@ -302,7 +321,7 @@ pub fn delay_fingerprints(model: &Model, health: &Health, nics: &[NetInterface])
     }
     for node in &model.manual_nodes {
         let proxy = match &node.kind {
-            ManualNodeKind::Proxy { raw } => proxy_copy(raw, &manual_proxy_name(node), None),
+            ManualNodeKind::Proxy { raw } => manual_defaults(proxy_copy(raw, &manual_proxy_name(node), None)),
             ManualNodeKind::Tailscale(opts) => tailscale_def(node, opts, nics),
         };
         if let Some(proxy) = proxy { record(manual_proxy_name(node), proxy); }
@@ -370,7 +389,7 @@ pub fn generate(input: &GenInput) -> Generated {
         .collect();
     // Every manual node; each Tailscale instance exactly once.
     proxies.extend(model.manual_nodes.iter().filter_map(|n| match &n.kind {
-        ManualNodeKind::Proxy { raw } => proxy_copy(raw, &manual_proxy_name(n), None),
+        ManualNodeKind::Proxy { raw } => manual_defaults(proxy_copy(raw, &manual_proxy_name(n), None)),
         ManualNodeKind::Tailscale(opts) => tailscale_def(n, opts, input.nics),
     }));
 
@@ -400,7 +419,7 @@ pub fn generate(input: &GenInput) -> Generated {
         {
             if h.effective_members.contains(sel) {
                 let member = match resolve(model, sel) {
-                    Some(Resolved::Copyable { base_name, raw }) if raw.is_object() => {
+                    Some(Resolved::Copyable { base_name, raw, .. }) if raw.is_object() => {
                         Some(member_proxy_name(exit, &base_name))
                     }
                     Some(Resolved::Tailscale { node, opts }) if tailscale_iface(opts, input.nics).is_some() => {
@@ -827,6 +846,33 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires MIHOMO_BIN; validates YAML only, does not start networking"]
+    fn real_core_accepts_manual_node_ip_version() {
+        let mut m = with_group_exit(vec![proxy_manual("m1", "a", &["g1"]), ts_manual("t1", "ts", &["g1"], None)]);
+        for e in &mut m.exits {
+            e.interface = None;
+        }
+        let g = gen_with(&m, &[], &[]);
+        assert!(g.yaml.contains("ip-version: dual"), "{}", g.yaml);
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("manual.yaml");
+        std::fs::write(&path, g.yaml).unwrap();
+        let output = std::process::Command::new(std::env::var("MIHOMO_BIN").expect("MIHOMO_BIN"))
+            .args(["-t", "-f"])
+            .arg(&path)
+            .arg("-d")
+            .arg(td.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn fixed_top_level() {
         let v = parse(&gen(&base()).yaml);
         assert_eq!(v["allow-lan"], true);
@@ -1180,6 +1226,19 @@ mod tests {
     }
 
     #[test]
+    fn manual_proxy_defaults_to_dual_ip_version() {
+        let mut keep = proxy_manual("m2", "b", &["g1"]);
+        if let ManualNodeKind::Proxy { raw } = &mut keep.kind { raw["ip-version"] = json!("ipv4"); }
+        let m = with_group_exit(vec![proxy_manual("m1", "a", &["g1"]), keep]);
+        let v = parse(&gen(&m).yaml);
+        assert_eq!(find(&v, "proxies", "手动/a").unwrap()["ip-version"], "dual");
+        assert_eq!(find(&v, "proxies", "手动/b").unwrap()["ip-version"], "ipv4");
+        assert_eq!(find(&v, "proxies", "出口B/手动/a").unwrap()["ip-version"], "dual");
+        assert_eq!(find(&v, "proxies", "出口B/手动/b").unwrap()["ip-version"], "ipv4");
+        assert!(find(&v, "proxies", "机场/HK 01").unwrap().get("ip-version").is_none());
+    }
+
+    #[test]
     fn renamed_manual_node_follows() {
         let mut m = with_group_exit(vec![proxy_manual("m1", "a", &["g1"])]);
         m.manual_nodes[0].name = "b".into();
@@ -1217,8 +1276,9 @@ mod tests {
         assert_eq!(ts[0]["ephemeral"], false);
         assert_eq!(
             keys(ts[0]),
-            ["name", "type", "hostname", "state-dir", "ephemeral", "udp", "exit-node"]
+            ["name", "type", "hostname", "state-dir", "ephemeral", "udp", "exit-node", "ip-version"]
         );
+        assert_eq!(ts[0]["ip-version"], "dual");
         for g in ["出口B", "出口D"] {
             assert_eq!(
                 find(&v, "proxy-groups", g).unwrap()["proxies"],
@@ -1270,7 +1330,7 @@ mod tests {
         let p = find(&v, "proxies", "手动/ts").unwrap();
         assert_eq!(p["interface-name"], "以太网 3");
         assert_eq!(p["auth-key"], "tskey-test");
-        assert_eq!(&keys(p)[7..], ["auth-key", "interface-name"]);
+        assert_eq!(&keys(p)[7..], ["auth-key", "interface-name", "ip-version"]);
     }
 
     #[test]
