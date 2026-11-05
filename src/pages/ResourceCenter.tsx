@@ -2,7 +2,7 @@ import { NodeCard } from "../components/NodeCard";
 import { FixedCardGrid } from "../components/FixedCardGrid";
 import { SearchField } from "../components/SearchField";
 import { BatchNodeDialog } from "./BatchNodeDialog";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import NetworkCheck from "@mui/icons-material/NetworkCheck";
@@ -61,22 +61,6 @@ export function ResourceCenter({
   const [params, setParams] = useSearchParams();
   const simple = useInterface()?.state?.preferences.mode === "Simple";
   const choose = useDesktopMutation(desktopApi.select);
-  const [missing, setMissing] = useState(false);
-  const editId = params.get("editSubscription");
-  useEffect(() => {
-    if (!editId || !model.data) return;
-    const found = model.data.subscriptions.find((s) => s.id === editId);
-    setSub(found ?? null);
-    setMissing(!found);
-    setParams(
-      (current) => {
-        const next = new URLSearchParams(current);
-        next.delete("editSubscription");
-        return next;
-      },
-      { replace: true },
-    );
-  }, [editId, model.data, setParams]);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState(false);
   // Per-group open state set by the user; groups without an entry use defaultOpen.
@@ -198,23 +182,6 @@ export function ResourceCenter({
   };
   return (
     <Stack spacing={2}>
-      {params.get("resolveExit") && (
-        <Alert
-          severity="info"
-          action={
-            <Button
-              component={Link}
-              to={`/exits?delete=${encodeURIComponent(params.get("resolveExit")!)}`}
-            >
-              返回删除检查
-            </Button>
-          }
-        >
-          {missing
-            ? "该订阅已不存在，请返回重新检查。"
-            : "请修改订阅备用代理。"}
-        </Alert>
-      )}
 
       <Stack
         direction="row"
@@ -570,7 +537,6 @@ export function ResourceCenter({
         <SubscriptionDialog
           key={sub.id}
           subscription={sub}
-          focusFallback={!!params.get("resolveExit")}
           onClose={() => setSub(null)}
         />
       )}

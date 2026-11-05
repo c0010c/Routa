@@ -13,7 +13,7 @@ import {
   Stack,
   TextField,
 } from "@mui/material";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   errorMessage,
   isValidationError,
@@ -41,11 +41,9 @@ export function newSubscription(): Subscription {
 export function SubscriptionDialog({
   subscription,
   onClose,
-  focusFallback = false,
 }: {
   subscription: Subscription;
   onClose: () => void;
-  focusFallback?: boolean;
 }) {
   const model = useModel();
   const save = useSaveSubscription();
@@ -62,7 +60,6 @@ export function SubscriptionDialog({
   );
   const [intervalValid, setIntervalValid] = useState(true);
   const [errs, setErrs] = useState<FieldErrors>({ form: [] });
-  const fallbackRef = useRef<HTMLInputElement | null>(null);
 
   const submit = async () => {
     setErrs({ form: [] });
@@ -117,13 +114,6 @@ export function SubscriptionDialog({
       onClose={onClose}
       fullWidth
       maxWidth="sm"
-      slotProps={{
-        transition: {
-          onEntered: () => {
-            if (focusFallback) fallbackRef.current?.focus();
-          },
-        },
-      }}
     >
       <DialogTitle>{isEdit ? "编辑订阅" : "新建订阅"}</DialogTitle>
       <DialogContent>
@@ -160,7 +150,7 @@ export function SubscriptionDialog({
                 : undefined
             }
           />
-          <Box component="details" open={focusFallback || undefined}>
+          <Box component="details">
             <Box
               component="summary"
               sx={{
@@ -185,7 +175,6 @@ export function SubscriptionDialog({
                 <Select
                   labelId="s-fallback"
                   label="备用代理"
-                  inputRef={fallbackRef}
                   value={fallback ?? ""}
                   onChange={(e) =>
                     setFallback(e.target.value === "" ? null : e.target.value)

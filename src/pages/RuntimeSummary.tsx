@@ -33,7 +33,7 @@ import {
 import { commands, type Exit, type Listener, type Model } from "../bindings";
 import { useInterface } from "../components/InterfaceProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
-import { collectProblems } from "./Overview";
+import { collectProblems } from "../lib/problems";
 import { formatBytes, formatRate } from "../lib/format";
 import { expandMembers, nodeLabel } from "../lib/refs";
 
