@@ -24,7 +24,7 @@
 
 从 [Releases](https://github.com/c0010c/Routa/releases) 下载 `routa_<版本>_x64-setup.exe` 并运行。可用对应 Release 中的 `SHA256SUMS.txt` 校验下载文件。构建内置 mihomo，源码使用的固定版本见 [`MIHOMO_VERSION`](src-tauri/binaries/MIHOMO_VERSION)。
 
-运行需要 [WebView2 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)。
+运行需要 [WebView2 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)。Windows 11 和保持更新的 Windows 10 已自带；没有时，普通安装包会在安装过程中从微软下载。如果电脑没有 WebView2 且无法访问微软，请改用 `routa_<版本>_x64-offline-setup.exe`：它内置 WebView2 离线安装程序，体积大得多。自动更新始终使用普通安装包。
 
 ## 快速开始
 

@@ -83,6 +83,23 @@ jobs:
             if (!(Test-Path $asset)) { throw "Missing release asset: $asset" }
             Copy-Item $asset release-assets/
           }
+      # Second installer for first installs on PCs without WebView2 or without internet access:
+      # it embeds the WebView2 offline installer. Re-bundles the binaries built above (it
+      # overwrites the regular setup.exe in the bundle dir, which was already copied out).
+      # Not signed for the updater and named *_x64-offline-setup.exe, so updater-manifest.mjs
+      # keeps pointing auto-updates at the small installer.
+      - name: Build offline NSIS installer (bundled WebView2)
+        run: |
+          pnpm tauri bundle --bundles nsis --config "$PWD/src-tauri/tauri.offline.conf.json"
+          if ($LASTEXITCODE -ne 0) { throw "tauri bundle failed" }
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $name = $config.productName
+          $version = $config.version
+          $offline = "src-tauri/target/release/bundle/nsis/${name}_${version}_x64-setup.exe"
+          if (!(Test-Path $offline)) { throw "Missing offline installer: $offline" }
+          Copy-Item $offline "release-assets/${name}_${version}_x64-offline-setup.exe"
+      - name: Write checksums
+        run: |
           Get-ChildItem release-assets | ForEach-Object {
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
           } | Set-Content -Encoding ascii release-assets/SHA256SUMS.txt
