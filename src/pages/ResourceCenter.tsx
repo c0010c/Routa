@@ -1,3 +1,4 @@
+import ArrowBackOutlined from "@mui/icons-material/ArrowBackOutlined";
 import { NodeCard } from "../components/NodeCard";
 import { FixedCardGrid } from "../components/FixedCardGrid";
 import { SearchField } from "../components/SearchField";
@@ -192,9 +193,20 @@ export function ResourceCenter({
           gap: 1,
         }}
       >
-        <Typography variant="h5">
-          {subscriptionsOnly ? "订阅" : "节点"}
-        </Typography>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+          {simple && (
+            <IconButton
+              component={Link}
+              to={subscriptionsOnly ? "/nodes" : "/"}
+              aria-label={subscriptionsOnly ? "返回节点" : "返回连接"}
+            >
+              <ArrowBackOutlined />
+            </IconButton>
+          )}
+          <Typography variant="h5">
+            {subscriptionsOnly ? "订阅" : "节点"}
+          </Typography>
+        </Stack>
         <Box>
           {subscriptionsOnly ? (
             <Button

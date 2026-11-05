@@ -32,6 +32,9 @@ export const desktopApi = {
     invoke<void>("change_process_listener", { id, listener }),
   connections: () => invoke<ConnectionInfo[]>("get_connection_details"),
   logs: () => invoke<string>("read_core_log"),
+  /** Starts an elevated copy (UAC) and exits; rejects with "已取消" if declined. */
+  relaunchAsAdmin: (connectTun: boolean) =>
+    invoke<void>("relaunch_as_admin", { connectTun }),
 };
 export function useDesktopState() {
   return useQuery({
