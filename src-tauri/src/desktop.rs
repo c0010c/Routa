@@ -195,7 +195,11 @@ impl Desktop {
         if self.fresh && self.prefs().listener_id.is_none() && rt.model().listeners.is_empty() {
             self.bind_inner(rt, None).await?;
         }
-        self.fill_managed_rule_nodes(rt).await
+        // A failed fill must not break the state query; the rules stay blocked until fixed.
+        if let Err(e) = self.fill_managed_rule_nodes(rt).await {
+            *self.error.lock().unwrap() = Some(format!("应用规则未能补全节点：{e}"));
+        }
+        Ok(())
     }
     /// Rules made before rules carried a node follow the simple-mode node.
     async fn fill_managed_rule_nodes(&self, rt: &Runtime) -> Result<(), String> {
@@ -243,16 +247,18 @@ impl Desktop {
                 }
                 Some(CaptureMode::Apps) => {
                     let status = crate::procroute::client::status();
-                    !prefs.selected_apps.is_empty()
+                    let model = rt.model();
+                    let node = simple_node(&model, &prefs);
+                    node.is_some()
+                        && !prefs.selected_apps.is_empty()
                         && crate::procroute::client::current_rules_confirmed(rt)
                         && prefs.selected_apps.iter().all(|id| {
                             status.actions.get(id).is_some_and(|a| a.action == "Proxy")
-                                && rt
-                                    .model()
+                                && model
                                     .process_routing
                                     .rules
                                     .iter()
-                                    .any(|r| &r.id == id && r.node.is_some() && r.node == simple_node(&rt.model(), &prefs))
+                                    .any(|r| &r.id == id && r.node == node)
                         })
                 }
                 Some(CaptureMode::Tun) => rt.tun_adapter_ready(),
@@ -552,11 +558,12 @@ impl Desktop {
                 if p.selected_apps.is_empty() {
                     return Err("请先选择需要代理的应用".into());
                 }
+                let node = simple_node(&model, &p).ok_or("请先选择节点")?;
                 if let Some(rule) = model
                     .process_routing
                     .rules
                     .iter()
-                    .find(|r| p.selected_apps.contains(&r.id) && r.node != simple_node(&model, &p))
+                    .find(|r| p.selected_apps.contains(&r.id) && r.node.as_ref() != Some(&node))
                 {
                     return Err(format!(
                         "{} 在完整版使用了其他节点，请在简洁版关闭并重新勾选该应用，再开启代理",

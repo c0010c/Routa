@@ -1895,3 +1895,32 @@ async fn desktop_init_fills_node_for_managed_rules() {
 
     assert_eq!(h.rt.model().process_routing.rules[0].node, Some(m1_ref()));
 }
+
+#[tokio::test(start_paused = true)]
+async fn desktop_init_survives_failed_node_fill() {
+    // A relative path matched by full path fails validation, so the fill cannot be saved.
+    let rule = ProcessRule { processes: vec!["a.exe".into()], match_full_path: true, ..ProcessRule::default() };
+    let mut m = simple_model_with_two_nodes();
+    m.exits.push(Exit {
+        id: ExitId("simple-exit".into()),
+        name: "默认代理".into(),
+        kind: ExitKind::Node { node: m1_ref() },
+        interface: None,
+        hidden: false,
+    });
+    m.process_routing.rules.push(rule.clone());
+    let prefs = crate::desktop::UiPreferences {
+        mode: Some(crate::desktop::InterfaceMode::Simple),
+        listener_id: Some(ListenerId("lis-1".into())),
+        exit_id: Some(ExitId("simple-exit".into())),
+        managed_rules: vec![rule.id.clone()],
+        ..Default::default()
+    };
+    let h = harness_with(Some(&m), |data| {
+        std::fs::write(data.join("ui-preferences.json"), serde_json::to_string(&prefs).unwrap()).unwrap();
+    });
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    ui.initialize(&h.rt).await.unwrap();
+    assert_eq!(h.rt.model().process_routing.rules[0].node, None);
+    assert!(ui.state(&h.rt).error.is_some());
+}
