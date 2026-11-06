@@ -383,6 +383,7 @@ export function ProcessRoutingPage() {
   const [togglingIds, setTogglingIds] = useState<string[]>([]);
   const [toggleErrors, setToggleErrors] = useState<Record<string, string>>({});
   const toggle = async (id: string, enabled: boolean) => {
+    if (togglingIds.includes(id)) return;
     setTogglingIds((v) => [...v, id]);
     setToggleErrors(({ [id]: _, ...rest }) => rest);
     try {
@@ -504,6 +505,7 @@ export function ProcessRoutingPage() {
                           },
                           {
                             label: r.user_enabled ? "禁用" : "启用",
+                            disabled: togglingIds.includes(r.id),
                             onClick: () => void toggle(r.id, !r.user_enabled),
                           },
                           {
@@ -532,9 +534,7 @@ export function ProcessRoutingPage() {
           DNS 查询不经过分流：程序的域名解析由系统的 DNS
           客户端服务代为发出，不属于该程序，会照常直连。
           <br />
-          HTTP 类型的监听器不能选：它转发不了 UDP，程序的 UDP
-          流量会悄悄走直连。请选混合或 SOCKS 类型。
-          节点可直接在行内更改，后续新连接使用新目标，不强制断开已有连接。
+          节点可直接在行内更改，换节点后该程序的现有连接会断开重连。
           <br />
           退出 Routa 后的行为、卸载组件和清理残留阻断规则在「设置 → 进程分流」中。
         </Typography>

@@ -273,6 +273,30 @@ describe("ProcessRoutingPage", () => {
     expect(commands.saveProcessRule).not.toHaveBeenCalled();
   });
 
+  it("ignores a second toggle while the first is pending", async () => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation((cmd: string) =>
+      cmd === "set_process_rule_enabled" ? new Promise(() => {}) : Promise.resolve(undefined),
+    );
+    renderPage(base);
+    const row = (await screen.findAllByText("curl.exe"))[0].closest("tr")!;
+    fireEvent.click(within(row).getByRole("switch", { name: "启用 curl.exe" }));
+    fireEvent.click(within(row).getByRole("button", { name: "操作 curl.exe" }));
+    const item = await screen.findByRole("menuitem", { name: "禁用 curl.exe" });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(item);
+    const calls = vi.mocked(invoke).mock.calls.filter(([c]) => c === "set_process_rule_enabled");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("explains that switching node reconnects the app", async () => {
+    renderPage(base);
+    await screen.findAllByText("curl.exe");
+    expect(screen.getByText(/换节点后该程序的现有连接会断开重连/)).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP 类型的监听器不能选/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/不强制断开已有连接/)).not.toBeInTheDocument();
+  });
+
   it("shows the error on the row when enabling fails", async () => {
     vi.mocked(invoke).mockRejectedValue("服务未确认，已恢复原状态");
     renderPage(base);
