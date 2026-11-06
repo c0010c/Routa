@@ -37,7 +37,6 @@ describe("fieldErrors", () => {
     const r = fieldErrors([
       { DuplicateProcessRule: { exe_path: "C:\a.exe" } },
       { InvalidExePath: { exe_path: "a.exe", reason: "必须是绝对路径" } },
-      { ListenerTypeNotAllowed: { listener: "办公" } },
       { TooManyProcessRules: { max: 32 } },
       { EmptyProcessRule: { rule: "AI" } },
       { ProcessNameCannotBlock: { rule: "AI" } },
@@ -46,7 +45,6 @@ describe("fieldErrors", () => {
     expect(r.form).toEqual([
       "C:\a.exe 已在其他规则中，一个程序只能属于一条规则",
       "「a.exe」无效：必须是绝对路径",
-      "Listener「办公」是 HTTP 类型，不能用于进程分流",
       "启用的规则里最多一共 32 个进程",
       "至少添加一个进程",
       "按进程名匹配时，组件故障时只能直连；需要阻断请在高级选项里打开「按完整路径匹配」",

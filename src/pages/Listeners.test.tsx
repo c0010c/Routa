@@ -95,6 +95,19 @@ describe("Listeners", () => {
     );
   }
 
+  it("does not show hidden listeners", async () => {
+    renderList({
+      ...model,
+      listeners: [
+        ...model.listeners,
+        { id: "h1", name: "__proc_x", listener_type: "Socks", listen: "127.0.0.1", port: 37800, auth: null, exit: null, user_enabled: true, hidden: true },
+      ],
+    });
+    expect(await screen.findByText("下载")).toBeInTheDocument();
+    expect(screen.queryByText(/__proc_/)).toBeNull();
+    expect(screen.getByText("1 / 1 个代理")).toBeInTheDocument();
+  });
+
   it("shows an empty state instead of an empty table", async () => {
     renderList({ ...model, listeners: [] });
     expect(await screen.findByText("暂无代理，新增代理配置端口与去向。")).toBeInTheDocument();

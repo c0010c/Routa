@@ -218,3 +218,10 @@ describe("newListener", () => {
       ]).port,
     ).toBe(1025));
 });
+describe("newListener hidden range", () => {
+  it("never proposes a port in the hidden range", () => {
+    expect(newListener([{ ...listener, port: 37799 }]).port).toBe(38000);
+    expect(newListener([{ ...listener, port: 37800 }]).port).toBe(38000);
+    expect(newListener([{ ...listener, port: 37999 }]).port).toBe(38000);
+  });
+});

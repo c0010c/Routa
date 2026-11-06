@@ -32,11 +32,6 @@ export function fieldErrors(errors: ValidationError[]): FieldErrors {
       out.form.push("至少添加一个进程");
     } else if ("ProcessNameCannotBlock" in e) {
       out.form.push("按进程名匹配时，组件故障时只能直连；需要阻断请在高级选项里打开「按完整路径匹配」");
-    } else if ("ListenerTypeNotAllowed" in e) {
-      out.form.push(`Listener「${e.ListenerTypeNotAllowed.listener}」是 HTTP 类型，不能用于进程分流`);
-    } else if ("ListenerAddressNotAllowed" in e) {
-      const { listener, listen } = e.ListenerAddressNotAllowed;
-      out.form.push(`Listener「${listener}」的监听地址「${listen}」不能用于进程分流：仅支持 IPv4 入口，请修改监听地址或选择其他 Listener`);
     } else if ("TooManyProcessRules" in e) {
       out.form.push(`启用的规则里最多一共 ${e.TooManyProcessRules.max} 个进程`);
     } else {

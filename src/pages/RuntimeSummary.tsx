@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
+import { visibleListeners } from "../lib/hidden";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -48,6 +49,11 @@ const STRATEGY_TEXT = {
   Fallback: "故障转移",
   LoadBalance: "负载均衡",
 } as const;
+
+function effectiveVisible(m: Model, effective: string[]): number {
+  const visible = new Set(visibleListeners(m).map((l) => l.id));
+  return effective.filter((id) => visible.has(id)).length;
+}
 
 function proxyLabel(listener: Listener) {
   return `${listener.name} · ${TYPE_TEXT[listener.listener_type]} :${listener.port}`;
@@ -282,7 +288,7 @@ export function RuntimeSummary() {
         ? "warning.main"
         : "text.disabled";
   const available =
-    m?.listeners.filter((l) => l.listener_type !== "Http" && !l.auth) ?? [];
+    (m ? visibleListeners(m) : []).filter((l) => l.listener_type !== "Http" && !l.auth);
   const unavailableSelection =
     !!defaultId && !available.some((l) => l.id === defaultId);
   const selectedMissing = !!m && !model.error && unavailableSelection;
@@ -327,12 +333,12 @@ export function RuntimeSummary() {
     (model.error ? `代理配置读取失败：${errorMessage(model.error)}` : "") ||
     (status.error ? `内核状态读取失败：${errorMessage(status.error)}` : "");
   const nodeCount = m ? m.manual_nodes.length + m.subscriptions.reduce((n, x) => n + x.nodes.length, 0) : 0;
-  const hasProxy = !!m?.listeners.some((l) => l.exit !== null);
+  const hasProxy = !!m && visibleListeners(m).some((l) => l.exit !== null);
   // Decided once per visit: shown to a user who has no working proxy yet, kept until capture is on.
   if (onboarding === null && m && desktop) setOnboarding(!hasProxy);
   const quickStart = async () => {
     if (!m) return;
-    const l = { ...newListener(m.listeners), name: "直连" };
+    const l = { ...newListener(visibleListeners(m)), name: "直连" };
     await saveProxy.mutateAsync(l, { id: `proxy-${l.id}`, name: `代理-${l.id}`, interface: null, kind: "Direct" });
     await bind.mutateAsync(l.id);
   };
@@ -344,7 +350,7 @@ export function RuntimeSummary() {
           proxyReady={validListener}
           systemReason={systemReason}
           busy={busy || saveProxy.isPending}
-          onNewProxy={() => setCreating(newListener(m.listeners))}
+          onNewProxy={() => setCreating(newListener(visibleListeners(m)))}
           onQuickStart={() => void quickStart().catch((e) => setError(errorMessage(e)))}
           onCapture={() => void changeCapture("System")}
         />
@@ -468,7 +474,7 @@ export function RuntimeSummary() {
           [
             "生效代理",
             s && m && !status.error && !model.error
-              ? `${s.effective_listeners.length} / ${m.listeners.length}`
+              ? `${effectiveVisible(m, s.effective_listeners)} / ${visibleListeners(m).length}`
               : "—",
           ],
         ].map(([label, value]) => (

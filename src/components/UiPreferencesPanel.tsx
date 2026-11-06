@@ -1,4 +1,5 @@
 import { MenuItem, Select, Stack, Switch, Typography } from "@mui/material";
+import { visibleListeners } from "../lib/hidden";
 import type { ReactNode } from "react";
 import { useInterface } from "./InterfaceProvider";
 import { useModel } from "../api/client";
@@ -10,7 +11,8 @@ import { Row, Section } from "./SettingsSection";
 export function UiPreferencesPanel({ startupRows = [] }: { startupRows?: ReactNode[] }) {
   const ui = useInterface();
   // A disabled listener never rotates in, so pinning it would look ignored.
-  const listeners = (useModel().data?.listeners ?? []).filter((l) => l.user_enabled);
+  const data = useModel().data;
+  const listeners = (data ? visibleListeners(data) : []).filter((l) => l.user_enabled);
   // Rows passed in by the page don't depend on the interface state, so they stay usable without it.
   if (!ui?.state) {
     return startupRows.length > 0 ? <Section title="启动与窗口">{startupRows}</Section> : null;

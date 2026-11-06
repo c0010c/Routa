@@ -1,4 +1,5 @@
 import mihomoVersion from "../../src-tauri/binaries/MIHOMO_VERSION?raw";
+import { visibleListeners } from "../lib/hidden";
 import ChevronRight from "@mui/icons-material/ChevronRight";
 import {
   Alert,
@@ -377,7 +378,7 @@ export function Settings() {
   return (
     <SettingsForm
       initial={model.data.settings}
-      listeners={model.data.listeners}
+      listeners={visibleListeners(model.data)}
       routing={model.data.process_routing}
     />
   );

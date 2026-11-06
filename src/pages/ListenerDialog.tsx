@@ -1,5 +1,6 @@
 import { ListenerNodeDialog } from "./ListenerNodeDialog";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
+import { HIDDEN_PORT_MAX, HIDDEN_PORT_MIN } from "../lib/hidden";
 import {
   Alert,
   Box,
@@ -39,12 +40,17 @@ import { InterfacePicker } from "../components/InterfacePicker";
 import { MemberPicker } from "../components/MemberPicker";
 import { NodePicker } from "../components/NodePicker";
 
+// `existing` must only contain visible listeners; candidates skip the hidden port range.
 function proposePort(existing: Listener[]) {
   if (!existing.length) return 7881;
   const max = Math.max(...existing.map((l) => l.port));
-  if (max < 65535) return max + 1;
   const used = new Set(existing.map((l) => l.port));
-  for (let p = 1024; p <= 65535; p++) if (!used.has(p)) return p;
+  const inHidden = (p: number) => p >= HIDDEN_PORT_MIN && p <= HIDDEN_PORT_MAX;
+  if (max < 65535) {
+    const c = max + 1;
+    return inHidden(c) ? HIDDEN_PORT_MAX + 1 : c;
+  }
+  for (let p = 1024; p <= 65535; p++) if (!used.has(p) && !inHidden(p)) return p;
   return 7881;
 }
 export function newListener(existing: Listener[]): Listener {

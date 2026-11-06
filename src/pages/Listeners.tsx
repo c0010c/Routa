@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
+import { visibleListeners } from "../lib/hidden";
 import DeleteOutline from "@mui/icons-material/DeleteOutlined";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import Refresh from "@mui/icons-material/Refresh";
@@ -55,12 +56,13 @@ export function Listeners() {
   };
   if (!model.data || !status.data) return <Typography>正在加载代理…</Typography>;
   const m = model.data, s = status.data;
-  const shown = m.listeners.filter((listener) => `${listener.name} ${listener.port}`.toLowerCase().includes(search.toLowerCase()));
+  const visible = visibleListeners(m);
+  const shown = visible.filter((listener) => `${listener.name} ${listener.port}`.toLowerCase().includes(search.toLowerCase()));
   const failIds = new Set(s.failed_listeners.map((failure) => failure.id));
   return <Stack spacing={2}>
     <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2 }}>
       <Typography variant="h5">代理</Typography>
-      <Button variant="contained" onClick={() => setEditing(newListener(m.listeners))}>新增代理</Button>
+      <Button variant="contained" onClick={() => setEditing(newListener(visible))}>新增代理</Button>
     </Box>
     <SearchField label="搜索名称或端口" value={search} onChange={setSearch} />
     <Box sx={{ height: "calc(100dvh - 210px)", minHeight: 300, overflowY: "auto", scrollbarGutter: "stable" }}>
@@ -143,7 +145,7 @@ export function Listeners() {
       </FixedCardGrid>
       {!shown.length && <Typography sx={{ py: 8, textAlign: "center", color: "text.secondary" }}>{search ? "未找到匹配代理" : "暂无代理，新增代理配置端口与去向。"}</Typography>}
     </Box>
-    <Typography variant="caption" color="text.secondary">{shown.length} / {m.listeners.length} 个代理</Typography>
+    <Typography variant="caption" color="text.secondary">{shown.length} / {visible.length} 个代理</Typography>
     {editing && <ListenerDialog key={editing.id} listener={editing} onClose={() => setEditing(null)} />}
     {choosing && <ListenerNodeDialog key={choosing.exitId} {...choosing} onClose={() => setChoosing(null)}
       onSwitched={() => {

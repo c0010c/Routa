@@ -126,9 +126,9 @@ pub struct Exit {
     pub name: String,
     pub kind: ExitKind,
     pub interface: Option<InterfaceGuid>,
-    /// 进程分流按节点自动创建的出口：不在出口页显示，没有规则引用时自动删除。
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[specta(optional)]
+    // 进程分流按节点自动创建的出口：不在出口页显示，没有规则引用时自动删除。
+    // `default` must follow `skip_serializing_if`: specta resets `optional` on the latter.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub hidden: bool,
 }
 
@@ -162,9 +162,9 @@ pub struct Listener {
     #[serde(default)]
     #[specta(optional)]
     pub routing: Option<ListenerRouting>,
-    /// 进程分流按节点自动创建的监听器：不在监听器页显示，没有规则引用时自动删除。
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[specta(optional)]
+    // 进程分流按节点自动创建的监听器：不在监听器页显示，没有规则引用时自动删除。
+    // `default` must follow `skip_serializing_if`: specta resets `optional` on the latter.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub hidden: bool,
 }
 
