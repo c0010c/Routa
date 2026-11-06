@@ -255,7 +255,11 @@ fn connection_info(c: crate::core::api::Conn, names: &HashMap<String, String>) -
     };
     ConnectionInfo {
         id: c.id,
-        listener: c.metadata.inbound_name,
+        listener: if c.metadata.inbound_name.starts_with(crate::model::hidden::HIDDEN_NAME_PREFIX) {
+            crate::model::hidden::HIDDEN_ENTRY_LABEL.to_owned()
+        } else {
+            c.metadata.inbound_name
+        },
         process: if c.metadata.process_path.is_empty() { c.metadata.process } else { c.metadata.process_path },
         target,
         node: node.to_owned(),

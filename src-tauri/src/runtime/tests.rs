@@ -1592,8 +1592,15 @@ async fn restart_clears_reason() {
     assert!(!st.core_recovering);
 }
 
+#[test]
+fn connection_from_hidden_listener_shows_process_routing_label() {
+    let names = HashMap::new();
+    let c = conn("c1", "__proc_lis-9", 1, 2);
+    assert_eq!(connection_info(c, &names).listener, "进程分流");
+}
+
 fn process_rule(exe: &str) -> ProcessRule {
-    ProcessRule { processes: vec![exe.into()], match_full_path: true, listener: ListenerId("lis-1".into()), ..ProcessRule::default() }
+    ProcessRule { processes: vec![exe.into()], match_full_path: true, ..ProcessRule::default() }
 }
 
 #[tokio::test(start_paused = true)]

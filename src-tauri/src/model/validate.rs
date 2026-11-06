@@ -438,12 +438,12 @@ mod tests {
     }
 
     /// 按完整路径匹配的单进程规则。
-    fn prule(path: &str, l: &Listener) -> ProcessRule {
-        ProcessRule { processes: vec![path.into()], match_full_path: true, listener: l.id.clone(), ..ProcessRule::default() }
+    fn prule(path: &str, _l: &Listener) -> ProcessRule {
+        ProcessRule { processes: vec![path.into()], match_full_path: true, ..ProcessRule::default() }
     }
     /// 按进程名匹配的规则。
-    fn nrule(names: &[&str], l: &Listener) -> ProcessRule {
-        ProcessRule { processes: names.iter().map(|s| s.to_string()).collect(), listener: l.id.clone(), ..ProcessRule::default() }
+    fn nrule(names: &[&str], _l: &Listener) -> ProcessRule {
+        ProcessRule { processes: names.iter().map(|s| s.to_string()).collect(), ..ProcessRule::default() }
     }
 
     #[test]
@@ -498,9 +498,8 @@ mod tests {
     #[test]
     fn process_rule_without_node_or_with_missing_node_is_valid() {
         let dangling = |e: &[ValidationError]| e.iter().any(|x| matches!(x, ValidationError::DanglingRef { what } if what.contains("process rule")));
-        // node = None, listener points at a nonexistent id.
+        // node = None.
         let mut m = pmodel(|l| vec![prule(r"C:\a.exe", l)]);
-        m.process_routing.rules[0].listener = ListenerId("gone".into());
         assert!(!dangling(&errs(&m)), "{:?}", errs(&m));
         assert_eq!(validate(&m), Ok(()));
         // node = a subscription node that does not exist.

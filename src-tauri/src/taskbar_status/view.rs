@@ -186,8 +186,8 @@ impl History {
         if !running {
             return;
         }
-        self.points.retain(|id, _| model.listeners.iter().any(|l| &l.id == id));
-        for listener in &model.listeners {
+        self.points.retain(|id, _| model.visible_listeners().any(|l| &l.id == id));
+        for listener in model.visible_listeners() {
             let points = self.points.entry(listener.id.clone()).or_default();
             points.push_back(rates.get(&listener.id).cloned().unwrap_or_default());
             if points.len() > HISTORY_POINTS {
@@ -246,10 +246,10 @@ impl Rotation {
 
 /// Only the capture's listener while system proxy or TUN is on.
 pub fn candidates(model: &Model, capture: Option<&Capture>) -> Vec<ListenerId> {
-    if let Some(c) = capture.filter(|c| model.listeners.iter().any(|l| l.id == c.listener)) {
+    if let Some(c) = capture.filter(|c| model.visible_listeners().any(|l| l.id == c.listener)) {
         return vec![c.listener.clone()];
     }
-    model.listeners.iter().filter(|l| l.user_enabled).map(|l| l.id.clone()).collect()
+    model.visible_listeners().filter(|l| l.user_enabled).map(|l| l.id.clone()).collect()
 }
 
 pub fn screen(model: &Model, input: &Input, history: &History, current: Option<&ListenerId>) -> Screen {
@@ -512,6 +512,25 @@ mod tests {
         off.user_enabled = false;
         let model = Model { listeners: vec![listener("c", None), off, listener("a", None)], ..Default::default() };
         assert_eq!(candidates(&model, None), vec![lid("c"), lid("a")]);
+    }
+
+    #[test]
+    fn taskbar_candidates_skip_hidden_listeners() {
+        let mut h = listener("h", None);
+        h.hidden = true;
+        let model = Model { listeners: vec![listener("n", None), h], ..Default::default() };
+        assert_eq!(candidates(&model, None), vec![lid("n")]);
+    }
+
+    #[test]
+    fn history_does_not_record_hidden_listeners() {
+        let mut h = listener("h", None);
+        h.hidden = true;
+        let model = Model { listeners: vec![listener("n", None), h], ..Default::default() };
+        let mut hist = History::default();
+        hist.record(true, &HashMap::new(), &model, None);
+        assert!(hist.points.contains_key(&lid("n")));
+        assert!(!hist.points.contains_key(&lid("h")));
     }
 
     #[test]

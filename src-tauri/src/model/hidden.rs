@@ -9,6 +9,9 @@ use super::types::*;
 /// Entry label shown for connections that came in through a hidden listener.
 pub const HIDDEN_ENTRY_LABEL: &str = "进程分流";
 
+/// Name prefix of hidden listeners (and their exits) inside the mihomo config.
+pub const HIDDEN_NAME_PREFIX: &str = "__proc_";
+
 /// Interface actually used for `node`: Tailscale nodes follow their instance's
 /// interface, everything else uses the rule's own choice.
 pub fn effective_interface(model: &Model, node: &NodeRef, rule_iface: &Option<InterfaceGuid>) -> Option<InterfaceGuid> {
@@ -26,6 +29,13 @@ pub fn hidden_listener_for<'a>(model: &'a Model, node: &NodeRef, iface: &Option<
                 matches!(&e.kind, ExitKind::Node { node: n } if n == node) && &e.interface == iface
             })
     })
+}
+
+impl Model {
+    /// Listeners shown to the user; hidden process-routing ones are left out.
+    pub fn visible_listeners(&self) -> impl Iterator<Item = &Listener> {
+        self.listeners.iter().filter(|l| !l.hidden)
+    }
 }
 
 pub fn rule_listener<'a>(model: &'a Model, rule: &ProcessRule) -> Option<&'a Listener> {
@@ -95,14 +105,14 @@ pub fn reconcile_hidden_listeners(model: &mut Model) {
         let eid = ExitId::new();
         model.exits.push(Exit {
             id: eid.clone(),
-            name: format!("__proc_exit_{}", lid.0),
+            name: format!("{HIDDEN_NAME_PREFIX}exit_{}", lid.0),
             kind: ExitKind::Node { node },
             interface: iface,
             hidden: true,
         });
         model.listeners.push(Listener {
             id: lid.clone(),
-            name: format!("__proc_{}", lid.0),
+            name: format!("{HIDDEN_NAME_PREFIX}{}", lid.0),
             listener_type: ListenerType::Socks,
             listen: "127.0.0.1".into(),
             port,
