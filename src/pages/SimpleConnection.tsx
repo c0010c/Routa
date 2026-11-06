@@ -56,7 +56,7 @@ import { FormDialog } from "../components/FormDialog";
 import { NodePicker } from "../components/NodePicker";
 import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
 import { ManualNodeDialog, newManualNode } from "./ManualNodeDialog";
-import { nodeLabel, proxyNameOf } from "../lib/refs";
+import { nodeKey, nodeLabel, proxyNameOf } from "../lib/refs";
 import { ruleLabel } from "../lib/processRule";
 import { delayText, formatRate } from "../lib/format";
 import type { NodeRef } from "../bindings";
@@ -403,8 +403,10 @@ export function SimpleConnection() {
                         {ruleLabel(r)}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {requested ||
-                        (m.process_routing.enabled && r.user_enabled)
+                        {r.node && selected && nodeKey(r.node) !== nodeKey(selected)
+                          ? "使用其他节点，关闭并重新勾选后使用当前节点"
+                          : requested ||
+                              (m.process_routing.enabled && r.user_enabled)
                           ? (routing.data?.actions[r.id]?.reason ??
                             routing.data?.actions[r.id]?.action ??
                             "等待确认")

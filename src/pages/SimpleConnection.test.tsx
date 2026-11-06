@@ -115,3 +115,18 @@ it("lets the user get back from the nodes and subscriptions pages", async () => 
   fireEvent.click(screen.getByRole("link", { name: "返回连接" }));
   expect(await screen.findByText("当前节点")).toBeInTheDocument();
 });
+
+it("hints when an app rule uses another node than the simple node", async () => {
+  model.process_routing.rules = [
+    { id: "r1", name: "浏览器", processes: ["chrome.exe"], match_full_path: false, node: { manual_id: "other" }, on_fault: "Direct", reset_on_change: false, user_enabled: true } as never,
+  ];
+  desktop.preferences.capture_mode = "Apps";
+  desktop.preferences.managed_rules = ["r1"];
+  desktop.preferences.selected_apps = ["r1"];
+  try {
+    render(<App />);
+    expect(await screen.findByText("使用其他节点，关闭并重新勾选后使用当前节点")).toBeInTheDocument();
+  } finally {
+    model.process_routing.rules = [];
+  }
+});

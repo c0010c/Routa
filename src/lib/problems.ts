@@ -19,9 +19,9 @@ export function collectProblems(model: Model, status: RuntimeStatus): string[] {
     const name = model.exits.find((e) => e.id === id)?.name ?? id;
     out.push(`出口「${name}」${exitStatusLabel(h.status).text}`);
   }
-  const hiddenNames = new Set(model.listeners.filter((l) => l.hidden).map((l) => l.name));
+  const hiddenIds = new Set(model.listeners.filter((l) => l.hidden).map((l) => l.id));
   for (const f of status.failed_listeners) {
-    if (hiddenNames.has(f.name)) continue;
+    if (hiddenIds.has(f.id)) continue;
     out.push(`监听器「${f.name}」端口 ${f.port} 被占用`);
   }
   for (const s of model.subscriptions) {
