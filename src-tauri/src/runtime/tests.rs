@@ -162,7 +162,10 @@ fn harness_with(model: Option<&Model>, prepare: impl FnOnce(&Path)) -> Harness {
     let api = Arc::new(FakeApi::new());
     let launcher = Arc::new(FakeLauncher::default());
     let nics = Arc::new(FakeInterfaces(Mutex::new(vec![nic()])));
-    let ports = Arc::new(FakePortOwners(Mutex::new([(PORT, PID), (19097, PID)].into_iter().collect())));
+    // The first hidden process-routing ports listen too, as they would in mihomo.
+    let ports = Arc::new(FakePortOwners(Mutex::new(
+        [(PORT, PID), (19097, PID), (37800, PID), (37801, PID)].into_iter().collect(),
+    )));
     let (tx, rx) = mpsc::channel(4096);
     let api_args = Arc::new(Mutex::new(Vec::new()));
     let launcher_for: LauncherFor = {
@@ -1783,12 +1786,15 @@ async fn set_rule_enabled_toggles_hidden_listener() {
     assert!(hidden(&h.rt.model())[0].user_enabled);
     let reloads = h.api.reloads.lock().unwrap().len();
 
+    // mihomo releases the hidden port when the listener goes away.
+    h.ports.0.lock().unwrap().remove(&37800);
     ui.set_process_rule_enabled(&h.rt, rule.id.clone(), false).await.unwrap();
     let m = h.rt.model();
     assert!(!m.process_routing.rules[0].user_enabled);
     assert!(!hidden(&m)[0].user_enabled);
     assert_eq!(h.api.reloads.lock().unwrap().len(), reloads + 1);
 
+    h.ports.0.lock().unwrap().insert(37800, PID);
     ui.set_process_rule_enabled(&h.rt, rule.id.clone(), true).await.unwrap();
     let m = h.rt.model();
     assert!(m.process_routing.rules[0].user_enabled);
