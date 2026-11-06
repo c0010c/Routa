@@ -1,0 +1,29 @@
+mixed-port: 0
+allow-lan: false
+bind-address: 127.0.0.1
+external-controller: 127.0.0.1:19097
+secret: spk-3f9a1c
+log-level: debug
+mode: rule
+proxies:
+  - {name: d-none,  type: direct}
+  - {name: d-friendly, type: direct, interface-name: "vEthernet (haos)"}
+  - {name: d-guid,  type: direct, interface-name: "{F9785699-3A46-441C-804F-F4F548934190}"}
+  - {name: d-desc,  type: direct, interface-name: "Hyper-V Virtual Ethernet Adapter #3"}
+  - {name: d-bad,   type: direct, interface-name: "NoSuchNIC"}
+  - {name: d-bt,    type: direct, interface-name: "蓝牙网络连接"}
+  - {name: d-eth3,  type: direct, interface-name: "以太网 3"}
+  - {name: d-wlan,  type: direct, interface-name: "WLAN 2"}
+  - {name: d-ts,    type: direct, interface-name: "Tailscale"}
+listeners:
+  - {name: l-none,     type: mixed, listen: 127.0.0.1, port: 19101, proxy: d-none}
+  - {name: l-friendly, type: mixed, listen: 127.0.0.1, port: 19102, proxy: d-friendly}
+  - {name: l-guid,     type: mixed, listen: 127.0.0.1, port: 19103, proxy: d-guid}
+  - {name: l-desc,     type: mixed, listen: 127.0.0.1, port: 19104, proxy: d-desc}
+  - {name: l-bad,      type: mixed, listen: 127.0.0.1, port: 19105, proxy: d-bad}
+  - {name: l-bt,       type: mixed, listen: 127.0.0.1, port: 19106, proxy: d-bt}
+  - {name: l-eth3,     type: mixed, listen: 127.0.0.1, port: 19107, proxy: d-eth3}
+  - {name: l-wlan,     type: mixed, listen: 127.0.0.1, port: 19108, proxy: d-wlan}
+  - {name: l-ts,       type: mixed, listen: 127.0.0.1, port: 19109, proxy: d-ts}
+rules:
+  - MATCH,DIRECT

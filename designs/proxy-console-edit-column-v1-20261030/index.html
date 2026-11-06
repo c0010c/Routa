@@ -1,0 +1,262 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Routa · 代理终端 · 独立编辑列</title><style>
+:root{font:14px "Segoe UI","Microsoft YaHei UI",sans-serif;background:#e9edf2;color:#1b1b1b;color-scheme:light}*{box-sizing:border-box}body{margin:0}main{max-width:1360px;margin:auto;padding:24px 32px}h1{margin:0 0 8px;font-size:23px;font-weight:600}p{margin:0 0 18px;font-size:12px;color:#616161;line-height:1.8}#stage>svg{display:block;width:100%;height:auto;border-radius:8px;box-shadow:0 8px 32px #23364c12}#stage [data-edit]:hover [data-edit-hit]{fill:#e1effd}#stage [data-row]:focus-visible,#stage [data-edit]:focus-visible,button:focus-visible{outline:2px solid #0067c0;outline-offset:3px}#stage [data-row]:hover>[data-selection]{filter:brightness(.98)}button{font:inherit;cursor:pointer}dialog{width:480px;height:246px;max-width:calc(100vw - 40px);max-height:calc(100dvh - 40px);border:1px solid #d0d5dc;border-radius:8px;padding:0;box-shadow:0 12px 50px #0003;background:white;color:#1b1b1b}dialog::backdrop{background:#0003}dialog[open]{display:flex;flex-direction:column}dialog h2{font-size:20px;font-weight:600;padding:22px 24px 16px;margin:0;flex-shrink:0}dialog p{margin:0;padding:0 24px 12px}dialog .context{margin:0 24px;flex:1;padding:12px 14px;border-radius:5px;background:#f3f6f9;font-size:13px;line-height:1.8}dialog footer{padding:14px 24px;border-top:1px solid #e5e5e5;display:flex;justify-content:flex-end;flex-shrink:0}dialog button{background:#0067c0;color:white;border:0;border-radius:4px;padding:7px 22px}.foot{margin-top:16px;color:#616161;font-size:12px}a{color:#0067c0;text-decoration:none}@media(max-width:760px){main{padding:20px 14px}}
+</style></head><body><main><h1>代理终端 · 独立编辑列</h1><p>可点击每行“编辑配置”，查看其对应目标；点击行可切换底部当前选中信息。此预览只演示操作归属，其余按钮为视觉占位，未连接实际软件。</p><div id="stage"><svg xmlns="http://www.w3.org/2000/svg" width="1280" height="768" viewBox="0 0 1280 768" role="img" aria-label="Routa 代理终端：独立编辑列">
+<title>Routa 代理终端：独立编辑列</title>
+<defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="10" flood-color="#243244" flood-opacity=".09"/></filter></defs>
+<g font-family="Segoe UI,Microsoft YaHei UI,Microsoft YaHei,sans-serif" font-variant-numeric="tabular-nums">
+<rect x="0" y="0" width="1280" height="768" rx="8" fill="#f3f3f3" stroke="#d8d8d8" />
+<rect x="1" y="1" width="1278" height="31" rx="7" fill="#fafafa" />
+<path d="M0 32H1280" stroke="#e8e8e8" stroke-width="1" />
+<rect x="15" y="10" width="12" height="12" rx="3" fill="#0067c0" />
+<text x="36" y="22" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >Routa</text>
+<path d="M1159 16H1169" stroke="#616161" stroke-width="1" />
+<rect x="1202" y="11" width="9" height="9" rx="0" fill="none" stroke="#616161" />
+<path d="M1247 11l9 9m0-9-9 9" fill="none" stroke="#616161" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="20" y="56" width="26" height="26" rx="6" fill="#0067c0" />
+<g transform="translate(25 61) scale(0.6666666666666666)" fill="white">
+<path d="M19 15.18V7c0-2.21-1.79-4-4-4s-4 1.79-4 4v10c0 1.1-.9 2-2 2s-2-.9-2-2V8.82C8.16 8.4 9 7.3 9 6c0-1.66-1.34-3-3-3S3 4.34 3 6c0 1.3.84 2.4 2 2.82V17c0 2.21 1.79 4 4 4s4-1.79 4-4V7c0-1.1.9-2 2-2s2 .9 2 2v8.18c-1.16.41-2 1.51-2 2.82 0 1.66 1.34 3 3 3s3-1.34 3-3c0-1.3-.84-2.4-2-2.82M6 7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1m12 12c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1"/>
+</g>
+<text x="57" y="75" font-size="17" fill="#1b1b1b" font-weight="600" text-anchor="start" >Routa</text>
+<g transform="translate(24 119) scale(0.8333333333333334)" fill="#616161">
+<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2M5 19V5h6v14zm14 0h-6v-7h6zm0-9h-6V5h6z"/>
+</g>
+<text x="60" y="135" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >概览</text>
+<rect x="8" y="155" width="168" height="40" rx="5" fill="#e5e9ed" />
+<rect x="8" y="166" width="3" height="18" rx="1.5" fill="#0067c0" />
+<g transform="translate(24 165) scale(0.8333333333333334)" fill="#1b1b1b">
+<path d="M6.99 11 3 15l3.99 4v-3H14v-2H6.99zM21 9l-3.99-4v3H10v2h7.01v3z"/>
+</g>
+<text x="60" y="181" font-size="14" fill="#1b1b1b" font-weight="600" text-anchor="start" >代理</text>
+<g transform="translate(24 211) scale(0.8333333333333334)" fill="#616161">
+<path d="m9.78 11.16-1.42 1.42c-.68-.69-1.34-1.58-1.79-2.94l1.94-.49c.32.89.77 1.5 1.27 2.01M11 6 7 2 3 6h3.02c.02.81.08 1.54.19 2.17l1.94-.49C8.08 7.2 8.03 6.63 8.02 6zm10 0-4-4-4 4h2.99c-.1 3.68-1.28 4.75-2.54 5.88-.5.44-1.01.92-1.45 1.55-.34-.49-.73-.88-1.13-1.24L9.46 13.6c.93.85 1.54 1.54 1.54 3.4v5h2v-5c0-2.02.71-2.66 1.79-3.63 1.38-1.24 3.08-2.78 3.2-7.37z"/>
+</g>
+<text x="60" y="227" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >进程分流</text>
+<g transform="translate(24 257) scale(0.8333333333333334)" fill="#616161">
+<path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2m6.93 6h-2.95c-.32-1.25-.78-2.45-1.38-3.56 1.84.63 3.37 1.91 4.33 3.56M12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96M4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2s.06 1.34.14 2zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56-1.84-.63-3.37-1.9-4.33-3.56m2.95-8H5.08c.96-1.66 2.49-2.93 4.33-3.56C8.81 5.55 8.35 6.75 8.03 8M12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96M14.34 14H9.66c-.09-.66-.16-1.32-.16-2s.07-1.35.16-2h4.68c.09.65.16 1.32.16 2s-.07 1.34-.16 2m.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95c-.96 1.65-2.49 2.93-4.33 3.56M16.36 14c.08-.66.14-1.32.14-2s-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2z"/>
+</g>
+<text x="60" y="273" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >订阅</text>
+<g transform="translate(24 303) scale(0.8333333333333334)" fill="#616161">
+<path d="M19 15v4H5v-4zm1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1M7 18.5c-.82 0-1.5-.67-1.5-1.5s.68-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5M19 5v4H5V5zm1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1M7 8.5c-.82 0-1.5-.67-1.5-1.5S6.18 5.5 7 5.5s1.5.68 1.5 1.5S7.83 8.5 7 8.5"/>
+</g>
+<text x="60" y="319" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >节点</text>
+<g transform="translate(24 683) scale(0.8333333333333334)" fill="#616161">
+<path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.09-.16-.26-.25-.44-.25-.06 0-.12.01-.17.03l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1q-.09-.03-.18-.03c-.17 0-.34.09-.43.25l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.09.16.26.25.44.25.06 0 .12-.01.17-.03l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1q.09.03.18.03c.17 0 .34-.09.43-.25l2-3.46c.12-.22.07-.49-.12-.64zm-1.98-1.71c.04.31.05.52.05.73s-.02.43-.05.73l-.14 1.13.89.7 1.08.84-.7 1.21-1.27-.51-1.04-.42-.9.68c-.43.32-.84.56-1.25.73l-1.06.43-.16 1.13-.2 1.35h-1.4l-.19-1.35-.16-1.13-1.06-.43c-.43-.18-.83-.41-1.23-.71l-.91-.7-1.06.43-1.27.51-.7-1.21 1.08-.84.89-.7-.14-1.13c-.03-.31-.05-.54-.05-.74s.02-.43.05-.73l.14-1.13-.89-.7-1.08-.84.7-1.21 1.27.51 1.04.42.9-.68c.43-.32.84-.56 1.25-.73l1.06-.43.16-1.13.2-1.35h1.39l.19 1.35.16 1.13 1.06.43c.43.18.83.41 1.23.71l.91.7 1.06-.43 1.27-.51.7 1.21-1.07.85-.89.7zM12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4m0 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2"/>
+</g>
+<text x="60" y="699" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >设置</text>
+<text x="24" y="744" font-size="11" fill="#858585" font-weight="400" text-anchor="start" >v0.2.0</text>
+<text x="216" y="88" font-size="26" fill="#1b1b1b" font-weight="600" text-anchor="start" >代理</text>
+<circle cx="1015" cy="78" r="3" fill="#0f7b0f"/>
+<text x="1027" y="82" font-size="12" fill="#616161" font-weight="400" text-anchor="start" >内核运行中</text>
+<rect x="1136" y="61" width="112" height="34" rx="4" fill="#0067c0" />
+<g transform="translate(1147 70.0) scale(0.6666666666666666)" fill="white">
+<path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/>
+</g>
+<text x="1170" y="82.5" font-size="13" fill="white" font-weight="500" text-anchor="start" >新增代理</text>
+<rect x="216" y="124" width="700" height="40" rx="5" fill="white" stroke="#c8cdd3" />
+<g transform="translate(230 134) scale(0.8333333333333334)" fill="#616161">
+<path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"/>
+</g>
+<text x="262" y="150" font-size="14" fill="#858585" font-weight="400" text-anchor="start" >搜索代理、端口或节点</text>
+<rect x="844" y="132" width="58" height="24" rx="4" fill="#f2f3f4" />
+<text x="873" y="149" font-size="11" fill="#616161" font-weight="400" text-anchor="middle" >Ctrl K</text>
+<rect x="930" y="128" width="148" height="34" rx="4" fill="white" stroke="#d2d2d2" />
+<g transform="translate(941 137.0) scale(0.6666666666666666)" fill="#616161">
+<path d="M10 18h4v-2h-4zM3 6v2h18V6zm3 7h12v-2H6z"/>
+</g>
+<text x="964" y="149.5" font-size="13" fill="#1b1b1b" font-weight="500" text-anchor="start" >全部 6</text>
+<rect x="1090" y="128" width="158" height="34" rx="4" fill="white" stroke="#d2d2d2" />
+<g transform="translate(1101 137.0) scale(0.6666666666666666)" fill="#616161">
+<path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"/>
+</g>
+<text x="1124" y="149.5" font-size="13" fill="#1b1b1b" font-weight="500" text-anchor="start" >全部测速</text>
+<rect x="216" y="188" width="1032" height="448" rx="6" fill="white" stroke="#dedfe2" />
+<rect x="217" y="189" width="1030" height="39" rx="5" fill="#fafafa" />
+<rect x="217" y="216" width="1030" height="12" rx="0" fill="#fafafa" />
+<text x="240" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >端口 / 协议</text>
+<text x="360" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >代理</text>
+<text x="492" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >当前去向</text>
+<text x="712" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >策略</text>
+<text x="824" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >延迟 / 速率</text>
+<text x="1016" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >状态</text>
+<text x="1116" y="213" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >编辑</text>
+<g data-row="0" data-name="机场" tabindex="0" role="button" aria-label="选择 机场" style="cursor:pointer">
+<rect x="217" y="228" width="1030" height="68" rx="0" fill="#e9f3ff" data-selection="true"/>
+<rect x="217" y="236" width="3" height="52" rx="1.5" fill="#0067c0" data-selection-edge="true"/>
+<text x="240" y="257" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7893</text>
+<text x="240" y="278" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >SOCKS5</text>
+<text x="360" y="258" font-size="14" fill="#1b1b1b" font-weight="600" text-anchor="start" >机场</text>
+<text x="492" y="258" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" >新加坡01</text>
+<text x="492" y="279" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >系统默认网卡</text>
+<text x="712" y="258" font-size="12" fill="#616161" font-weight="400" text-anchor="start" >手动选择</text>
+<text x="824" y="257" font-size="13" fill="#616161" font-weight="400" text-anchor="start" >182 ms</text>
+<text x="824" y="278" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >↑ 24 KB/s  ↓ 2.8 MB/s</text>
+<rect x="1016" y="248" width="57" height="24" rx="12" fill="#edf7ed" />
+<circle cx="1026" cy="260" r="2.5" fill="#0f7b0f"/>
+<text x="1034" y="264" font-size="11" fill="#0f7b0f" font-weight="500" text-anchor="start" >运行中</text>
+<g data-edit="0" tabindex="0" role="button" aria-label="编辑配置 机场" style="cursor:pointer">
+<rect x="1106" y="245" width="86" height="34" rx="4" fill="transparent" data-edit-hit="true"/>
+<text x="1116" y="267" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-action="more" tabindex="0" role="button" aria-label="更多操作" style="cursor:pointer">
+<rect x="1207" y="246" width="30" height="30" rx="4" fill="transparent" />
+<circle cx="1217" cy="261" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="261" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="261" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="1" data-name="开发工具" tabindex="0" role="button" aria-label="选择 开发工具" style="cursor:pointer">
+<rect x="217" y="296" width="1030" height="68" rx="0" fill="transparent" data-selection="true"/>
+<rect x="217" y="304" width="3" height="52" rx="1.5" fill="transparent" data-selection-edge="true"/>
+<path d="M217 296H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="325" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7894</text>
+<text x="240" y="346" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >Mixed</text>
+<text x="360" y="326" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >开发工具</text>
+<text x="492" y="326" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" >新加坡01</text>
+<text x="492" y="347" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >以太网</text>
+<text x="712" y="326" font-size="12" fill="#616161" font-weight="400" text-anchor="start" >手动选择</text>
+<text x="824" y="325" font-size="13" fill="#616161" font-weight="400" text-anchor="start" >182 ms</text>
+<text x="824" y="346" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >↑ 8 KB/s  ↓ 420 KB/s</text>
+<rect x="1016" y="316" width="57" height="24" rx="12" fill="#edf7ed" />
+<circle cx="1026" cy="328" r="2.5" fill="#0f7b0f"/>
+<text x="1034" y="332" font-size="11" fill="#0f7b0f" font-weight="500" text-anchor="start" >运行中</text>
+<g data-edit="1" tabindex="0" role="button" aria-label="编辑配置 开发工具" style="cursor:pointer">
+<rect x="1106" y="313" width="86" height="34" rx="4" fill="transparent" data-edit-hit="true"/>
+<text x="1116" y="335" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-action="more" tabindex="0" role="button" aria-label="更多操作" style="cursor:pointer">
+<rect x="1207" y="314" width="30" height="30" rx="4" fill="transparent" />
+<circle cx="1217" cy="329" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="329" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="329" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="2" data-name="下载专用" tabindex="0" role="button" aria-label="选择 下载专用" style="cursor:pointer">
+<rect x="217" y="364" width="1030" height="68" rx="0" fill="transparent" data-selection="true"/>
+<rect x="217" y="372" width="3" height="52" rx="1.5" fill="transparent" data-selection-edge="true"/>
+<path d="M217 364H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="393" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7895</text>
+<text x="240" y="414" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >HTTP</text>
+<text x="360" y="394" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >下载专用</text>
+<text x="492" y="394" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" >美国西部02</text>
+<text x="492" y="415" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >系统默认网卡</text>
+<text x="712" y="394" font-size="12" fill="#616161" font-weight="400" text-anchor="start" >自动测速</text>
+<text x="824" y="393" font-size="13" fill="#9d5d00" font-weight="400" text-anchor="start" >356 ms</text>
+<text x="824" y="414" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >↑ 126 KB/s  ↓ 8.2 MB/s</text>
+<rect x="1016" y="384" width="57" height="24" rx="12" fill="#edf7ed" />
+<circle cx="1026" cy="396" r="2.5" fill="#0f7b0f"/>
+<text x="1034" y="400" font-size="11" fill="#0f7b0f" font-weight="500" text-anchor="start" >运行中</text>
+<g data-edit="2" tabindex="0" role="button" aria-label="编辑配置 下载专用" style="cursor:pointer">
+<rect x="1106" y="381" width="86" height="34" rx="4" fill="transparent" data-edit-hit="true"/>
+<text x="1116" y="403" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-action="more" tabindex="0" role="button" aria-label="更多操作" style="cursor:pointer">
+<rect x="1207" y="382" width="30" height="30" rx="4" fill="transparent" />
+<circle cx="1217" cy="397" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="397" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="397" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="3" data-name="浏览器" tabindex="0" role="button" aria-label="选择 浏览器" style="cursor:pointer">
+<rect x="217" y="432" width="1030" height="68" rx="0" fill="transparent" data-selection="true"/>
+<rect x="217" y="440" width="3" height="52" rx="1.5" fill="transparent" data-selection-edge="true"/>
+<path d="M217 432H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="461" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7896</text>
+<text x="240" y="482" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >Mixed</text>
+<text x="360" y="462" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >浏览器</text>
+<text x="492" y="462" font-size="14" fill="#1b1b1b" font-weight="500" text-anchor="start" >东京01</text>
+<text x="492" y="483" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >系统默认网卡</text>
+<text x="712" y="462" font-size="12" fill="#616161" font-weight="400" text-anchor="start" >手动选择</text>
+<text x="824" y="461" font-size="13" fill="#616161" font-weight="400" text-anchor="start" >58 ms</text>
+<text x="824" y="482" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >↑ 12 KB/s  ↓ 1.4 MB/s</text>
+<rect x="1016" y="452" width="57" height="24" rx="12" fill="#edf7ed" />
+<circle cx="1026" cy="464" r="2.5" fill="#0f7b0f"/>
+<text x="1034" y="468" font-size="11" fill="#0f7b0f" font-weight="500" text-anchor="start" >运行中</text>
+<g data-edit="3" tabindex="0" role="button" aria-label="编辑配置 浏览器" style="cursor:pointer">
+<rect x="1106" y="449" width="86" height="34" rx="4" fill="transparent" data-edit-hit="true"/>
+<text x="1116" y="471" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-action="more" tabindex="0" role="button" aria-label="更多操作" style="cursor:pointer">
+<rect x="1207" y="450" width="30" height="30" rx="4" fill="transparent" />
+<circle cx="1217" cy="465" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="465" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="465" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="4" data-name="内网直连" tabindex="0" role="button" aria-label="选择 内网直连" style="cursor:pointer">
+<rect x="217" y="500" width="1030" height="68" rx="0" fill="transparent" data-selection="true"/>
+<rect x="217" y="508" width="3" height="52" rx="1.5" fill="transparent" data-selection-edge="true"/>
+<path d="M217 500H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="529" font-size="19" fill="#858585" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7897</text>
+<text x="240" y="550" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >SOCKS5</text>
+<text x="360" y="530" font-size="14" fill="#858585" font-weight="400" text-anchor="start" >内网直连</text>
+<text x="492" y="530" font-size="14" fill="#858585" font-weight="500" text-anchor="start" >直连</text>
+<text x="492" y="551" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >Wi-Fi</text>
+<text x="712" y="530" font-size="12" fill="#616161" font-weight="400" text-anchor="start" >直连</text>
+<text x="824" y="529" font-size="13" fill="#616161" font-weight="400" text-anchor="start" >—</text>
+<text x="824" y="550" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >↑ —  ↓ —</text>
+<rect x="1016" y="520" width="57" height="24" rx="12" fill="#f0f0f0" />
+<circle cx="1026" cy="532" r="2.5" fill="#616161"/>
+<text x="1034" y="536" font-size="11" fill="#616161" font-weight="500" text-anchor="start" >已关闭</text>
+<g data-edit="4" tabindex="0" role="button" aria-label="编辑配置 内网直连" style="cursor:pointer">
+<rect x="1106" y="517" width="86" height="34" rx="4" fill="transparent" data-edit-hit="true"/>
+<text x="1116" y="539" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-action="more" tabindex="0" role="button" aria-label="更多操作" style="cursor:pointer">
+<rect x="1207" y="518" width="30" height="30" rx="4" fill="transparent" />
+<circle cx="1217" cy="533" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="533" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="533" r="1.35" fill="#616161"/>
+</g>
+</g>
+<g data-row="5" data-name="备用线路" tabindex="0" role="button" aria-label="选择 备用线路" style="cursor:pointer">
+<rect x="217" y="568" width="1030" height="68" rx="0" fill="transparent" data-selection="true"/>
+<rect x="217" y="576" width="3" height="52" rx="1.5" fill="transparent" data-selection-edge="true"/>
+<path d="M217 568H1247" stroke="#e5e5e5" stroke-width="1" />
+<text x="240" y="597" font-size="19" fill="#1b1b1b" font-weight="500" text-anchor="start" font-family="Consolas,Segoe UI,sans-serif">7898</text>
+<text x="240" y="618" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >Mixed</text>
+<text x="360" y="598" font-size="14" fill="#1b1b1b" font-weight="400" text-anchor="start" >备用线路</text>
+<text x="492" y="598" font-size="14" fill="#858585" font-weight="500" text-anchor="start" >未生效</text>
+<text x="492" y="619" font-size="10" fill="#c42b1c" font-weight="400" text-anchor="start" >端口被占用</text>
+<text x="712" y="598" font-size="12" fill="#616161" font-weight="400" text-anchor="start" >手动选择</text>
+<text x="824" y="597" font-size="13" fill="#616161" font-weight="400" text-anchor="start" >—</text>
+<text x="824" y="618" font-size="10" fill="#616161" font-weight="400" text-anchor="start" >↑ —  ↓ —</text>
+<rect x="1016" y="588" width="68" height="24" rx="12" fill="#fdf0ee" />
+<circle cx="1026" cy="600" r="2.5" fill="#c42b1c"/>
+<text x="1034" y="604" font-size="11" fill="#c42b1c" font-weight="500" text-anchor="start" >启动失败</text>
+<g data-edit="5" tabindex="0" role="button" aria-label="编辑配置 备用线路" style="cursor:pointer">
+<rect x="1106" y="585" width="86" height="34" rx="4" fill="transparent" data-edit-hit="true"/>
+<text x="1116" y="607" font-size="12" fill="#0067c0" font-weight="500" text-anchor="start" >编辑配置</text>
+</g>
+<g data-action="more" tabindex="0" role="button" aria-label="更多操作" style="cursor:pointer">
+<rect x="1207" y="586" width="30" height="30" rx="4" fill="transparent" />
+<circle cx="1217" cy="601" r="1.35" fill="#616161"/>
+<circle cx="1222" cy="601" r="1.35" fill="#616161"/>
+<circle cx="1227" cy="601" r="1.35" fill="#616161"/>
+</g>
+</g>
+<path d="M1098 189L1098 635" stroke="#edf0f3" stroke-width="1" />
+<rect x="216" y="656" width="1032" height="64" rx="6" fill="white" stroke="#d4dbe3" />
+<text x="236" y="681" font-size="13" fill="#1b1b1b" font-weight="600" text-anchor="start" data-current-title="true">当前选中：机场  :7893 → 新加坡01</text>
+<text x="236" y="704" font-size="11" fill="#616161" font-weight="400" text-anchor="start" data-current-meta="true">手动选择 · 系统默认网卡</text>
+<text x="788" y="695" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >启用</text>
+<rect x="832" y="681" width="34" height="18" rx="9" fill="#0067c0" />
+<circle cx="857" cy="690" r="6" fill="white"/>
+<rect x="888" y="672" width="180" height="32" rx="4" fill="#0067c0" />
+<text x="978.0" y="692.5" font-size="13" fill="white" font-weight="500" text-anchor="middle" >切换节点  Enter</text>
+<rect x="1080" y="672" width="120" height="32" rx="4" fill="white" stroke="#d2d2d2" />
+<text x="1140.0" y="692.5" font-size="13" fill="#1b1b1b" font-weight="500" text-anchor="middle" >测速  T</text>
+<g data-action="more" tabindex="0" role="button" aria-label="更多操作" style="cursor:pointer">
+<rect x="1209" y="673" width="30" height="30" rx="4" fill="transparent" />
+<circle cx="1219" cy="688" r="1.35" fill="#616161"/>
+<circle cx="1224" cy="688" r="1.35" fill="#616161"/>
+<circle cx="1229" cy="688" r="1.35" fill="#616161"/>
+</g>
+<text x="216" y="748" font-size="11" fill="#616161" font-weight="400" text-anchor="start" >6 个代理 · 4 个运行中 · 1 个关闭 · 1 个异常</text>
+</g></svg></div><p class="foot">编辑列始终可见，不要求先选中行。底部保留当前选中项的切换节点、启停与测速。<a href="01-edit-column.png" target="_blank">查看原图 ↗</a></p></main><dialog id="editPreview" aria-labelledby="editTitle"><h2 id="editTitle">编辑配置</h2><p>编辑入口归属演示</p><div id="editContext" class="context"></div><footer><button id="close">关闭</button></footer></dialog><script>
+const rows=[{"name": "机场", "port": "7893", "proto": "SOCKS5", "node": "新加坡01", "mode": "手动选择", "nic": "系统默认网卡", "delay": "182 ms", "up": "24 KB/s", "down": "2.8 MB/s", "state": "运行中", "kind": "green", "on": true}, {"name": "开发工具", "port": "7894", "proto": "Mixed", "node": "新加坡01", "mode": "手动选择", "nic": "以太网", "delay": "182 ms", "up": "8 KB/s", "down": "420 KB/s", "state": "运行中", "kind": "green", "on": true}, {"name": "下载专用", "port": "7895", "proto": "HTTP", "node": "美国西部02", "mode": "自动测速", "nic": "系统默认网卡", "delay": "356 ms", "up": "126 KB/s", "down": "8.2 MB/s", "state": "运行中", "kind": "green", "on": true}, {"name": "浏览器", "port": "7896", "proto": "Mixed", "node": "东京01", "mode": "手动选择", "nic": "系统默认网卡", "delay": "58 ms", "up": "12 KB/s", "down": "1.4 MB/s", "state": "运行中", "kind": "green", "on": true}, {"name": "内网直连", "port": "7897", "proto": "SOCKS5", "node": "直连", "mode": "直连", "nic": "Wi-Fi", "delay": "—", "up": "—", "down": "—", "state": "已关闭", "kind": "gray", "on": false}, {"name": "备用线路", "port": "7898", "proto": "Mixed", "node": "香港02", "mode": "手动选择", "nic": "系统默认网卡", "delay": "—", "up": "—", "down": "—", "state": "启动失败", "kind": "red", "on": true}];
+const stage=document.querySelector('#stage'),dialog=document.querySelector('#editPreview');let previousFocus=null;
+function selectRow(index){stage.querySelectorAll('[data-row]').forEach(el=>{const active=Number(el.dataset.row)===index;el.querySelector('[data-selection]').setAttribute('fill',active?'#e9f3ff':'transparent');el.querySelector('[data-selection-edge]').setAttribute('fill',active?'#0067c0':'transparent')});const r=rows[index];stage.querySelector('[data-current-title]').textContent='当前选中：'+r.name+'  :'+r.port+' → '+(r.kind==='red'?'未生效':r.node);stage.querySelector('[data-current-meta]').textContent=r.mode+' · '+r.nic}
+stage.addEventListener('click',event=>{const edit=event.target.closest('[data-edit]');if(edit){event.stopPropagation();const r=rows[Number(edit.dataset.edit)];previousFocus=edit;document.querySelector('#editTitle').textContent='编辑配置 · '+r.name;document.querySelector('#editContext').textContent=r.name+' · '+r.proto+' :'+r.port+' → '+r.node;dialog.showModal();return}if(event.target.closest('[data-action]'))return;const row=event.target.closest('[data-row]');if(row)selectRow(Number(row.dataset.row))});
+stage.addEventListener('keydown',event=>{if(['Enter',' '].includes(event.key)&&event.target.matches('[data-edit],[data-row]')){event.preventDefault();event.target.dispatchEvent(new MouseEvent('click',{bubbles:true}))}});
+document.querySelector('#close').onclick=()=>{dialog.close();previousFocus?.focus()};stage.querySelectorAll('[data-action]').forEach(el=>{el.removeAttribute('tabindex');el.style.cursor='default'});
+</script></body></html>

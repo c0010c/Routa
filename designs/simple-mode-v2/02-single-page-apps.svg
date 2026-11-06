@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="680" viewBox="0 0 960 680">
+<title>新方案 3：连接与应用同页</title><g font-family="Segoe UI,Microsoft YaHei UI,Microsoft YaHei,sans-serif">
+<rect x="0" y="0" width="960" height="680" rx="10" fill="#202020" stroke="#444444" stroke-width="1"/>
+<rect x="0" y="0" width="960" height="34" rx="0" fill="#1b1b1b" stroke="none" stroke-width="1"/>
+<rect x="13" y="10" width="14" height="14" rx="3" fill="#4cc2ff" stroke="none" stroke-width="1"/>
+<text x="36" y="22" font-size="12" fill="#c0c0c0" font-weight="400" text-anchor="start">Routa</text>
+<path d="M835 17L845 17" fill="none" stroke="#c0c0c0" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="879" y="12" width="9" height="9" rx="0" fill="none" stroke="#c0c0c0" stroke-width="1"/>
+<path d="M926 12l10 10m0-10-10 10" fill="none" stroke="#c0c0c0" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="28" y="59" width="27" height="27" rx="6" fill="#4cc2ff" stroke="none" stroke-width="1"/>
+<g transform="translate(32 63) scale(0.7916666666666666)" fill="#17222b">
+<path d="M19 15.18V7c0-2.21-1.79-4-4-4s-4 1.79-4 4v10c0 1.1-.9 2-2 2s-2-.9-2-2V8.82C8.16 8.4 9 7.3 9 6c0-1.66-1.34-3-3-3S3 4.34 3 6c0 1.3.84 2.4 2 2.82V17c0 2.21 1.79 4 4 4s4-1.79 4-4V7c0-1.1.9-2 2-2s2 .9 2 2v8.18c-1.16.41-2 1.51-2 2.82 0 1.66 1.34 3 3 3s3-1.34 3-3c0-1.3-.84-2.4-2-2.82M6 7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1m12 12c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1"/>
+</g>
+<text x="68" y="80" font-size="19" fill="#f3f3f3" font-weight="600" text-anchor="start">Routa</text>
+<rect x="869" y="61" width="47" height="23" rx="4" fill="#333333" stroke="none" stroke-width="1"/>
+<text x="876" y="77" font-size="11" fill="#c0c0c0" font-weight="400" text-anchor="start">简洁版</text>
+<rect x="28" y="112" width="904" height="142" rx="8" fill="#282828" stroke="#3e3e3e" stroke-width="1"/>
+<circle cx="53" cy="142" r="3.5" fill="#82cd8c" stroke="none" stroke-width="1"/>
+<text x="65" y="147" font-size="14" fill="#f3f3f3" font-weight="600" text-anchor="start">代理已开启</text>
+<text x="52" y="179" font-size="11" fill="#929292" font-weight="400" text-anchor="start">当前节点</text>
+<text x="52" y="213" font-size="23" fill="#f3f3f3" font-weight="600" text-anchor="start">香港 01</text>
+<text x="175" y="211" font-size="12" fill="#82cd8c" font-weight="400" text-anchor="start">42 ms</text>
+<text x="246" y="211" font-size="12" fill="#4cc2ff" font-weight="400" text-anchor="start">更换节点</text>
+<path d="M303 203l4 4 4-4" fill="none" stroke="#c0c0c0" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="718" y="169" width="190" height="44" rx="5" fill="#333333" stroke="#484848" stroke-width="1"/>
+<text x="813.0" y="196.0" font-size="13" fill="#f3f3f3" font-weight="500" text-anchor="middle">关闭代理</text>
+<text x="28" y="299" font-size="14" fill="#f3f3f3" font-weight="600" text-anchor="start">代理范围</text>
+<rect x="116" y="276" width="272" height="36" rx="5" fill="#1d1d1d" stroke="#444444" stroke-width="1"/>
+<rect x="255.0" y="279" width="130.0" height="30" rx="3" fill="#3b3b3b" stroke="none" stroke-width="1"/>
+<text x="184.0" y="299" font-size="12" fill="#929292" font-weight="400" text-anchor="middle">全部应用</text>
+<text x="320.0" y="299" font-size="12" fill="#f3f3f3" font-weight="500" text-anchor="middle">指定应用</text>
+<rect x="800" y="277" width="132" height="34" rx="5" fill="#333333" stroke="#484848" stroke-width="1"/>
+<text x="866.0" y="299.0" font-size="13" fill="#f3f3f3" font-weight="500" text-anchor="middle">＋ 添加应用</text>
+<rect x="28" y="336" width="440" height="96" rx="7" fill="#2b3033" stroke="#42606c" stroke-width="1"/>
+<rect x="46" y="359" width="42" height="42" rx="7" fill="#363636" stroke="none" stroke-width="1"/>
+<g transform="translate(57 370) scale(0.8333333333333334)" fill="#c0c0c0">
+<path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2m6.93 6h-2.95c-.32-1.25-.78-2.45-1.38-3.56 1.84.63 3.37 1.91 4.33 3.56M12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96M4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2s.06 1.34.14 2zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56-1.84-.63-3.37-1.9-4.33-3.56m2.95-8H5.08c.96-1.66 2.49-2.93 4.33-3.56C8.81 5.55 8.35 6.75 8.03 8M12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96M14.34 14H9.66c-.09-.66-.16-1.32-.16-2s.07-1.35.16-2h4.68c.09.65.16 1.32.16 2s-.07 1.34-.16 2m.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95c-.96 1.65-2.49 2.93-4.33 3.56M16.36 14c.08-.66.14-1.32.14-2s-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2z"/>
+</g>
+<text x="104" y="374" font-size="15" fill="#f3f3f3" font-weight="500" text-anchor="start">Google Chrome</text>
+<text x="104" y="399" font-size="11" fill="#929292" font-weight="400" text-anchor="start">chrome.exe</text>
+<rect x="412" y="364" width="36" height="20" rx="10" fill="#4cc2ff" stroke="none" stroke-width="1"/>
+<circle cx="438" cy="374" r="6" fill="#202020" stroke="none" stroke-width="1"/>
+<rect x="492" y="336" width="440" height="96" rx="7" fill="#2b3033" stroke="#42606c" stroke-width="1"/>
+<rect x="510" y="359" width="42" height="42" rx="7" fill="#363636" stroke="none" stroke-width="1"/>
+<g transform="translate(521 370) scale(0.8333333333333334)" fill="#c0c0c0">
+<path d="m4.01 6.03 7.51 3.22-7.52-1zm7.5 8.72L4 17.97v-2.22zM2.01 3 2 10l15 2-15 2 .01 7L23 12z"/>
+</g>
+<text x="568" y="374" font-size="15" fill="#f3f3f3" font-weight="500" text-anchor="start">Telegram</text>
+<text x="568" y="399" font-size="11" fill="#929292" font-weight="400" text-anchor="start">Telegram.exe</text>
+<rect x="876" y="364" width="36" height="20" rx="10" fill="#4cc2ff" stroke="none" stroke-width="1"/>
+<circle cx="902" cy="374" r="6" fill="#202020" stroke="none" stroke-width="1"/>
+<rect x="28" y="450" width="440" height="96" rx="7" fill="#262626" stroke="#3d3d3d" stroke-width="1"/>
+<rect x="46" y="473" width="42" height="42" rx="7" fill="#363636" stroke="none" stroke-width="1"/>
+<g transform="translate(57 484) scale(0.8333333333333334)" fill="#c0c0c0">
+<path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m0 14H6l-2 2V4h16z"/>
+</g>
+<text x="104" y="488" font-size="15" fill="#f3f3f3" font-weight="500" text-anchor="start">微信</text>
+<text x="104" y="513" font-size="11" fill="#929292" font-weight="400" text-anchor="start">WeChat.exe</text>
+<rect x="412" y="478" width="36" height="20" rx="10" fill="#484848" stroke="none" stroke-width="1"/>
+<circle cx="422" cy="488" r="6" fill="#c3c3c3" stroke="none" stroke-width="1"/>
+<rect x="492" y="450" width="440" height="96" rx="7" fill="#262626" stroke="#3d3d3d" stroke-width="1"/>
+<rect x="510" y="473" width="42" height="42" rx="7" fill="#363636" stroke="none" stroke-width="1"/>
+<g transform="translate(521 484) scale(0.8333333333333334)" fill="#c0c0c0">
+<path d="m21.58 16.09-1.09-7.66C20.21 6.46 18.52 5 16.53 5H7.47C5.48 5 3.79 6.46 3.51 8.43l-1.09 7.66C2.2 17.63 3.39 19 4.94 19c.68 0 1.32-.27 1.8-.75L9 16h6l2.25 2.25c.48.48 1.13.75 1.8.75 1.56 0 2.75-1.37 2.53-2.91m-2.1.72c-.08.09-.21.19-.42.19-.15 0-.29-.06-.39-.16L15.83 14H8.17l-2.84 2.84c-.1.1-.24.16-.39.16-.21 0-.34-.1-.42-.19s-.16-.23-.13-.44l1.09-7.66C5.63 7.74 6.48 7 7.47 7h9.06c.99 0 1.84.74 1.98 1.72l1.09 7.66c.03.2-.05.34-.12.43"/>
+<path d="M9 8H8v2H6v1h2v2h1v-2h2v-1H9z"/>
+</g>
+<text x="568" y="488" font-size="15" fill="#f3f3f3" font-weight="500" text-anchor="start">Steam</text>
+<text x="568" y="513" font-size="11" fill="#929292" font-weight="400" text-anchor="start">steam.exe</text>
+<rect x="876" y="478" width="36" height="20" rx="10" fill="#484848" stroke="none" stroke-width="1"/>
+<circle cx="886" cy="488" r="6" fill="#c3c3c3" stroke="none" stroke-width="1"/>
+<text x="28" y="586" font-size="12" fill="#c0c0c0" font-weight="400" text-anchor="start">2 个应用走代理，其余应用直连</text>
+<path d="M28 612L932 612" fill="none" stroke="#3c3c3c" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(30 634) scale(0.8333333333333334)" fill="#c0c0c0">
+<path d="M19 15v4H5v-4zm1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1M7 18.5c-.82 0-1.5-.67-1.5-1.5s.68-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5M19 5v4H5V5zm1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1M7 8.5c-.82 0-1.5-.67-1.5-1.5S6.18 5.5 7 5.5s1.5.68 1.5 1.5S7.83 8.5 7 8.5"/>
+</g>
+<text x="61" y="650" font-size="13" fill="#c0c0c0" font-weight="400" text-anchor="start">订阅与节点</text>
+<g transform="translate(860 634) scale(0.8333333333333334)" fill="#c0c0c0">
+<path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.09-.16-.26-.25-.44-.25-.06 0-.12.01-.17.03l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1q-.09-.03-.18-.03c-.17 0-.34.09-.43.25l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.09.16.26.25.44.25.06 0 .12-.01.17-.03l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1q.09.03.18.03c.17 0 .34-.09.43-.25l2-3.46c.12-.22.07-.49-.12-.64zm-1.98-1.71c.04.31.05.52.05.73s-.02.43-.05.73l-.14 1.13.89.7 1.08.84-.7 1.21-1.27-.51-1.04-.42-.9.68c-.43.32-.84.56-1.25.73l-1.06.43-.16 1.13-.2 1.35h-1.4l-.19-1.35-.16-1.13-1.06-.43c-.43-.18-.83-.41-1.23-.71l-.91-.7-1.06.43-1.27.51-.7-1.21 1.08-.84.89-.7-.14-1.13c-.03-.31-.05-.54-.05-.74s.02-.43.05-.73l.14-1.13-.89-.7-1.08-.84.7-1.21 1.27.51 1.04.42.9-.68c.43-.32.84-.56 1.25-.73l1.06-.43.16-1.13.2-1.35h1.39l.19 1.35.16 1.13 1.06.43c.43.18.83.41 1.23.71l.91.7 1.06-.43 1.27-.51.7 1.21-1.07.85-.89.7zM12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4m0 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2"/>
+</g>
+<text x="889" y="650" font-size="13" fill="#c0c0c0" font-weight="400" text-anchor="start">设置</text>
+</g></svg>

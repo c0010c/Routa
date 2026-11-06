@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "routa",
+  "version": "0.7.0",
+  "identifier": "dev.routa",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "node scripts/build-procsvc.mjs && node scripts/build-frontend.mjs",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "title": "Routa",
+        "width": 1200,
+        "height": 800
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMxMjNDM0I3QTk3QzZCREQKUldUZGEzeXB0OE1qd1NOaDN5aWpqWWRIeGk0QXYxcFhWTU1MSWhkZEphRnIzTUV3Y1BTbGt1bXoK",
+      "endpoints": [
+        "https://update.hwdns.net/https://github.com/c0010c/Routa/releases/download/updater/latest-proxy.json",
+        "https://gh-proxy.org/https://github.com/c0010c/Routa/releases/download/updater/latest-proxy.json",
+        "https://github.com/c0010c/Routa/releases/download/updater/latest.json"
+      ],
+      "windows": { "installMode": "passive" }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "externalBin": ["binaries/mihomo", "binaries/routa-procsvc"],
+    "resources": { "binaries/procsvc/*": "procsvc/" },
+    "icon": ["icons/icon.ico"],
+    "windows": {
+      "nsis": { "installerHooks": "nsis/hooks.nsh" }
+    }
+  }
+}

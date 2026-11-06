@@ -1,0 +1,17 @@
+{
+  "name": "Routa Light",
+  "version": "1.0",
+  "colors": {
+    "background": "#f3f3f3", "surface": "#ffffff", "textPrimary": "#1b1b1b",
+    "textSecondary": "#616161", "textHint": "#707070", "border": "#dedfe3",
+    "primary": "#0067c0", "primaryForeground": "#ffffff", "selectedSurface": "#eaf3fc",
+    "success": "#0f7b0f", "error": "#b42318", "warning": "#966000"
+  },
+  "fontFamily": ["Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "sans-serif"],
+  "fontSizes": {"caption": 12, "body": 14, "section": 18, "pageTitle": 26},
+  "spacing": [4, 8, 12, 16, 20, 24, 28],
+  "radius": {"control": 5, "card": 8, "window": 10},
+  "controlHeight": {"default": 36, "primaryConnection": 44},
+  "window": {"compactWidth": 520, "compactHeight": 640, "appsWidth": 920, "fullWidth": 1100, "fullHeight": 736, "fullMinWidth": 880, "sidebarWidth": 184},
+  "navigationIcons": {"overview": "SpaceDashboardOutlined", "proxy": "SwapHorizOutlined", "processRouting": "AltRouteOutlined", "exits": "LanguageOutlined", "resources": "DnsOutlined", "settings": "SettingsOutlined"}
+}

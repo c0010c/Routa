@@ -1,0 +1,87 @@
+{
+  "baseline": {
+    "cards": 20,
+    "footerTop": 841,
+    "height": 720,
+    "width": 960
+  },
+  "emptyState": {
+    "count": "0 / 20 个候选节点",
+    "empty": "未找到匹配节点",
+    "footerTop": 841,
+    "height": 720,
+    "testDisabled": true
+  },
+  "currentSelected": {
+    "confirmDisabled": true,
+    "label": "✓当前使用",
+    "selected": "1"
+  },
+  "menuState": {
+    "open": true,
+    "selected": "1"
+  },
+  "stableHeight": true,
+  "stableFooter": true,
+  "colorChecks": {
+    "allColorsMatch": true,
+    "cardHeight": 96,
+    "keyboardTooltipContainsTime": true,
+    "rows": [
+      {
+        "dialogColor": "rgb(15, 123, 15)",
+        "index": 0,
+        "pageColor": "rgb(15, 123, 15)",
+        "same": true,
+        "text": "48ms"
+      },
+      {
+        "dialogColor": "rgb(157, 93, 0)",
+        "index": 1,
+        "pageColor": "rgb(157, 93, 0)",
+        "same": true,
+        "text": "487ms"
+      },
+      {
+        "dialogColor": "rgb(196, 43, 28)",
+        "index": 2,
+        "pageColor": "rgb(196, 43, 28)",
+        "same": true,
+        "text": "782ms"
+      },
+      {
+        "dialogColor": "rgb(95, 122, 24)",
+        "index": 3,
+        "pageColor": "rgb(95, 122, 24)",
+        "same": true,
+        "text": "170ms"
+      },
+      {
+        "dialogColor": "rgb(196, 43, 28)",
+        "index": 4,
+        "pageColor": "rgb(196, 43, 28)",
+        "same": true,
+        "text": "超时"
+      },
+      {
+        "dialogColor": "rgb(196, 43, 28)",
+        "index": 5,
+        "pageColor": "rgb(196, 43, 28)",
+        "same": true,
+        "text": "连接失败"
+      },
+      {
+        "dialogColor": "rgb(97, 97, 97)",
+        "index": 7,
+        "pageColor": "rgb(97, 97, 97)",
+        "same": true,
+        "text": "未测试"
+      }
+    ]
+  },
+  "actualGeometry": {
+    "cardHeight": 96,
+    "cardWidth": 284.25,
+    "mainCardCount": 23
+  }
+}

@@ -1,0 +1,116 @@
+import type { ApplyOutcome, DelayError, DelayResult, ExitStatus, ListenerId, ListenerStatus, RuntimeStatus } from "../bindings";
+
+export type LabelColor = "success" | "default" | "warning" | "error";
+export interface Label {
+  text: string;
+  color: LabelColor;
+}
+
+const UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
+
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < UNITS.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  if (i === 0) return `${Math.round(v)} B`;
+  return `${parseFloat(v.toFixed(1))} ${UNITS[i]}`;
+}
+
+export function formatRate(n: number): string {
+  return `${formatBytes(n)}/s`;
+}
+
+export function exitStatusLabel(s: ExitStatus): Label {
+  switch (s) {
+    case "Ok":
+      return { text: "正常", color: "success" };
+    case "NodeMissing":
+      return { text: "节点已失效", color: "error" };
+    case "AllMembersMissing":
+      return { text: "组内节点全部失效", color: "error" };
+    case "InterfaceUnavailable":
+      return { text: "网卡不可用", color: "error" };
+  }
+}
+
+/**
+ * True when listener `id` as saved is not what mihomo runs: core not running,
+ * the last apply closed everything, or mihomo's current config lacks it (e.g.
+ * a retry from the fail-closed empty config was rejected again).
+ */
+export function listenerNotEffective(status: RuntimeStatus, id: ListenerId): boolean {
+  if (status.core !== "Running") return true;
+  const a = status.last_apply;
+  if (a !== null && ("FailedClosed" in a || "FailedCoreStopped" in a)) return true;
+  return !status.effective_listeners.includes(id);
+}
+
+export function listenerStatusLabel(s: ListenerStatus, isPortFailed: boolean, notEffective = false): Label {
+  if (notEffective && s === "Active") return { text: "未生效", color: "warning" };
+  if (isPortFailed) return { text: "端口被占用", color: "error" };
+  if (s === "Active") return { text: "运行中", color: "success" };
+  if (s === "DisabledByUser") return { text: "已停用", color: "default" };
+  if (s === "NoExit") return { text: "未接出口", color: "warning" };
+  switch (s.ExitBroken.exit_status) {
+    case "NodeMissing":
+      return { text: "节点已失效，请重选", color: "error" };
+    case "AllMembersMissing":
+      return { text: "组内节点全部失效", color: "error" };
+    case "InterfaceUnavailable":
+      return { text: "网卡不可用", color: "error" };
+    case "Ok":
+      // Should not happen: a broken listener always has a non-Ok exit.
+      return { text: "出口异常", color: "error" };
+  }
+}
+
+/** User-facing lines for an apply outcome; empty means nothing to report. */
+export function applyOutcomeMessages(o: ApplyOutcome): string[] {
+  const uncutLine = "部分连接未能关闭，请检查内核运行状态";
+  if ("Reloaded" in o) {
+    const lines = o.Reloaded.failed_listeners.map(
+      (f) => `监听器「${f.name}」端口被占用，请更换端口`,
+    );
+    if (o.Reloaded.uncut > 0) lines.push(uncutLine);
+    return lines;
+  }
+  if ("FailedKeptPrevious" in o) {
+    return ["已保存，但未生效，目前仍使用原配置"];
+  }
+  if ("FailedClosed" in o) {
+    const lines = ["已保存，但未生效，代理端口已关闭，请检查配置后手动重试"];
+    if (o.FailedClosed.uncut > 0) lines.push(uncutLine);
+    return lines;
+  }
+  if ("NotRunning" in o) {
+    return [o.NotRunning?.error === "mihomo 未运行，配置将在内核启动后生效"
+      ? "已保存，启动内核后生效"
+      : "已保存，但内核未能启动，请检查设置后手动重试"];
+  }
+  return ["已保存，但未生效，内核已停止，请检查配置后手动重试"];
+}
+
+/** Shared by node cards, candidate pickers and current-proxy results. */
+export function delayColor(ms: number | null): "success" | "warning" | "error" {
+  if (ms === null || ms > 600) return "error";
+  return ms <= 300 ? "success" : "warning";
+}
+
+/** Short label and explanation for a delay test that produced no number. */
+export function delayFailure(error: DelayError | null | undefined): { text: string; detail: string } {
+  if (error == null || error === "Timeout") return { text: "超时", detail: "在超时时间内没有收到延迟测试地址的响应" };
+  if (error === "Failed") return { text: "连接失败", detail: "节点连不上延迟测试地址：连接被拒绝、域名解析失败或握手出错" };
+  if (error === "NotFound") return { text: "未生效", detail: "内核中还没有这个节点，配置可能尚未应用" };
+  if (error === "NoCore") return { text: "内核未运行", detail: "内核未运行，无法测延迟" };
+  if ("CoreUnreachable" in error) return { text: "内核无响应", detail: `无法访问内核控制接口：${error.CoreUnreachable}` };
+  return { text: "测量失败", detail: error.Other };
+}
+
+/** `123 ms`, or the failure label. */
+export function delayText(d: DelayResult): string {
+  return d.ms === null ? delayFailure(d.error).text : `${d.ms} ms`;
+}

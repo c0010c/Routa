@@ -1,0 +1,314 @@
+//! Routa 与进程分流服务（RoutaProcSvc）之间命名管道协议：消息类型与分帧。
+
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+pub const PROTO_VERSION: u32 = 4;
+pub const PIPE_NAME: &str = r"\\.\pipe\RoutaProcSvc";
+pub const SERVICE_NAME: &str = "RoutaProcSvc";
+/// 单帧 JSON 正文的最大字节数。
+pub const MAX_FRAME: usize = 1 << 20;
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub enum FaultPolicy {
+    Direct,
+    Block,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub enum ExitPolicy {
+    Direct,
+    Block,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum ProxyKind {
+    Socks5,
+    Http,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ProxyTarget {
+    pub kind: ProxyKind,
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    Proxy(ProxyTarget),
+    Direct,
+    Block,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RuleSpec {
+    pub id: String,
+    /// 完整路径（`X:\…\a.exe`），或只写进程名（`a.exe`，见 [`is_process_name`]）。
+    /// 进程名不能用于 WFP 防护，所以按进程名的规则 `on_fault` 只能是 `Direct`。
+    pub exe_path: String,
+    pub action: Action,
+    pub on_fault: FaultPolicy,
+    pub reset_on_change: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DesiredState {
+    pub rules: Vec<RuleSpec>,
+    pub on_routa_exit: ExitPolicy,
+    pub routa_pid: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum Request {
+    Hello { version: u32 },
+    /// 登记管理进程，不应用配置或重试失败操作。
+    Attach { routa_pid: u32 },
+    Apply(DesiredState),
+    /// 用户主动重试，包括上次未成功断开的连接。
+    RetryApply(DesiredState),
+    Goodbye,
+    GetFlows,
+    GetStatus,
+    CleanupFilters,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum Response {
+    Hello {
+        version: u32,
+        accepted: bool,
+    },
+    /// 请求已完整执行。
+    Ok,
+    /// 请求已执行（例如状态已落地），但部分规则或操作出现非致命错误（中文，可直接展示）。
+    Applied {
+        errors: Vec<String>,
+    },
+    Flows(Vec<Flow>),
+    Status(SvcStatus),
+    /// 请求被拒绝，什么都没改。
+    Error(String),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct Flow {
+    pub pid: u32,
+    pub rule_id: Option<String>,
+    pub exe_path: Option<String>,
+    pub host: String,
+    pub port: u16,
+    pub udp: bool,
+    pub age_ms: Option<u32>,
+    pub sent: u64,
+    pub received: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SvcStatus {
+    pub version: u32,
+    pub owner_sid: String,
+    pub last_interruption: Option<Interruption>,
+    pub truncated_flows: bool,
+    pub conflicts: Vec<String>,
+    pub rules: Vec<RuleStatus>,
+}
+
+/// 服务确认的规则动作；不回传代理密码等配置。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RuleStatus {
+    pub id: String,
+    /// Proxy / Direct / Block；无法确认执行结果时为 None。
+    pub action: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Interruption {
+    pub at_unix: i64,
+    pub reason: String,
+}
+
+/// exe 路径的共享校验（Routa 与服务端同用）。入参应已规范化（去首尾空白、`/` → `\`）。
+/// 合法返回 None，否则返回中文原因。
+///
+/// 只接受本地盘符路径 `X:\…`：服务以 LocalSystem 身份打开规则里的程序文件，
+/// UNC（`\\srv\share`）以及 `\\?\`、`\\.\` 前缀会让它以机器账户访问网络。
+pub fn exe_path_problem(p: &str) -> Option<String> {
+    let b = p.as_bytes();
+    let reason = if p.is_empty() {
+        "路径不能为空"
+    } else if p.contains([',', ';']) {
+        "路径不能包含 \",\" 或 \";\""
+    } else if p.starts_with(r"\\") {
+        "不支持网络路径（UNC）或设备路径，只能选择本地磁盘上的程序"
+    } else if b.len() < 4
+        || !b[0].is_ascii_alphabetic()
+        || b[1] != b':'
+        || b[2] != b'\\'
+        // 盘符之后必须还有文件部分。
+        || !std::path::Path::new(p)
+            .components()
+            .any(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        "必须是本地磁盘上的绝对路径（如 C:\\…）"
+    } else if !p.to_lowercase().ends_with(".exe") {
+        "必须是 .exe 文件"
+    } else {
+        return None;
+    };
+    Some(reason.to_string())
+}
+
+/// 只写了进程名（不含路径分隔符或盘符）：按文件名匹配，装在哪里都算。
+pub fn is_process_name(p: &str) -> bool {
+    !p.contains(['\\', '/', ':'])
+}
+
+/// 进程名的共享校验。入参应已去首尾空白。合法返回 None，否则返回中文原因。
+pub fn process_name_problem(p: &str) -> Option<String> {
+    let reason = if p.is_empty() {
+        "进程名不能为空"
+    } else if !is_process_name(p) {
+        "进程名不能包含路径"
+    } else if p.contains([',', ';', '*', '?', '"']) {
+        "进程名不能包含 , ; * ? \""
+    } else if !p.to_lowercase().ends_with(".exe") || p.len() <= 4 {
+        "必须是 .exe 文件"
+    } else {
+        return None;
+    };
+    Some(reason.to_string())
+}
+
+/// 规则里一个进程的校验：进程名按 [`process_name_problem`]，完整路径按 [`exe_path_problem`]。
+pub fn process_problem(p: &str) -> Option<String> {
+    if is_process_name(p) {
+        process_name_problem(p)
+    } else {
+        exe_path_problem(p)
+    }
+}
+
+/// 编码为一帧：u32 小端长度 + JSON 正文。
+pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, String> {
+    let body = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
+    if body.len() > MAX_FRAME {
+        return Err(format!("frame too large: {} > {}", body.len(), MAX_FRAME));
+    }
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
+/// 解析帧头得到正文长度；超过 MAX_FRAME 报错。
+pub fn decode_len(header: [u8; 4]) -> Result<usize, String> {
+    let len = u32::from_le_bytes(header) as usize;
+    if len > MAX_FRAME {
+        return Err(format!("frame too large: {} > {}", len, MAX_FRAME));
+    }
+    Ok(len)
+}
+
+pub fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, String> {
+    serde_json::from_slice(body).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_apply() {
+        let req = Request::Apply(DesiredState {
+            rules: vec![RuleSpec {
+                id: "r1".into(),
+                exe_path: r"C:\app\a.exe".into(),
+                action: Action::Proxy(ProxyTarget {
+                    kind: ProxyKind::Socks5,
+                    host: "127.0.0.1".into(),
+                    port: 7890,
+                    username: None,
+                    password: Some("p".into()),
+                }),
+                on_fault: FaultPolicy::Block,
+                reset_on_change: true,
+            }],
+            on_routa_exit: ExitPolicy::Direct,
+            routa_pid: 42,
+        });
+        let buf = encode(&req).unwrap();
+        let len = decode_len(buf[..4].try_into().unwrap()).unwrap();
+        assert_eq!(len, buf.len() - 4);
+        let back: Request = decode(&buf[4..]).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn roundtrip_attach() {
+        let request = Request::Attach { routa_pid: 1234 };
+        let buf = encode(&request).unwrap();
+        assert_eq!(decode::<Request>(&buf[4..]).unwrap(), request);
+    }
+
+    #[test]
+    fn roundtrip_applied() {
+        let resp = Response::Applied {
+            errors: vec!["规则 r1 失败".into()],
+        };
+        let buf = encode(&resp).unwrap();
+        let back: Response = decode(&buf[4..]).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn exe_path_problem_table() {
+        let bad = [
+            r"\\server.exe",
+            r"\\srv\share.exe",
+            r"\\srv\share\a.exe",
+            r"\\?\C:\a.exe",
+            r"\\.\C:\a.exe",
+            r"\\?\UNC\srv\share\a.exe",
+            r"C:a.exe",
+            r"C:\",
+            r"1:\a.exe",
+            r"\x.exe",
+            "",
+            r"a.exe",
+            r"C:\a.txt",
+            r"C:\a,b.exe",
+            r"C:\a;b.exe",
+        ];
+        for p in bad {
+            assert!(exe_path_problem(p).is_some(), "{p:?} should be rejected");
+        }
+        for p in [r"C:\a.exe", r"c:\A\B.EXE", r"D:\Program Files\x\y.exe"] {
+            assert_eq!(exe_path_problem(p), None, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn process_problem_table() {
+        for p in ["a.exe", "ChatGPT.exe", "测试.EXE", r"C:\a.exe"] {
+            assert_eq!(process_problem(p), None, "{p:?}");
+        }
+        for p in ["", ".exe", "a.txt", "a", "a;b.exe", "a,b.exe", "*.exe", "a?.exe", "C:a.exe", r"\\srv\a.exe", "x/a.exe"] {
+            assert!(process_problem(p).is_some(), "{p:?} should be rejected");
+        }
+        assert!(is_process_name("a.exe") && !is_process_name(r"C:\a.exe") && !is_process_name("C:/a.exe"));
+        assert!(!is_process_name("C:a.exe") && process_name_problem("C:a.exe").is_some());
+    }
+
+    #[test]
+    fn oversized_frame_rejected() {
+        let header = ((MAX_FRAME + 1) as u32).to_le_bytes();
+        assert!(decode_len(header).is_err());
+        assert!(decode_len((MAX_FRAME as u32).to_le_bytes()).is_ok());
+    }
+}

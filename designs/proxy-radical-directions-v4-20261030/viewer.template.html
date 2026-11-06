@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Routa · 三种大跨度方向</title>
+<style>
+:root{font:14px "Segoe UI","Microsoft YaHei UI",sans-serif;color:#1b1b1b;background:#e9edf2;color-scheme:light}*{box-sizing:border-box}body{margin:0}main{max-width:1480px;margin:auto;padding:28px 32px}h1{font-size:26px;font-weight:600;margin:0 0 8px}p{margin:0;font-size:12px;line-height:1.8;color:#616161}button{font:inherit;cursor:pointer}button:focus-visible,a:focus-visible{outline:2px solid #0067c0;outline-offset:3px}.toolbar{display:flex;gap:18px;align-items:center;margin:22px 0 18px;flex-wrap:wrap}.tabs{display:flex;gap:3px;background:#dfe5ec;border-radius:6px;padding:3px}.tabs button{border:0;background:transparent;padding:9px 18px;border-radius:4px;color:#616161;font-size:13px}.tabs button[aria-pressed=true]{background:#fff;color:#0067c0;box-shadow:0 1px 4px #0001}.modes{margin-left:auto}#screen{background:#f3f3f3;border-radius:8px;box-shadow:0 8px 30px #26354a12;aspect-ratio:1280/768}#screen svg{width:100%;height:auto;display:block;border-radius:8px}#screen [data-action]{cursor:default!important}.caption{display:flex;gap:24px;align-items:center;justify-content:space-between;margin-top:16px}.caption h2{margin:0 0 5px;font-size:18px;font-weight:600}.caption a{white-space:nowrap}a{color:#0067c0;text-decoration:none;font-size:12px}a:hover{text-decoration:underline}.compare{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:28px}.compare article{background:white;border:1px solid #dde2e8;border-radius:7px;padding:20px}.compare h3{font-size:15px;font-weight:600;margin:0 0 9px}.compare b{font-weight:600;color:#1b1b1b}.motion{margin-top:30px}.motion-head{display:flex;align-items:center;justify-content:space-between}.motion h2{font-size:19px;font-weight:600;margin:0 0 14px}.motion button{padding:7px 14px;border:1px solid #cbd2db;background:white;color:#0067c0;border-radius:4px;font-size:12px}.motion img{display:block;width:100%;border-radius:7px;border:1px solid #dde2e7;background:#f5f6f8}.foot{margin-top:18px;font-size:11px;color:#858585;line-height:1.8}@media(max-width:760px){main{padding:20px 14px}.compare{grid-template-columns:1fr}.modes{margin-left:0}.caption{align-items:flex-start}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+</style></head><body><main>
+<h1>Routa · 三种大跨度方向</h1>
+<p>设计查看器：切换方向与单 / 多代理场景，比较组织方式。应用画面内按钮为视觉占位，所有数据均为虚构。</p>
+<div class="toolbar"><div class="tabs" aria-label="设计方向"><button data-direction="stage" aria-pressed="true">A 连接舞台</button><button data-direction="console" aria-pressed="false">B 代理终端</button><button data-direction="matrix" aria-pressed="false">C 入口矩阵</button></div><div class="tabs modes" aria-label="代理数量"><button data-mode="single" aria-pressed="true">单代理</button><button data-mode="multiple" aria-pressed="false">多代理</button></div></div>
+<div id="screen"></div>
+<div class="caption"><div><h2 id="title">A 连接舞台</h2><p id="description"></p></div><a id="boardLink" href="01-connection-stage.png" target="_blank">打开方向标注图 ↗</a></div>
+<div class="compare">
+<article><h3>A 连接舞台</h3><p><b>中心：</b>流量关系。<br><b>动作：</b>在目的地旁直接切换。<br><b>动效：</b>确认期间沿路径移动的光点。<br><b>适合：</b>少量代理、共享去向需要可视化。<br><b>取舍：</b>节点多时需要分组，避免交叉线拥挤。</p></article>
+<article><h3>B 代理终端</h3><p><b>中心：</b>可搜索、可操作的紧凑行。<br><b>动作：</b>键盘焦点、就近候选、底部动作栏。<br><b>动效：</b>快速定位，局部字段更新。<br><b>适合：</b>代理多、经常切换与检查。<br><b>取舍：</b>视觉表达克制，依靠一致布局建立效率。</p></article>
+<article><h3>C 入口矩阵</h3><p><b>中心：</b>端口身份。<br><b>动作：</b>聚焦一块入口面板并展开操作。<br><b>动效：</b>面板展开、确认后收回原位。<br><b>适合：</b>按端口区分应用的使用方式。<br><b>取舍：</b>代理名称需要始终可见，避免只靠端口记忆。</p></article>
+</div>
+<section class="motion"><div class="motion-head"><h2>三种动效语言 · 成功与失败</h2><button id="motionToggle" aria-pressed="true">暂停动效</button></div><img id="motionImage" src="motion-static.png" alt="连接舞台、代理终端和入口矩阵的节点切换动效对比"></section>
+<p class="foot">系统启用“减少动态效果”时默认显示静态结果图，可手动播放。所有方向均保留浅色 Windows 风格、蓝色强调色与 Routa 左侧导航。只创建设计产物，未修改软件或实际配置。</p>
+</main><script>
+/* VIEW_DATA */
+const descriptions={stage:'一次专注一条连接；总览模式以连线呈现多个入口与共享去向。',console:'以搜索、键盘焦点和固定动作栏服务高频操作；候选菜单靠近当前去向。',matrix:'端口优先的入口面板；单代理居中、多代理成矩阵，切换时聚焦展开。'};
+const titles={stage:'A 连接舞台',console:'B 代理终端',matrix:'C 入口矩阵'},links={stage:'01-connection-stage.png',console:'02-proxy-console.png',matrix:'03-port-matrix.png'};
+let direction='stage',mode='single';
+function render(){document.querySelector('#screen').innerHTML=views[direction+'-'+mode];document.querySelector('#title').textContent=titles[direction];document.querySelector('#description').textContent=descriptions[direction];document.querySelector('#boardLink').href=links[direction];document.querySelectorAll('[data-direction]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.direction===direction)));document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===mode)));document.querySelectorAll('#screen [tabindex]').forEach(el=>el.removeAttribute('tabindex'))}
+document.querySelectorAll('[data-direction]').forEach(b=>b.onclick=()=>{direction=b.dataset.direction;render()});document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{mode=b.dataset.mode;render()});
+let playing=!matchMedia('(prefers-reduced-motion: reduce)').matches;
+function motion(){document.querySelector('#motionImage').src=playing?'04-motion-directions.gif':'motion-static.png';document.querySelector('#motionToggle').textContent=playing?'暂停动效':'播放动效';document.querySelector('#motionToggle').setAttribute('aria-pressed',String(playing))}
+document.querySelector('#motionToggle').onclick=()=>{playing=!playing;motion()};render();motion();
+</script></body></html>

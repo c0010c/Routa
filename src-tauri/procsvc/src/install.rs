@@ -1,0 +1,883 @@
+//! `--install` / `--uninstall` / `--cleanup`（spec 6.5、8）。均需管理员，均幂等。
+
+use std::ffi::OsString;
+use std::fs::{self, OpenOptions};
+use std::io;
+use std::os::windows::ffi::OsStringExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::io::AsRawHandle;
+use std::path::{Path, PathBuf};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
+
+use routa_procsvc_proto::SERVICE_NAME;
+use windows_service::service::{
+    Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceErrorControl,
+    ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo, ServiceStartType, ServiceState,
+    ServiceType,
+};
+use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+use windows_sys::core::PWSTR;
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL,
+    ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SERVICE_MARKED_FOR_DELETE, ERROR_SERVICE_NOT_ACTIVE,
+    ERROR_INVALID_PARAMETER, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
+use windows_sys::Win32::Security::Authorization::{SetSecurityInfo, SE_FILE_OBJECT};
+use windows_sys::Win32::Security::{
+    GetSecurityDescriptorDacl, GetTokenInformation, TokenElevation, ACL, DACL_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_ELEVATION, TOKEN_QUERY,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, WRITE_DAC,
+};
+use windows_sys::Win32::System::Com::CoTaskMemFree;
+use windows_sys::Win32::System::Services::{
+    SetServiceObjectSecurity, SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STOP,
+};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcess, OpenProcessToken, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+};
+use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+
+use crate::engine::Guard;
+use crate::localfile::{self, Expect};
+use crate::paths::same_path;
+use crate::server::SecurityDescriptor;
+use crate::{pb_ffi, wfp};
+
+/// 安装目录里记录组件所有者 SID 的文件。
+pub const OWNER_SID_FILE: &str = "owner.sid";
+const EXE_NAME: &str = "routa-procsvc.exe";
+/// WinDivert 内核驱动文件，以及 WinDivert.dll 为它注册的驱动服务名。
+const DRIVER_FILE: &str = "WinDivert64.sys";
+const DRIVER_SERVICE: &str = "WinDivert";
+const DISPLAY_NAME: &str = "Routa 进程分流";
+const DESCRIPTION: &str = "按进程把程序的网络连接转发到 Routa 的代理或阻断（Routa 进程分流组件）。";
+/// SCM 给新建服务的默认 DACL：SYSTEM 管理、Administrators 完全控制、交互/服务登录用户只读。
+const DEFAULT_SERVICE_DACL: &str = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)     (A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)";
+/// 安装目录的 DACL：受保护（不继承上级）；SYSTEM、Administrators 完全控制，Users 只读与执行
+/// （0x1200a9 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE）。对象与子目录都继承。
+pub const INSTALL_DIR_SDDL: &str = "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
+/// 授予组件所有者的服务权限。
+const OWNER_SERVICE_RIGHTS: u32 = SERVICE_START | SERVICE_STOP | SERVICE_QUERY_STATUS;
+const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+const START_TIMEOUT: Duration = Duration::from_secs(10);
+/// 服务刚停止时文件可能仍被占用：复制、删除的重试时长。
+const FILE_RETRY: Duration = Duration::from_secs(5);
+const POLL: Duration = Duration::from_millis(250);
+
+/// `%ProgramFiles%\Routa\ProcessRouting`：组件文件、状态文件所在的受保护目录。
+///
+/// Program Files 取自已知文件夹（`FOLDERID_ProgramFiles`）而不是环境变量：安装命令和
+/// LocalSystem 服务必须得到同一个目录，且用户改环境变量不能把服务的二进制路径引到可写目录。
+/// 取不到时报错，不猜测位置（安装、卸载、服务启动都随之失败）。
+pub fn install_dir() -> Result<PathBuf, String> {
+    Ok(program_files()?.join("Routa").join("ProcessRouting"))
+}
+
+/// 安装后的服务 exe：`<安装目录>\routa-procsvc.exe`。
+pub fn installed_exe() -> Result<PathBuf, String> {
+    Ok(install_dir()?.join(EXE_NAME))
+}
+
+fn program_files() -> Result<PathBuf, String> {
+    let mut p: PWSTR = std::ptr::null_mut();
+    // SAFETY: 成功与否 p 都要用 CoTaskMemFree 释放（失败时为 null，释放 null 无害）；
+    // 成功时 p 是以 NUL 结尾的宽字符串。
+    unsafe {
+        let hr = SHGetKnownFolderPath(
+            &FOLDERID_ProgramFiles,
+            KF_FLAG_DEFAULT as u32,
+            std::ptr::null_mut(),
+            &mut p,
+        );
+        let path = (hr >= 0 && !p.is_null()).then(|| {
+            let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+            PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(p, len)))
+        });
+        CoTaskMemFree(p as *const _);
+        path.ok_or_else(|| format!("无法确定 Program Files 目录（HRESULT {hr:#010x}）"))
+    }
+}
+
+/// 给安装目录设上 [`INSTALL_DIR_SDDL`]（目录已存在也重设）。路径上任何一层是重解析点
+/// （符号链接、目录联接、挂载点）都拒绝：否则文件可能被写到别处，或 DACL 设到别的目录上。
+fn protect_dir(dir: &Path) -> Result<(), String> {
+    // 检查各层并占住（不能被改名或删除），直到 DACL 设完。
+    let _held = localfile::hold(dir, Expect::Dir)?;
+    let f = OpenOptions::new()
+        .access_mode(READ_CONTROL | WRITE_DAC)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)
+        .map_err(|e| format!("打开 {} 失败：{e}", dir.display()))?;
+    let attrs = f
+        .metadata()
+        .map_err(|e| format!("读取 {} 的属性失败：{e}", dir.display()))?
+        .file_attributes();
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(format!("{} 是重解析点，出于安全原因拒绝", dir.display()));
+    }
+    set_dacl(&f, INSTALL_DIR_SDDL).map_err(|e| format!("设置 {} 的权限失败：{e}", dir.display()))
+}
+
+/// 把 `sddl` 里的 DACL 设为 `f` 的受保护 DACL（系统会把可继承的 ACE 传播到已有的子项）。
+fn set_dacl(f: &fs::File, sddl: &str) -> Result<(), String> {
+    let sd = SecurityDescriptor::from_sddl(sddl).map_err(|e| e.to_string())?;
+    let (mut present, mut defaulted) = (0, 0);
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    // SAFETY: sd 有效；dacl 指向 sd 内部，在 sd 存活期间使用。
+    if unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) } == 0
+        || present == 0
+        || dacl.is_null()
+    {
+        return Err("安全描述符里没有 DACL".into());
+    }
+    // SAFETY: f 是以 WRITE_DAC 打开的有效句柄；dacl 有效。
+    let err = unsafe {
+        SetSecurityInfo(
+            f.as_raw_handle() as _,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            dacl,
+            std::ptr::null(),
+        )
+    };
+    if err != 0 {
+        return Err(io::Error::from_raw_os_error(err as i32).to_string());
+    }
+    Ok(())
+}
+
+/// 复制到安装目录的文件。第一个（服务 exe）取自正在运行的 exe，其余取自 `--source`。
+pub fn files_to_copy() -> [&'static str; 4] {
+    [
+        EXE_NAME,
+        pb_ffi::DLL_NAME,
+        "WinDivert.dll",
+        DRIVER_FILE,
+    ]
+}
+
+/// `files_to_copy()` 里的每个文件在 `installed` 下都存在且内容逐字节相同。
+/// 第一个（服务 exe）与 `source_exe` 比较，其余与 `source.join(name)` 比较。
+/// `installed` 下缺文件返回 `Ok(false)`；只读，不改动任何文件。
+pub fn install_matches(source_exe: &Path, source: &Path, installed: &Path) -> io::Result<bool> {
+    let [exe_name, rest @ ..] = files_to_copy();
+    let pairs = std::iter::once((source_exe.to_path_buf(), exe_name))
+        .chain(rest.into_iter().map(|name| (source.join(name), name)));
+    for (src, name) in pairs {
+        if !same_contents(&src, &installed.join(name))? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// `dst` 存在、是文件，且与 `src` 内容逐字节相同。`dst` 不存在时为 `Ok(false)`。
+fn same_contents(src: &Path, dst: &Path) -> io::Result<bool> {
+    let dst_meta = match fs::metadata(dst) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if !dst_meta.is_file() || dst_meta.len() != fs::metadata(src)?.len() {
+        return Ok(false);
+    }
+    Ok(fs::read(src)? == fs::read(dst)?)
+}
+
+/// 安装目录里的 owner.sid 内容恰好等于 `sid`（缺失、读不了、不一致都为 false）。
+pub fn owner_matches(installed: &Path, sid: &str) -> bool {
+    fs::read_to_string(installed.join(OWNER_SID_FILE)).is_ok_and(|s| s == sid)
+}
+
+/// `--check-install`：服务已注册并在运行（或正在启动）、owner.sid 就是 `owner_sid`，
+/// 且已安装的文件与当前 exe / `source` 完全一致。只读，不需要管理员。
+pub fn check_install(source: &Path, owner_sid: &str) -> Result<bool, String> {
+    let mgr = manager(ServiceManagerAccess::CONNECT)?;
+    let Some(svc) = open(&mgr, ServiceAccess::QUERY_STATUS)? else {
+        return Ok(false);
+    };
+    // 已停止或被禁用的服务要走完整安装（重设自动启动并启动）
+    let state = svc.query_status().map_err(|e| failed("查询服务状态", e))?.current_state;
+    if !matches!(state, ServiceState::Running | ServiceState::StartPending) {
+        return Ok(false);
+    }
+    let dir = install_dir()?;
+    if !owner_matches(&dir, owner_sid) {
+        return Ok(false);
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("无法确定本程序路径：{e}"))?;
+    install_matches(&exe, source, &dir).map_err(|e| format!("比较组件文件失败：{e}"))
+}
+
+/// 本机或域用户的 SID：`S-1-5-21-` 后跟 4 段十进制数。
+pub fn valid_owner_sid(sid: &str) -> bool {
+    ["S-1-5-21-", "S-1-12-1-"].iter().any(|prefix| {
+        sid.strip_prefix(prefix).is_some_and(|rest| {
+            let parts: Vec<&str> = rest.split('-').collect();
+            parts.len() == 4
+                && parts
+                    .iter()
+                    .all(|p| p.parse::<u32>().is_ok() && !p.starts_with('+'))
+        })
+    })
+}
+
+/// 当前进程是否以提升后的管理员身份运行。
+pub fn is_elevated() -> bool {
+    let mut token: HANDLE = std::ptr::null_mut();
+    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut len = 0u32;
+    // SAFETY: 伪句柄无需关闭；token 只在本函数内使用并关闭；elevation/len 是可写的局部变量。
+    unsafe {
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut _ as *mut _,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        );
+        CloseHandle(token);
+        ok != 0 && elevation.TokenIsElevated != 0
+    }
+}
+
+/// 停止旧服务 → 复制文件 → 写 owner.sid → 创建或更新服务（自动启动、LocalSystem）
+/// → 服务 DACL 给所有者启动/停止/查询 → 故障恢复 → 启动服务并等它进入运行状态。
+pub fn install(owner_sid: &str, source: &Path) -> Result<(), String> {
+    if !valid_owner_sid(owner_sid) {
+        return Err(format!("无效的所有者 SID：{owner_sid}"));
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("无法确定本程序路径：{e}"))?;
+    let [exe_name, rest @ ..] = files_to_copy();
+    let mut copies = vec![(exe, exe_name)];
+    for name in rest {
+        let src = source.join(name);
+        if !src.is_file() {
+            return Err(format!("找不到组件文件：{}", src.display()));
+        }
+        copies.push((src, name));
+    }
+
+    let mgr = manager(ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE)?;
+    if let Some(svc) = open(&mgr, ServiceAccess::STOP | ServiceAccess::QUERY_STATUS)? {
+        stop_and_wait(&svc)?;
+    }
+
+    let dir = install_dir()?;
+    fs::create_dir_all(&dir).map_err(|e| format!("创建 {} 失败：{e}", dir.display()))?;
+    protect_dir(&dir)?;
+    let mut pending = Vec::new();
+    for (src, name) in copies {
+        let dst = dir.join(name);
+        // 用已安装的 exe 重新安装：就是同一个文件
+        if same_path(&src.to_string_lossy(), &dst.to_string_lossy()) {
+            continue;
+        }
+        // 内容相同就不覆盖：已加载的驱动文件被内核占用，写入必然失败
+        let same = same_contents(&src, &dst)
+            .map_err(|e| format!("比较 {} 与 {} 失败：{e}", src.display(), dst.display()))?;
+        if !same {
+            pending.push((src, dst));
+        }
+    }
+    // 驱动在内核里加载期间，系统一直占用它的 .sys；分流服务停了，驱动也不会自己卸载
+    if pending.iter().any(|(_, dst)| dst.file_name() == Some(DRIVER_FILE.as_ref())) {
+        stop_driver(&mgr, &dir.join(DRIVER_FILE))?;
+    }
+    for (src, dst) in pending {
+        retry(|| fs::copy(&src, &dst).map(drop))
+            .map_err(|e| format!("复制 {} 到 {} 失败：{e}", src.display(), dst.display()))?;
+    }
+    let sid_file = dir.join(OWNER_SID_FILE);
+    fs::write(&sid_file, owner_sid)
+        .map_err(|e| format!("写入 {} 失败：{e}", sid_file.display()))?;
+
+    let info = ServiceInfo {
+        name: SERVICE_NAME.into(),
+        display_name: DISPLAY_NAME.into(),
+        service_type: ServiceType::OWN_PROCESS,
+        start_type: ServiceStartType::AutoStart,
+        error_control: ServiceErrorControl::Normal,
+        executable_path: dir.join(EXE_NAME),
+        launch_arguments: Vec::<OsString>::new(),
+        dependencies: Vec::new(),
+        account_name: None,
+        account_password: None,
+    };
+    let access = ServiceAccess::QUERY_STATUS
+        | ServiceAccess::START
+        | ServiceAccess::CHANGE_CONFIG
+        | ServiceAccess::READ_CONTROL
+        | ServiceAccess::WRITE_DAC;
+    let svc = match open(&mgr, access)? {
+        Some(svc) => {
+            svc.change_config(&info)
+                .map_err(|e| failed("更新服务配置", e))?;
+            svc
+        }
+        None => mgr
+            .create_service(&info, access)
+            .map_err(|e| failed("创建服务", e))?,
+    };
+    svc.set_description(DESCRIPTION)
+        .map_err(|e| failed("设置服务描述", e))?;
+    grant_owner(&svc, owner_sid)?;
+    let restart = |secs| ServiceAction {
+        action_type: ServiceActionType::Restart,
+        delay: Duration::from_secs(secs),
+    };
+    svc.update_failure_actions(ServiceFailureActions {
+        reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(24 * 60 * 60)),
+        reboot_msg: None,
+        command: None,
+        actions: Some(vec![restart(1), restart(5), restart(30)]),
+    })
+    .map_err(|e| failed("设置故障恢复", e))?;
+    // 服务以非 0 退出码自行停止（例如管道出错）时也按故障恢复重启
+    svc.set_failure_actions_on_non_crash_failures(true)
+        .map_err(|e| failed("设置故障恢复", e))?;
+
+    match svc.start::<&str>(&[]) {
+        Err(e) if os_code(&e) == Some(ERROR_SERVICE_ALREADY_RUNNING) => {}
+        r => r.map_err(|e| failed("启动服务", e))?,
+    }
+    wait_running(&svc)
+}
+
+/// 停止并删除服务 → 删除全部 Routa WFP 过滤器 → 删除安装目录。尽量做完每一步，最后汇总错误。
+pub fn uninstall() -> Result<(), String> {
+    let mut errors = Vec::new();
+    let mgr = manager(ServiceManagerAccess::CONNECT)?;
+    let access = ServiceAccess::STOP | ServiceAccess::QUERY_STATUS | ServiceAccess::DELETE;
+    if let Some(svc) = open(&mgr, access)? {
+        // 停服失败时保留注册信息和文件，让下一次卸载仍可正常重试。
+        stop_and_wait(&svc)?;
+        match svc.delete() {
+            Err(e) if os_code(&e) != Some(ERROR_SERVICE_MARKED_FOR_DELETE) => {
+                errors.push(failed("删除服务", e))
+            }
+            _ => {}
+        }
+    }
+    if let Err(e) = cleanup_filters() {
+        errors.push(e);
+    }
+    match install_dir() {
+        Ok(dir) => match retry(|| fs::remove_dir_all(&dir)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                errors.push(format!("删除 {} 失败：{e}", dir.display()))
+            }
+            _ => {}
+        },
+        Err(e) => errors.push(e),
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
+}
+
+/// 停止服务（如在运行，之后不再启动）并删除全部 Routa WFP 过滤器。
+pub fn cleanup() -> Result<(), String> {
+    let mgr = manager(ServiceManagerAccess::CONNECT)?;
+    if let Some(svc) = open(&mgr, ServiceAccess::STOP | ServiceAccess::QUERY_STATUS)? {
+        stop_and_wait(&svc)?;
+    }
+    cleanup_filters()
+}
+
+fn cleanup_filters() -> Result<(), String> {
+    wfp::open()
+        .and_then(|mut w| w.cleanup_all())
+        .map_err(|e| format!("清理 WFP 过滤器失败：{e}"))
+}
+
+fn manager(access: ServiceManagerAccess) -> Result<ServiceManager, String> {
+    ServiceManager::local_computer(None::<&str>, access).map_err(|e| failed("连接服务管理器", e))
+}
+
+/// 打开本服务；不存在时为 None。
+fn open(mgr: &ServiceManager, access: ServiceAccess) -> Result<Option<Service>, String> {
+    match mgr.open_service(SERVICE_NAME, access) {
+        Ok(svc) => Ok(Some(svc)),
+        Err(e) if os_code(&e) == Some(ERROR_SERVICE_DOES_NOT_EXIST) => Ok(None),
+        Err(e) => Err(failed("打开服务", e)),
+    }
+}
+
+/// 停止服务并等到它停下（最多 [`STOP_TIMEOUT`]）。正在启动时等它启动完再停。
+fn stop_and_wait(svc: &Service) -> Result<(), String> {
+    stop_target(&mut ServiceStop { svc, processes: Vec::new() }, STOP_TIMEOUT, POLL)
+}
+
+/// SCM 的 Stopped 早于服务 EXE 完全退出：持有原进程句柄，避免 PID 复用影响等待结果。
+struct ServiceProcess { pid: u32, handle: HANDLE }
+
+impl ServiceProcess {
+    fn exited(&self) -> Result<bool, String> {
+        // SAFETY: 句柄在 ServiceProcess 存活期间有效，零超时只查询是否退出。
+        match unsafe { WaitForSingleObject(self.handle, 0) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(format!("等待旧分流服务进程失败：{}", io::Error::last_os_error())),
+        }
+    }
+}
+
+impl Drop for ServiceProcess {
+    fn drop(&mut self) {
+        // SAFETY: handle 来自 OpenProcess，并由此对象独占。
+        unsafe { CloseHandle(self.handle) };
+    }
+}
+
+trait StopTarget {
+    fn poll(&mut self) -> Result<ServiceState, String>;
+    fn request_stop(&mut self) -> Result<(), String>;
+    fn processes_exited(&self) -> Result<bool, String>;
+}
+
+struct ServiceStop<'a> { svc: &'a Service, processes: Vec<ServiceProcess> }
+
+impl StopTarget for ServiceStop<'_> {
+    fn poll(&mut self) -> Result<ServiceState, String> {
+        let status = self.svc.query_status().map_err(|e| failed("查询服务状态", e))?;
+        if let Some(pid) = status.process_id.filter(|pid| *pid != 0) {
+            if !self.processes.iter().any(|p| p.pid == pid) {
+                // SAFETY: 只请求等待权限；在停服前保留句柄，既不终止也不修改进程。
+                let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                if handle.is_null() {
+                    let e = io::Error::last_os_error();
+                    // 查询和 OpenProcess 之间进程可能刚好退出。
+                    if e.raw_os_error() != Some(ERROR_INVALID_PARAMETER as i32) {
+                        return Err(format!("无法等待旧分流服务进程 {pid}：{e}"));
+                    }
+                } else {
+                    self.processes.push(ServiceProcess { pid, handle });
+                }
+            }
+        }
+        Ok(status.current_state)
+    }
+
+    fn request_stop(&mut self) -> Result<(), String> {
+        match self.svc.stop() {
+            Err(e) if !matches!(os_code(&e), Some(ERROR_SERVICE_NOT_ACTIVE | ERROR_SERVICE_CANNOT_ACCEPT_CTRL)) =>
+                Err(failed("停止服务", e)),
+            _ => Ok(()),
+        }
+    }
+
+    fn processes_exited(&self) -> Result<bool, String> {
+        for p in &self.processes {
+            if !p.exited()? { return Ok(false); }
+        }
+        Ok(true)
+    }
+}
+
+fn stop_target(target: &mut impl StopTarget, limit: Duration, poll: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + limit;
+    loop {
+        let state = target.poll()?;
+        if state == ServiceState::Stopped && target.processes_exited()? {
+            return Ok(());
+        }
+        if state == ServiceState::Running {
+            target.request_stop()?;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("分流服务或旧服务进程在 {} 秒内没有退出，请稍后重试", limit.as_secs()));
+        }
+        sleep(poll);
+    }
+}
+
+/// 停止并等待从 `driver_file` 加载的 WinDivert 驱动卸载，好让新的 .sys 能覆盖进去。
+/// 驱动服务不存在，或加载的是别处的 .sys（其他程序自带的 WinDivert），就什么都不做。
+/// 只在分流服务已停止后调用：本组件已不再持有 WinDivert 句柄。
+fn stop_driver(mgr: &ServiceManager, driver_file: &Path) -> Result<(), String> {
+    let access = ServiceAccess::QUERY_CONFIG | ServiceAccess::STOP | ServiceAccess::QUERY_STATUS;
+    let svc = match mgr.open_service(DRIVER_SERVICE, access) {
+        Ok(svc) => svc,
+        Err(e) if os_code(&e) == Some(ERROR_SERVICE_DOES_NOT_EXIST) => return Ok(()),
+        Err(e) => return Err(failed("打开 WinDivert 驱动服务", e)),
+    };
+    let image = svc
+        .query_config()
+        .map_err(|e| failed("读取 WinDivert 驱动服务配置", e))?
+        .executable_path;
+    if !same_path(driver_image_path(&image.to_string_lossy()), &driver_file.to_string_lossy()) {
+        return Ok(());
+    }
+    stop_and_wait(&svc).map_err(|e| {
+        format!("WinDivert 驱动没有卸载，无法更新 {DRIVER_FILE}（可能有其他程序正在使用它，重启电脑后再试）：{e}")
+    })
+}
+
+/// 驱动服务的 ImagePath 常带 NT 前缀 `\??\` 或 `\\?\`，去掉后才是普通的 Win32 路径。
+fn driver_image_path(image: &str) -> &str {
+    image
+        .strip_prefix(r"\??\")
+        .or_else(|| image.strip_prefix(r"\\?\"))
+        .unwrap_or(image)
+}
+
+/// 等服务进入运行状态（最多 [`START_TIMEOUT`]）。
+fn wait_running(svc: &Service) -> Result<(), String> {
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        let status = svc.query_status().map_err(|e| failed("查询服务状态", e))?;
+        match status.current_state {
+            ServiceState::Running => return Ok(()),
+            ServiceState::Stopped => {
+                return Err(format!("服务启动失败（退出码 {:?}）", status.exit_code))
+            }
+            _ if Instant::now() >= deadline => {
+                return Err(format!(
+                    "服务在 {} 秒内没有进入运行状态",
+                    START_TIMEOUT.as_secs()
+                ))
+            }
+            _ => sleep(POLL),
+        }
+    }
+}
+
+/// 把服务 DACL 设为 [`service_sddl`]。
+fn grant_owner(svc: &Service, owner_sid: &str) -> Result<(), String> {
+    let sd = SecurityDescriptor::from_sddl(&service_sddl(owner_sid))
+        .map_err(|e| format!("生成服务权限失败：{e}"))?;
+    // SAFETY: 服务句柄由 svc 持有且有 WRITE_DAC；sd 是有效的自相对安全描述符。
+    let ok = unsafe { SetServiceObjectSecurity(svc.raw_handle(), DACL_SECURITY_INFORMATION, sd.0) };
+    if ok == 0 {
+        return Err(format!("设置服务权限失败：{}", io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+/// 服务 DACL：SCM 给新服务的默认 DACL（[`DEFAULT_SERVICE_DACL`]）加一条所有者 ACE
+/// （启动、停止、查询状态）。每次安装都从固定基线生成，换所有者重新安装时旧所有者的权限随之消失。
+fn service_sddl(owner_sid: &str) -> String {
+    format!("{DEFAULT_SERVICE_DACL}(A;;{OWNER_SERVICE_RIGHTS:#x};;;{owner_sid})")
+}
+
+/// 在 [`FILE_RETRY`] 内重试文件操作（服务刚停止时文件可能仍被占用）；`NotFound` 不重试。
+fn retry(mut f: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    let deadline = Instant::now() + FILE_RETRY;
+    loop {
+        match f() {
+            Err(e) if e.kind() != io::ErrorKind::NotFound && Instant::now() < deadline => {
+                sleep(POLL)
+            }
+            r => return r,
+        }
+    }
+}
+
+fn os_code(e: &windows_service::Error) -> Option<u32> {
+    match e {
+        windows_service::Error::Winapi(e) => e.raw_os_error().map(|c| c as u32),
+        _ => None,
+    }
+}
+
+/// windows_service 的 `Winapi` 错误本身只显示 "IO error in winapi call"，这里展开系统错误信息。
+fn failed(what: &str, e: windows_service::Error) -> String {
+    match e {
+        windows_service::Error::Winapi(e) => format!("{what}失败：{e}"),
+        e => format!("{what}失败：{e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FakeStop {
+        states: std::collections::VecDeque<ServiceState>,
+        polls: usize,
+        stops: usize,
+        exit_after: usize,
+    }
+
+    impl StopTarget for FakeStop {
+        fn poll(&mut self) -> Result<ServiceState, String> {
+            self.polls += 1;
+            Ok(if self.states.len() > 1 { self.states.pop_front().unwrap() } else { *self.states.front().unwrap() })
+        }
+        fn request_stop(&mut self) -> Result<(), String> { self.stops += 1; Ok(()) }
+        fn processes_exited(&self) -> Result<bool, String> { Ok(self.polls >= self.exit_after) }
+    }
+
+    #[test]
+    fn stopped_scm_state_does_not_release_files_before_old_process_exits() {
+        let mut target = FakeStop {
+            states: [ServiceState::StartPending, ServiceState::Running, ServiceState::StopPending, ServiceState::Stopped].into(),
+            polls: 0, stops: 0, exit_after: 7,
+        };
+        stop_target(&mut target, Duration::from_secs(1), Duration::ZERO).unwrap();
+        assert_eq!(target.stops, 1);
+        assert_eq!(target.polls, 7);
+    }
+
+    #[test]
+    fn old_process_still_alive_reports_failure_and_can_be_retried() {
+        let mut target = FakeStop {
+            states: [ServiceState::Stopped].into(), polls: 0, stops: 0, exit_after: usize::MAX,
+        };
+        assert!(stop_target(&mut target, Duration::ZERO, Duration::ZERO).unwrap_err().contains("旧服务进程"));
+        target.exit_after = 0;
+        stop_target(&mut target, Duration::ZERO, Duration::ZERO).unwrap();
+    }
+
+    #[test]
+    fn real_process_wait_handle_detects_exit_without_touching_service() {
+        use std::os::windows::process::CommandExt;
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/C", "ping -n 2 127.0.0.1 > nul"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn().unwrap();
+        let process = ServiceProcess { pid: child.id(), handle: unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, child.id()) } };
+        assert!(!process.handle.is_null());
+        assert!(!process.exited().unwrap());
+        child.wait().unwrap();
+        assert!(process.exited().unwrap());
+    }
+
+    #[test]
+    fn install_plan_paths() {
+        // 测试进程未改环境变量：已知文件夹与 ProgramFiles 一致
+        let base = PathBuf::from(std::env::var_os("ProgramFiles").unwrap());
+        assert!(base.is_absolute());
+        let dir = install_dir().unwrap();
+        assert_eq!(dir, base.join(r"Routa\ProcessRouting"));
+        assert!(dir.ends_with(r"Routa\ProcessRouting"));
+        assert_eq!(
+            files_to_copy(),
+            [
+                "routa-procsvc.exe",
+                "ProxyBridgeCore.dll",
+                "WinDivert.dll",
+                "WinDivert64.sys"
+            ]
+        );
+    }
+
+    /// 句柄上当前 DACL 的 SDDL（含 P/AI 标志）。
+    fn dacl_sddl_of(dir: &Path) -> String {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
+        };
+        let f = OpenOptions::new()
+            .access_mode(READ_CONTROL)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(dir)
+            .unwrap();
+        let mut sd = std::ptr::null_mut();
+        let mut s: PWSTR = std::ptr::null_mut();
+        let mut len = 0u32;
+        // SAFETY: 句柄有效；sd、s 由系统 LocalAlloc，用后释放。
+        unsafe {
+            let err = GetSecurityInfo(
+                f.as_raw_handle() as _,
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut sd,
+            );
+            assert_eq!(err, 0);
+            let ok = ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                sd,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut s,
+                &mut len,
+            );
+            assert_ne!(ok, 0);
+            let out = String::from_utf16_lossy(std::slice::from_raw_parts(s, len as usize));
+            LocalFree(s as _);
+            LocalFree(sd);
+            out.trim_end_matches('\0').to_string()
+        }
+    }
+
+    #[test]
+    fn install_dir_sddl_is_protected_and_parses() {
+        use windows_sys::Win32::Security::{GetSecurityDescriptorControl, SE_DACL_PROTECTED};
+        assert_eq!(
+            INSTALL_DIR_SDDL,
+            "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)"
+        );
+        let sd = SecurityDescriptor::from_sddl(INSTALL_DIR_SDDL).unwrap();
+        let (mut control, mut rev) = (0u16, 0u32);
+        // SAFETY: sd 有效。
+        assert_ne!(
+            unsafe { GetSecurityDescriptorControl(sd.0, &mut control, &mut rev) },
+            0
+        );
+        assert_ne!(control & SE_DACL_PROTECTED, 0);
+        assert!(set_dacl(
+            &fs::File::open(std::env::current_exe().unwrap()).unwrap(),
+            "not sddl"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn protect_dir_sets_dacl_and_refuses_reparse_points() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ProcessRouting");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("a.txt"), b"x").unwrap();
+        // 已存在的目录照样重设（本进程是目录所有者，非管理员也能改 DACL）
+        protect_dir(&dir).unwrap();
+        let got = dacl_sddl_of(&dir);
+        assert!(got.starts_with("D:PAI"), "{got}");
+        for ace in [
+            "(A;OICI;FA;;;SY)",
+            "(A;OICI;FA;;;BA)",
+            "(A;OICI;0x1200a9;;;BU)",
+        ] {
+            assert!(got.contains(ace), "{ace} missing in {got}");
+        }
+        assert_eq!(got.matches("(A;").count(), 3, "{got}");
+
+        // 目录联接（以及经过联接的路径）拒绝
+        let link = tmp.path().join("link");
+        fs::create_dir(tmp.path().join("other")).unwrap();
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(tmp.path().join("other"))
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "mklink /J failed");
+        let e = protect_dir(&link).unwrap_err();
+        assert!(e.contains("目录联接"), "{e}");
+
+        // 还原成本用户可删的权限，好让临时目录被清理
+        let f = OpenOptions::new()
+            .access_mode(READ_CONTROL | WRITE_DAC)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&dir)
+            .unwrap();
+        set_dacl(&f, "D:PAI(A;OICI;FA;;;WD)").unwrap();
+    }
+
+    #[test]
+    fn install_matches_compares_every_file() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let [exe, rest @ ..] = files_to_copy();
+        let src_exe = src.path().join(exe);
+        std::fs::write(&src_exe, b"exe").unwrap();
+        std::fs::write(dst.path().join(exe), b"exe").unwrap();
+        for name in rest {
+            std::fs::write(src.path().join(name), name.as_bytes()).unwrap();
+            std::fs::write(dst.path().join(name), name.as_bytes()).unwrap();
+        }
+        assert!(install_matches(&src_exe, src.path(), dst.path()).unwrap());
+        std::fs::write(dst.path().join(rest[0]), b"changed").unwrap();
+        assert!(!install_matches(&src_exe, src.path(), dst.path()).unwrap());
+        std::fs::remove_file(dst.path().join(rest[0])).unwrap();
+        assert!(!install_matches(&src_exe, src.path(), dst.path()).unwrap());
+    }
+
+    #[test]
+    fn same_contents_detects_missing_changed_and_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, dst) = (dir.path().join("src.sys"), dir.path().join("dst.sys"));
+        std::fs::write(&src, b"driver").unwrap();
+        assert!(!same_contents(&src, &dst).unwrap());
+        std::fs::write(&dst, b"driveR").unwrap();
+        assert!(!same_contents(&src, &dst).unwrap());
+        std::fs::write(&dst, b"driver").unwrap();
+        assert!(same_contents(&src, &dst).unwrap());
+        // 内容相同时不打开写入：目标被独占（模拟内核占用的 .sys）也能比较
+        use std::os::windows::fs::OpenOptionsExt;
+        let _locked = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&dst).unwrap();
+        assert!(same_contents(&src, &dst).unwrap());
+    }
+
+    #[test]
+    fn driver_image_path_strips_nt_prefixes() {
+        let file = r"C:\Program Files\Routa\ProcessRouting\WinDivert64.sys";
+        for image in [
+            r"\??\C:\Program Files\Routa\ProcessRouting\WinDivert64.sys",
+            r"\\?\C:\Program Files\Routa\ProcessRouting\WinDivert64.sys",
+            r"c:\program files\routa\processrouting\windivert64.sys",
+        ] {
+            assert!(same_path(driver_image_path(image), file), "{image}");
+        }
+        assert!(!same_path(driver_image_path(r"\??\C:\Other\WinDivert64.sys"), file));
+    }
+
+    #[test]
+    fn owner_matches_requires_exact_sid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "S-1-5-21-1-2-3-1001";
+        assert!(!owner_matches(dir.path(), sid));
+        std::fs::write(dir.path().join(OWNER_SID_FILE), sid).unwrap();
+        assert!(owner_matches(dir.path(), sid));
+        assert!(!owner_matches(dir.path(), "S-1-5-21-1-2-3-1002"));
+        std::fs::write(dir.path().join(OWNER_SID_FILE), format!("{sid}\n")).unwrap();
+        assert!(!owner_matches(dir.path(), sid));
+    }
+
+    #[test]
+    fn owner_sid_validation() {
+        assert!(valid_owner_sid(
+            "S-1-12-1-1234567890-1234567890-123456789-1234567890"
+        ));
+        assert!(valid_owner_sid(
+            "S-1-5-21-1004336348-1177238915-682003330-1001"
+        ));
+        for bad in [
+            "",
+            "S-1-5-18",
+            "S-1-12-1-1-2-3",
+            "S-1-12-2-1-2-3-4",
+            "S-1-5-32-544",
+            "S-1-5-21-1-2-3",
+            "S-1-5-21-1-2-3-4-5",
+            "S-1-5-21-1-2-3-x",
+            "S-1-5-21-1-2-3-+4",
+            "S-1-5-21-1-2-3-4)(A;;GA;;;WD",
+            "S-1-5-21-1-2-3-99999999999",
+        ] {
+            assert!(!valid_owner_sid(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn service_dacl_from_fixed_baseline() {
+        let old = "S-1-5-21-1-2-3-1001";
+        let new = "S-1-12-1-5-6-7-8";
+        let sddl = service_sddl(new);
+        assert_eq!(sddl, format!("{DEFAULT_SERVICE_DACL}(A;;0x34;;;{new})"));
+        // 换所有者：只有新所有者的 ACE，与上次安装无关
+        assert!(!sddl.contains(old), "{sddl}");
+        assert_eq!(sddl.matches(";;;S-1-").count(), 1, "{sddl}");
+        // 生成的 SDDL 能被系统解析
+        SecurityDescriptor::from_sddl(&service_sddl(old)).unwrap();
+        SecurityDescriptor::from_sddl(&sddl).unwrap();
+    }
+}

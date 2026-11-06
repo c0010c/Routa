@@ -1,0 +1,350 @@
+[
+  {
+    "id": "welcome",
+    "label": "首次启动",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "simple-empty",
+    "label": "首次进入",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "import",
+    "label": "导入订阅",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "import-success",
+    "label": "导入完成",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "simple-home",
+    "label": "待连接",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "simple-connected",
+    "label": "代理已开启",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "node-picker",
+    "label": "选择节点",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "simple-apps",
+    "label": "指定应用",
+    "box": {
+      "height": 672,
+      "pageWidth": 1905,
+      "width": 920,
+      "x": 600.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "app-picker",
+    "label": "添加应用",
+    "box": {
+      "height": 672,
+      "pageWidth": 1905,
+      "width": 920,
+      "x": 600.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "component",
+    "label": "组件安装",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "nodes",
+    "label": "订阅与节点",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "settings",
+    "label": "设置",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "diagnostics",
+    "label": "诊断",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "loading",
+    "label": "加载中",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "error-connect",
+    "label": "连接失败",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "error-import",
+    "label": "订阅更新失败",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "error-permission",
+    "label": "权限未授予",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "error-port",
+    "label": "端口被占用",
+    "box": {
+      "height": 640,
+      "pageWidth": 1905,
+      "width": 520,
+      "x": 800.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-overview",
+    "label": "概览",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-listeners",
+    "label": "代理",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-process",
+    "label": "进程分流",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 70
+    },
+    "verified": true
+  },
+  {
+    "id": "full-exits",
+    "label": "出口",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-nodes",
+    "label": "订阅与节点",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-settings",
+    "label": "设置",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-listener-dialog",
+    "label": "新建监听器",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-exit-dialog",
+    "label": "新建出口",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-rule-dialog",
+    "label": "新建分流规则",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-subscription-dialog",
+    "label": "编辑订阅",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  },
+  {
+    "id": "full-tailscale",
+    "label": "Tailscale 节点",
+    "box": {
+      "height": 738,
+      "pageWidth": 1905,
+      "width": 1100,
+      "x": 510.5,
+      "y": 98
+    },
+    "verified": true
+  }
+]

@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build installers and create draft release
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check tag matches app version
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $versions = @{
+            'src-tauri/tauri.conf.json' = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+            'package.json' = (Get-Content package.json -Raw | ConvertFrom-Json).version
+            'src-tauri/Cargo.toml' = ((Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value)
+          }
+          foreach ($file in $versions.Keys) {
+            if ("v$($versions[$file])" -ne $tag) { throw "Tag $tag does not match version $($versions[$file]) in $file" }
+          }
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '10'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Fetch and verify the pinned mihomo core
+        run: pnpm fetch-mihomo
+      - name: Fetch WinDivert
+        run: pnpm fetch-windivert
+      - name: Build ProxyBridgeCore.dll
+        run: pnpm build-proxybridge
+      - name: Build the process-routing service
+        run: pnpm build-procsvc --locked
+      - name: Build artifact regression tests
+        run: node --test scripts/build-artifacts.test.mjs scripts/updater-manifest.test.mjs
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --workspace
+      - name: Build signed NSIS installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --bundles nsis --config "$PWD/src-tauri/tauri.updater.conf.json" -- --locked
+      - name: Collect release assets
+        run: |
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $name = $config.productName
+          $version = $config.version
+          $bundle = 'src-tauri/target/release/bundle'
+          $assets = @(
+            "$bundle/nsis/${name}_${version}_x64-setup.exe",
+            "$bundle/nsis/${name}_${version}_x64-setup.exe.sig"
+          )
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          foreach ($asset in $assets) {
+            if (!(Test-Path $asset)) { throw "Missing release asset: $asset" }
+            Copy-Item $asset release-assets/
+          }
+      # Second installer for first installs on PCs without WebView2 or without internet access:
+      # it embeds the WebView2 offline installer. Re-bundles the binaries built above (it
+      # overwrites the regular setup.exe in the bundle dir, which was already copied out).
+      # Not signed for the updater and named *_x64-offline-setup.exe, so updater-manifest.mjs
+      # keeps pointing auto-updates at the small installer.
+      - name: Build offline NSIS installer (bundled WebView2)
+        run: |
+          pnpm tauri bundle --bundles nsis --config "$PWD/src-tauri/tauri.offline.conf.json"
+          if ($LASTEXITCODE -ne 0) { throw "tauri bundle failed" }
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $name = $config.productName
+          $version = $config.version
+          $offline = "src-tauri/target/release/bundle/nsis/${name}_${version}_x64-setup.exe"
+          if (!(Test-Path $offline)) { throw "Missing offline installer: $offline" }
+          Copy-Item $offline "release-assets/${name}_${version}_x64-offline-setup.exe"
+      - name: Write checksums
+        run: |
+          Get-ChildItem release-assets | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Set-Content -Encoding ascii release-assets/SHA256SUMS.txt
+          Get-Content release-assets/SHA256SUMS.txt
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ghArgs = @($env:GITHUB_REF_NAME) + (Get-ChildItem release-assets).FullName + @(
+            '--repo', $env:GITHUB_REPOSITORY, '--title', $env:GITHUB_REF_NAME, '--generate-notes', '--draft'
+          )
+          # Tags like v0.2.0-beta.1 are marked as pre-releases.
+          if ($env:GITHUB_REF_NAME -match '-') { $ghArgs += '--prerelease' }
+          gh release create @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }

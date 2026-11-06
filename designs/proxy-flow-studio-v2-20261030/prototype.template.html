@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Routa · 入口到去向 · 独立设计预览</title>
+<style>
+:root{font-family:"Segoe UI","Microsoft YaHei UI",sans-serif;color:#1b1b1b;background:#e9edf2;font-size:14px;color-scheme:light;--blue:#0067c0}
+*{box-sizing:border-box}body{margin:0}button,input,select{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid #0067c0;outline-offset:3px}button:disabled{cursor:default;opacity:.5}
+.review{max-width:1360px;padding:26px 32px;margin:auto}.review h1{font-size:23px;font-weight:600;margin:0 0 7px}.review p{color:#616161;font-size:12px;margin:0;line-height:1.8}.toolbar{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin:19px 0 16px}.tabs{display:flex;gap:3px;background:#dfe5ec;padding:3px;border-radius:6px}.tabs button{border:0;background:transparent;padding:8px 20px;border-radius:4px;color:#616161}.tabs button[aria-pressed=true]{background:white;color:#0067c0;box-shadow:0 1px 3px #17395514}.scenario{display:flex;align-items:center;gap:8px;color:#616161;font-size:12px}.scenario select{border:1px solid #c8cdd3;background:#fff;padding:7px 12px;border-radius:4px;color:#1b1b1b}.links{display:flex;gap:16px;margin-left:auto}a{color:#0067c0;text-decoration:none;font-size:12px}a:hover{text-decoration:underline}
+#stage{position:relative;width:100%;aspect-ratio:1280/768;box-shadow:0 8px 36px #21364c10;border-radius:8px;background:#f3f3f3}#screen>svg{width:100%;height:auto;display:block;border-radius:8px}#stage [data-action]:hover{filter:brightness(.94)}.review-foot{margin-top:16px;display:flex;justify-content:space-between;gap:20px;color:#616161;font-size:12px;line-height:1.8}
+dialog{padding:0;border:1px solid #d6d6d6;border-radius:8px;box-shadow:0 12px 64px #101b3530;width:640px;height:560px;max-width:calc(100vw - 40px);max-height:calc(100dvh - 40px);overflow:hidden;color:#1b1b1b;background:white}dialog::backdrop{background:#0004}dialog[open]{display:flex;flex-direction:column}.dialog-head{height:76px;flex-shrink:0;padding:24px 24px 16px;display:flex;align-items:center;justify-content:space-between}.dialog-head h2{margin:0;font-size:20px;font-weight:600}.close{width:30px;height:30px;border:0;background:transparent;color:#616161;font-size:22px;border-radius:4px}.close:hover{background:#f3f3f3}.node-tools{padding:0 24px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}.node-tools input{height:34px;padding:7px 12px;width:100%;border:1px solid #c8c8c8;border-radius:4px;background:white}.node-tools span{font-size:12px;white-space:nowrap;color:#616161}.nodes{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:16px 24px;border-top:1px solid #e5e5e5;border-bottom:1px solid #e5e5e5;background:#fafafa;display:flex;flex-direction:column;gap:10px}.node{display:flex;align-items:center;justify-content:space-between;flex-shrink:0;width:100%;height:68px;text-align:left;padding:12px 16px;border:1px solid #dedede;border-radius:6px;background:white}.node[aria-checked=true]{border-color:#0067c0;background:#edf5fd;box-shadow:inset 0 0 0 1px #0067c0}.node strong{display:block;font-size:14px;font-weight:600}.node small{display:block;color:#616161;font-size:11px;margin-top:5px}.node .latency{color:#0f7b0f;font-size:13px}.empty{padding:40px;text-align:center;color:#616161;font-size:13px}.feedback{height:76px;flex-shrink:0;padding:12px 24px}.feedback-box{height:52px;display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:4px;font-size:12px;line-height:1.7;color:#616161}.feedback-box.pending{background:#edf5fd;color:#0067c0}.feedback-box.error{background:#fdf0ee;color:#a42419}.feedback-box.success{background:#edf7ed;color:#0f7b0f}.feedback-box p{margin:0}.status-icon{width:16px;height:16px;flex-shrink:0}.spinner{border:2px solid #0067c033;border-top-color:#0067c0;border-radius:50%;animation:spin .8s linear infinite}.dialog-footer{height:66px;flex-shrink:0;border-top:1px solid #e5e5e5;padding:16px 24px;display:flex;align-items:center;gap:10px}.dialog-footer small{margin-right:auto;font-size:12px;color:#616161}.btn{height:34px;min-width:80px;padding:0 18px;border:1px solid #d2d2d2;background:white;border-radius:4px}.btn.primary{color:white;background:#0067c0;border-color:#0067c0;min-width:108px}.btn:active{transform:translateY(1px)}
+#menu{position:absolute;z-index:2;width:156px;padding:5px;border:1px solid #d3d3d3;border-radius:6px;background:white;box-shadow:0 6px 20px #0002}#menu button{width:100%;text-align:left;padding:9px 12px;border:0;background:white;border-radius:4px;font-size:13px;color:#c42b1c}#menu button:hover{background:#fdf0ee}#toast{position:absolute;z-index:3;right:28px;bottom:26px;background:#edf7ed;border:1px solid #c9dec9;border-radius:6px;padding:12px 18px;color:#0f7b0f;font-size:13px;box-shadow:0 3px 15px #0001;max-width:80%;animation:fade .16s ease-out}#toast[hidden],#menu[hidden]{display:none}.highlight{animation:highlight 1.6s ease-out}.disabled-action{pointer-events:none}.disabled-action [fill="#0067c0"]{fill:#0067c0}.spec{margin-top:28px;display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.spec>div{background:#fff;border:1px solid #dde2e8;border-radius:7px;padding:18px}.spec strong{display:block;margin-bottom:8px;font-size:14px;font-weight:600}.spec p{font-size:12px}.spec strong em{font-style:normal;color:#0067c0;margin-right:7px}
+@keyframes spin{to{transform:rotate(360deg)}}@keyframes fade{from{opacity:0}to{opacity:1}}@keyframes highlight{from{fill:#0067c0}to{fill:#1b1b1b}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}@media(max-width:760px){.review{padding:18px 14px}.spec{grid-template-columns:1fr}.links{margin-left:0}.review-foot{display:block}}
+</style>
+</head>
+<body>
+<main class="review">
+ <h1>Routa · 入口 → 去向</h1>
+ <p>独立设计原型 · 虚构数据。可体验“切换节点”、更多菜单和视图切换；其他控件用于布局评审。演示结果在原型外选择。</p>
+ <div class="toolbar">
+  <div class="tabs" aria-label="预览场景"><button data-mode="single" aria-pressed="true">单个代理</button><button data-mode="multiple" aria-pressed="false">多个代理</button></div>
+  <label class="scenario">切换结果 <select id="scenario"><option value="success">成功</option><option value="failure">请求失败</option><option value="unapplied">已保存，未生效</option></select></label>
+  <div class="links"><a href="01-single-refined.png" target="_blank">单代理标注图 ↗</a><a href="02-list-refined.png" target="_blank">多代理标注图 ↗</a></div>
+ </div>
+ <div id="stage"><div id="screen"></div><div id="menu" role="menu" hidden><button role="menuitem" id="deleteItem">删除代理</button></div><div id="toast" role="status" hidden></div></div>
+ <div class="review-foot"><span>名称与状态 → 入口到当前节点 → 策略与网卡 → 延迟、速率与累计量。</span><span>872 × 216 px 信息卡片 / 96 px 列表行</span></div>
+ <div class="spec">
+  <div><strong><em>01</em>切换中</strong><p>按钮保留位置并禁用，800 ms 旋转指示。当前生效节点继续可见，等待运行状态确认；列表和弹窗高度保持不变。</p></div>
+  <div><strong><em>02</em>切换成功</strong><p>确认生效后更新节点名，160 ms 淡入并短暂高亮；2 秒后移除成功提示。减少动态效果时只更新文字与颜色。</p></div>
+  <div><strong><em>03</em>切换失败</strong><p>在固定反馈区说明“未保存”或“已保存未生效”，保留候选选择。弹窗保持打开，原位重试，当前节点与配置选择分开呈现。</p></div>
+ </div>
+<div style="margin-top:28px"><h2 style="font-size:18px;font-weight:600">节点切换动效对比</h2><picture><source media="(prefers-reduced-motion: reduce)" srcset="motion-static.png"><img src="03-node-switch.gif" alt="节点切换成功与失败的动态对比" style="width:100%;border-radius:8px"></picture></div></main>
+<dialog id="picker" aria-labelledby="pickerTitle">
+ <div class="dialog-head"><h2 id="pickerTitle">切换节点 · 机场</h2><button class="close" aria-label="关闭">×</button></div>
+ <div class="node-tools"><input id="search" aria-label="搜索节点" placeholder="搜索节点、来源或协议"><span id="currentLabel">当前生效：新加坡01</span></div>
+ <div class="nodes" id="nodes" role="radiogroup" aria-label="选择节点"></div>
+ <div class="feedback" aria-live="polite"><div class="feedback-box" id="feedback"></div></div>
+ <div class="dialog-footer"><small id="count">3 个可用节点</small><button class="btn" id="cancel">取消</button><button class="btn primary" id="confirm">确认切换</button></div>
+</dialog>
+<dialog id="deleteDialog" aria-labelledby="deleteTitle" style="height:220px;width:440px">
+ <div class="dialog-head"><h2 id="deleteTitle">删除代理？</h2></div>
+ <p style="padding:0 24px;margin:0;flex:1;font-size:13px;color:#616161">删除后将移除该代理的端口与配置。</p>
+ <div class="dialog-footer"><small>设计演示</small><button class="btn" id="keep">取消</button><button class="btn" id="deleteConfirm" style="color:#c42b1c">删除</button></div>
+</dialog>
+<script>
+/* SCREEN_DATA */
+let mode='single',activeRow=0,currentNode='新加坡01',chosen='新加坡01',busy=false,timer=null,toastTimer=null,returnFocus=null;
+const runtime=new Map(),nodeData=[['新加坡01','演示机场 · Shadowsocks','182 ms'],['东京02','演示机场 · VMess','58 ms'],['香港03','演示机场 · Trojan','76 ms']];
+const $=s=>document.querySelector(s),stage=$('#stage'),screen=$('#screen'),picker=$('#picker'),feedback=$('#feedback'),confirm=$('#confirm');
+function notify(message){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,2000)}
+function render(){
+ $('#menu').hidden=true;screen.innerHTML=screens[mode];screen.style.display='contents';
+ document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===mode)));
+ for(const [key,value] of runtime){const [m,slot]=key.split(':');if(m===mode){const target=screen.querySelector('[data-slot="'+slot+'"]');if(target)target.textContent=value}}
+ screen.querySelectorAll('[data-action]').forEach(el=>{if(!['switch','more','view'].includes(el.dataset.action)){el.classList.add('disabled-action');el.removeAttribute('tabindex');el.removeAttribute('role');el.style.cursor='default'}});
+ screen.querySelectorAll('[aria-label]').forEach(el=>{const t=document.createElementNS('http://www.w3.org/2000/svg','title');t.textContent=el.getAttribute('aria-label');el.prepend(t)});
+}
+function selectedTarget(){return screen.querySelector('[data-slot="'+(mode==='single'?'current-node':'node-'+activeRow)+'"]')}
+function setFeedback(kind,message){feedback.className='feedback-box '+kind;feedback.replaceChildren();if(!message)return;if(kind==='pending'){const spinner=document.createElement('span');spinner.className='status-icon spinner';feedback.append(spinner)}const p=document.createElement('p');p.textContent=message;feedback.append(p)}
+function drawNodes(){
+ const list=$('#nodes'),q=$('#search').value.toLowerCase(),shown=nodeData.filter(n=>n.join(' ').toLowerCase().includes(q));list.replaceChildren();
+ for(const [name,source,delay] of shown){const b=document.createElement('button');b.className='node';b.type='button';b.setAttribute('role','radio');b.setAttribute('aria-checked',String(name===chosen));b.disabled=busy;const left=document.createElement('span'),strong=document.createElement('strong'),small=document.createElement('small'),latency=document.createElement('span');strong.textContent=name;small.textContent=source+(name===currentNode?' · 当前生效':'');latency.className='latency';latency.textContent=delay;left.append(strong,small);b.append(left,latency);b.onclick=()=>{chosen=name;setFeedback('','');confirm.textContent='确认切换';drawNodes()};list.append(b)}
+ if(!shown.length){const e=document.createElement('div');e.className='empty';e.textContent='未找到匹配节点';list.append(e)}
+ $('#count').textContent=shown.length+' / '+nodeData.length+' 个可用节点';confirm.disabled=busy||chosen===currentNode;$('#search').disabled=busy;$('#cancel').disabled=busy;$('.close').disabled=busy;
+}
+function openPicker(el){
+ activeRow=Number(el.closest('[data-row]')?.dataset.row||0);currentNode=selectedTarget()?.textContent||'新加坡01';chosen=currentNode;busy=false;returnFocus=el;
+ const proxy=el.closest('[data-proxy]')?.dataset.proxy||'机场';$('#pickerTitle').textContent='切换节点 · '+proxy;$('#currentLabel').textContent=currentNode==='未生效'?'代理当前未生效':'当前生效：'+currentNode;
+ $('#search').value='';setFeedback('','');confirm.textContent='确认切换';drawNodes();picker.showModal();
+}
+function closePicker(){if(busy)return;picker.close();returnFocus?.focus()}
+async function submit(){
+ if(busy||chosen===currentNode)return;busy=true;const outcome=(mode==='multiple'&&activeRow===4&&$('#scenario').value==='success')?'unapplied':$('#scenario').value;confirm.textContent='切换中…';setFeedback('pending','正在切换到'+chosen+'…');drawNodes();
+ timer=setTimeout(()=>{busy=false;timer=null;drawNodes();if(outcome==='success'){
+  const target=selectedTarget();if(target){target.textContent=chosen;target.classList.add('highlight');runtime.set(mode+':'+target.dataset.slot,chosen)}const delaySlot=mode==='single'?'delay-current':'delay-'+activeRow;const metric=screen.querySelector('[data-slot="'+delaySlot+'"]');const measured=nodeData.find(n=>n[0]===chosen)?.[2];if(metric&&measured){metric.textContent=measured;runtime.set(mode+':'+delaySlot,measured)}currentNode=chosen;picker.close();returnFocus?.focus();notify('已切换到'+chosen);
+ }else{confirm.textContent='重试';setFeedback('error',outcome==='failure'?'未能保存节点选择，当前仍为'+currentNode+'。请重试。':(currentNode==='未生效'?'选择已保存，代理尚未启动。端口仍被占用，请编辑配置后重试。':'选择已保存，尚未生效。当前仍为'+currentNode+'，请检查运行状态后重试。'));drawNodes()}},1100);
+}
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{mode=b.dataset.mode;render()});
+stage.addEventListener('click',event=>{const action=event.target.closest('[data-action]');if(!action||action.classList.contains('disabled-action'))return;if(action.dataset.action==='switch')openPicker(action);if(action.dataset.action==='view'){mode=mode==='single'?'multiple':'single';render()}if(action.dataset.action==='more'){
+ const menu=$('#menu'),r=action.getBoundingClientRect(),a=stage.getBoundingClientRect();menu.hidden=!menu.hidden;menu.style.left=Math.max(8,Math.min(a.width-164,r.right-a.left-156))+'px';menu.style.top=Math.min(a.height-54,r.bottom-a.top+4)+'px';$('#deleteItem').focus();
+ }});
+stage.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)&&e.target.matches('[data-action]')){e.preventDefault();e.target.dispatchEvent(new MouseEvent('click',{bubbles:true}))}});
+$('#search').oninput=drawNodes;confirm.onclick=submit;$('#cancel').onclick=closePicker;$('.close').onclick=closePicker;picker.addEventListener('cancel',e=>{if(busy)e.preventDefault()});
+$('#deleteItem').onclick=()=>{$('#menu').hidden=true;$('#deleteDialog').showModal()};$('#keep').onclick=()=>$('#deleteDialog').close();$('#deleteConfirm').onclick=()=>{$('#deleteDialog').close();notify('删除操作演示完成')};
+document.addEventListener('pointerdown',e=>{if(!e.target.closest('#menu,[data-action="more"]'))$('#menu').hidden=true});document.addEventListener('keydown',e=>{if(e.key==='Escape')$('#menu').hidden=true});
+render();
+</script>
+</body>
+</html>

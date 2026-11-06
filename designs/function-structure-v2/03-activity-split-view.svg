@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="832" viewBox="0 0 1200 832">
+<defs>
+    <linearGradient id="mica" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e9f0fc"/><stop offset=".55" stop-color="#f3f4f8"/><stop offset="1" stop-color="#f5f0f8"/></linearGradient>
+    <linearGradient id="bluewash" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#eef5ff"/><stop offset="1" stop-color="#fafbfe"/></linearGradient>
+    <linearGradient id="graphwash" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#60cdff" stop-opacity=".18"/><stop offset="1" stop-color="#60cdff" stop-opacity="0"/></linearGradient>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="10" cy="10" r=".7" fill="#dce2ea"/></pattern>
+    <filter id="shadow" x="-10%" y="-15%" width="120%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#172749" flood-opacity=".06"/></filter>
+    </defs>
+<g font-family="Microsoft YaHei UI,Microsoft YaHei,Segoe UI,sans-serif">
+<rect x="0" y="0" width="1200" height="832" rx="8" fill="#f3f3f3" stroke="#d7dce4" />
+<rect x="10" y="9" width="14" height="14" rx="2" fill="#0067c0" stroke="none" />
+<text x="30" y="20" font-size="12" fill="#202126" font-weight="400" text-anchor="start">Routa</text>
+<path d="M1080 16L1090 16" fill="none" stroke="#202126" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1127" y="11" width="9" height="9" rx="0" fill="none" stroke="#202126" />
+<path d="M1173 11l9 9m0-9-9 9" fill="none" stroke="#202126" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1" y="33" width="199" height="798" rx="0" fill="#f3f3f3" stroke="none" />
+<rect x="20" y="48" width="25" height="25" rx="5" fill="#0067c0" stroke="none" />
+<path d="M28 54v10q0 3 3 3h5M36 55v8m-2-2 2 2 2-2" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+<text x="55" y="66" font-size="16" fill="#202126" font-weight="600" text-anchor="start">Routa</text>
+<text x="22" y="807" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">v0.2.0</text>
+<rect x="9" y="99" width="182" height="40" rx="5" fill="#e4e4e4" stroke="none" />
+<rect x="10" y="108" width="3" height="22" rx="1.5" fill="#0067c0" stroke="none" />
+<rect x="27" y="111" width="6" height="9" rx="0.6" fill="none" stroke="#32373d" />
+<rect x="37" y="111" width="6" height="5" rx="0.6" fill="none" stroke="#32373d" />
+<rect x="27" y="124" width="6" height="3" rx="0.6" fill="none" stroke="#32373d" />
+<rect x="37" y="120" width="6" height="7" rx="0.6" fill="none" stroke="#32373d" />
+<text x="58" y="125" font-size="14" fill="#202126" font-weight="600" text-anchor="start">活动中心</text>
+<path d="M33 163h10v16H33M27 171h10m-3-3 3 3-3 3" fill="none" stroke="#32373d" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<text x="58" y="177" font-size="14" fill="#202126" font-weight="400" text-anchor="start">接入管理</text>
+<path d="M35 231V224L29 218m0 5V218h5M35 224l6-6m-5 0h5v5" fill="none" stroke="#32373d" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+<text x="58" y="229" font-size="14" fill="#202126" font-weight="400" text-anchor="start">出口线路</text>
+<path d="M35 275L35 268" fill="none" stroke="#32373d" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="35" cy="268" r="2" fill="#f3f3f3" stroke="#32373d" stroke-width="1.4"/>
+<path d="M35 275L28 274" fill="none" stroke="#32373d" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="28" cy="274" r="2" fill="#f3f3f3" stroke="#32373d" stroke-width="1.4"/>
+<path d="M35 275L42 274" fill="none" stroke="#32373d" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="42" cy="274" r="2" fill="#f3f3f3" stroke="#32373d" stroke-width="1.4"/>
+<path d="M35 275L31 282" fill="none" stroke="#32373d" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="31" cy="282" r="2" fill="#f3f3f3" stroke="#32373d" stroke-width="1.4"/>
+<path d="M35 275L39 282" fill="none" stroke="#32373d" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="39" cy="282" r="2" fill="#f3f3f3" stroke="#32373d" stroke-width="1.4"/>
+<circle cx="35" cy="275" r="2" fill="#32373d"/>
+<text x="58" y="281" font-size="14" fill="#202126" font-weight="400" text-anchor="start">节点资源</text>
+<circle cx="35" cy="772" r="5.5" fill="none" stroke="#32373d" stroke-width="2.5" stroke-dasharray="3 2"/>
+<circle cx="35" cy="772" r="2.3" fill="none" stroke="#32373d"/>
+<text x="58" y="778" font-size="14" fill="#202126" font-weight="400" text-anchor="start">设置</text>
+<text x="224" y="80" font-size="25" fill="#202126" font-weight="600" text-anchor="start">活动中心</text>
+<text x="224" y="105" font-size="12" fill="#6d7179" font-weight="400" text-anchor="start">同时观察连接与日志，按目标或入口定位问题</text>
+<circle cx="1032" cy="73" r="3" fill="#147d3e"/>
+<text x="1044" y="78" font-size="11" fill="#6d7179" font-weight="400" text-anchor="start">内核运行中</text>
+<circle cx="1157" cy="74" r="1.1" fill="#6d7179"/>
+<circle cx="1161" cy="74" r="1.1" fill="#6d7179"/>
+<circle cx="1165" cy="74" r="1.1" fill="#6d7179"/>
+<rect x="224" y="128" width="380" height="32" rx="4" fill="#fff" stroke="#d9dde3" />
+<circle cx="238" cy="142" r="4" fill="none" stroke="#9299a2"/>
+<path d="M241 145L245 149" fill="none" stroke="#9299a2" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="254" y="149" font-size="11" fill="#9299a2" font-weight="400" text-anchor="start">搜索域名、IP 或程序</text>
+<rect x="616" y="127" width="183" height="34" rx="4" fill="#fff" stroke="#d0d6de" />
+<text x="627" y="149" font-size="13" fill="#202126" font-weight="400" text-anchor="start">全部入口</text>
+<path d="M780 142l3.5 3.5 3.5-3.5" fill="none" stroke="#6d7179" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1088" y="128" width="88" height="32" rx="4" fill="#fff" stroke="#d9dde3" />
+<text x="1132.0" y="149" font-size="12" fill="#202126" font-weight="500" text-anchor="middle">暂停更新</text>
+<text x="224" y="196" font-size="16" fill="#202126" font-weight="600" text-anchor="start">实时连接</text>
+<text x="329" y="195" font-size="11" fill="#6d7179" font-weight="400" text-anchor="start">12 条</text>
+<rect x="224" y="213" width="648" height="258" rx="7" fill="#fff" stroke="#e1e4e8" />
+<text x="240" y="239" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">目标地址</text>
+<text x="484" y="239" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">入口</text>
+<text x="662" y="239" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">下载累计</text>
+<path d="M224 254L872 254" fill="none" stroke="#e1e4e8" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="225" y="254" width="646" height="53" rx="0" fill="#edf5ff" stroke="none" />
+<text x="240" y="276" font-size="11" fill="#202126" font-weight="400" text-anchor="start">docs.example.com:443</text>
+<text x="240" y="294" font-size="9" fill="#6d7179" font-weight="400" text-anchor="start">chrome.exe · TCP</text>
+<text x="484" y="276" font-size="10" fill="#202126" font-weight="400" text-anchor="start">浏览器 · 7894</text>
+<text x="662" y="276" font-size="10" fill="#202126" font-weight="400" text-anchor="start">2.4 MB</text>
+<path d="M846 275l6 6m0-6-6 6" fill="none" stroke="#8c9198" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M224 307L872 307" fill="none" stroke="#e1e4e8" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="240" y="329" font-size="11" fill="#202126" font-weight="400" text-anchor="start">api.example.net:443</text>
+<text x="240" y="347" font-size="9" fill="#6d7179" font-weight="400" text-anchor="start">Code.exe · TCP</text>
+<text x="484" y="329" font-size="10" fill="#202126" font-weight="400" text-anchor="start">机场 · 7893</text>
+<text x="662" y="329" font-size="10" fill="#202126" font-weight="400" text-anchor="start">628 KB</text>
+<path d="M846 328l6 6m0-6-6 6" fill="none" stroke="#8c9198" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M224 360L872 360" fill="none" stroke="#e1e4e8" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="240" y="382" font-size="11" fill="#202126" font-weight="400" text-anchor="start">media.example.net:443</text>
+<text x="240" y="400" font-size="9" fill="#6d7179" font-weight="400" text-anchor="start">局域网设备 · UDP</text>
+<text x="484" y="382" font-size="10" fill="#202126" font-weight="400" text-anchor="start">机场 · 7893</text>
+<text x="662" y="382" font-size="10" fill="#202126" font-weight="400" text-anchor="start">8.1 MB</text>
+<path d="M846 381l6 6m0-6-6 6" fill="none" stroke="#8c9198" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M224 413L872 413" fill="none" stroke="#e1e4e8" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="240" y="435" font-size="11" fill="#202126" font-weight="400" text-anchor="start">files.example.org:443</text>
+<text x="240" y="453" font-size="9" fill="#6d7179" font-weight="400" text-anchor="start">aria2c.exe · TCP</text>
+<text x="484" y="435" font-size="10" fill="#202126" font-weight="400" text-anchor="start">下载器 · 7895</text>
+<text x="662" y="435" font-size="10" fill="#202126" font-weight="400" text-anchor="start">12.3 MB</text>
+<path d="M846 434l6 6m0-6-6 6" fill="none" stroke="#8c9198" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<text x="224" y="508" font-size="16" fill="#202126" font-weight="600" text-anchor="start">日志</text>
+<rect x="281" y="490" width="89" height="22" rx="4" fill="#eaf3fc" stroke="none" />
+<text x="287" y="505" font-size="11" fill="#0067c0" font-weight="400" text-anchor="start">按当前目标筛选</text>
+<text x="872" y="507" font-size="11" fill="#0067c0" font-weight="400" text-anchor="end">全部日志 →</text>
+<rect x="224" y="526" width="648" height="247" rx="7" fill="#fff" stroke="#e1e4e8" />
+<text x="238" y="555" font-size="9" fill="#6d7179" font-weight="400" text-anchor="start">14:32:08</text>
+<rect x="302" y="541" width="45" height="19" rx="3" fill="#f0f2f5" stroke="none" />
+<text x="324.5" y="554" font-size="9" fill="#6b7583" font-weight="500" text-anchor="middle">INFO</text>
+<text x="361" y="555" font-size="10" fill="#202126" font-weight="400" text-anchor="start">docs.example.com:443 → 机场出口</text>
+<path d="M238 573L856 573" fill="none" stroke="#f0f1f3" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="238" y="603" font-size="9" fill="#6d7179" font-weight="400" text-anchor="start">14:32:08</text>
+<rect x="302" y="589" width="45" height="19" rx="3" fill="#f0f2f5" stroke="none" />
+<text x="324.5" y="602" font-size="9" fill="#6b7583" font-weight="500" text-anchor="middle">INFO</text>
+<text x="361" y="603" font-size="10" fill="#202126" font-weight="400" text-anchor="start">TCP connection established</text>
+<path d="M238 621L856 621" fill="none" stroke="#f0f1f3" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="238" y="651" font-size="9" fill="#6d7179" font-weight="400" text-anchor="start">14:32:04</text>
+<rect x="302" y="637" width="45" height="19" rx="3" fill="#f0f2f5" stroke="none" />
+<text x="324.5" y="650" font-size="9" fill="#6b7583" font-weight="500" text-anchor="middle">INFO</text>
+<text x="361" y="651" font-size="10" fill="#202126" font-weight="400" text-anchor="start">机场出口配置已应用</text>
+<path d="M238 669L856 669" fill="none" stroke="#f0f1f3" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="238" y="699" font-size="9" fill="#6d7179" font-weight="400" text-anchor="start">14:31:58</text>
+<rect x="302" y="685" width="45" height="19" rx="3" fill="#f0f2f5" stroke="none" />
+<text x="324.5" y="698" font-size="9" fill="#6b7583" font-weight="500" text-anchor="middle">INFO</text>
+<text x="361" y="699" font-size="10" fill="#202126" font-weight="400" text-anchor="start">Listener 浏览器 is ready</text>
+<text x="239" y="756" font-size="9" fill="#6d7179" font-weight="400" text-anchor="start">按目标 / 入口关联，无法关联的记录仍可在全部日志查看。</text>
+<rect x="888" y="213" width="288" height="560" rx="7" fill="#fff" stroke="#e1e4e8" />
+<text x="907" y="244" font-size="15" fill="#202126" font-weight="600" text-anchor="start">连接详情</text>
+<text x="907" y="281" font-size="14" fill="#202126" font-weight="600" text-anchor="start">docs.example.com</text>
+<text x="907" y="305" font-size="11" fill="#6d7179" font-weight="400" text-anchor="start">TCP · 443</text>
+<text x="907" y="349" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">来源程序</text>
+<text x="907" y="373" font-size="12" fill="#202126" font-weight="400" text-anchor="start">chrome.exe</text>
+<text x="907" y="409" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">代理入口</text>
+<text x="907" y="433" font-size="12" fill="#202126" font-weight="400" text-anchor="start">浏览器 · 7894</text>
+<text x="907" y="469" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">当前出口</text>
+<text x="907" y="493" font-size="12" fill="#202126" font-weight="400" text-anchor="start">机场出口</text>
+<text x="907" y="529" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">当前节点</text>
+<text x="907" y="553" font-size="12" fill="#202126" font-weight="400" text-anchor="start">SG 新加坡01</text>
+<text x="907" y="589" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">持续时间</text>
+<text x="907" y="613" font-size="12" fill="#202126" font-weight="400" text-anchor="start">2 分 18 秒</text>
+<text x="907" y="649" font-size="10" fill="#6d7179" font-weight="400" text-anchor="start">下载累计</text>
+<text x="907" y="673" font-size="12" fill="#202126" font-weight="400" text-anchor="start">2.4 MB</text>
+<rect x="907" y="716" width="250" height="32" rx="4" fill="#fff" stroke="#e4bdbb" />
+<text x="1032.0" y="737" font-size="12" fill="#b52f28" font-weight="500" text-anchor="middle">断开此连接</text>
+</g></svg>

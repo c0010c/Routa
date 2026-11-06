@@ -1,0 +1,15 @@
+mixed-port: 0
+allow-lan: false
+bind-address: 127.0.0.1
+external-controller: 127.0.0.1:19197
+secret: spk-ts-1
+log-level: info
+mode: rule
+proxies:
+  - name: ts-a
+    type: tailscale
+    hostname: mihomo-spike-a
+    state-dir: tailscale/t1
+    ephemeral: true
+listeners:
+  - {name: l-ts-a, type: mixed, listen: 127.0.0.1, port: 19201, proxy: ts-a}

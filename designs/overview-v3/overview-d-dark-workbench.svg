@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="832" viewBox="0 0 1200 832">
+<defs>
+    <linearGradient id="mica" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e9f0fc"/><stop offset=".55" stop-color="#f3f4f8"/><stop offset="1" stop-color="#f5f0f8"/></linearGradient>
+    <linearGradient id="bluewash" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#eef5ff"/><stop offset="1" stop-color="#fafbfe"/></linearGradient>
+    <linearGradient id="graphwash" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#60cdff" stop-opacity=".18"/><stop offset="1" stop-color="#60cdff" stop-opacity="0"/></linearGradient>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="10" cy="10" r=".7" fill="#dce2ea"/></pattern>
+    <filter id="shadow" x="-10%" y="-15%" width="120%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#172749" flood-opacity=".06"/></filter>
+    </defs>
+<g font-family="Microsoft YaHei UI,Microsoft YaHei,Segoe UI,sans-serif">
+<rect x="0" y="0" width="1200" height="832" rx="8" fill="#202020" stroke="#3e3e3e" />
+<rect x="10" y="9" width="14" height="14" rx="2" fill="#60cdff" stroke="none" />
+<text x="30" y="20" font-size="12" fill="#ddd" font-weight="400" text-anchor="start">Routa</text>
+<path d="M1080 16L1090 16" fill="none" stroke="#ccc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1127" y="11" width="9" height="9" rx="0" fill="none" stroke="#ccc" />
+<path d="M1173 11l9 9m0-9-9 9" fill="none" stroke="#ccc" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1" y="33" width="1198" height="56" rx="0" fill="#272727" stroke="none" />
+<rect x="23" y="48" width="27" height="27" rx="6" fill="#60cdff" stroke="none" />
+<path d="M31 55v10q0 3 4 3h6M40 55v8m-3-3 3 3 3-3" fill="none" stroke="#202020" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+<text x="61" y="67" font-size="17" fill="#f0f0f0" font-weight="600" text-anchor="start">Routa</text>
+<text x="180" y="67" font-size="13" fill="#f4f4f4" font-weight="600" text-anchor="start">概览</text>
+<text x="260" y="67" font-size="13" fill="#b8b8b8" font-weight="400" text-anchor="start">监听器</text>
+<text x="358" y="67" font-size="13" fill="#b8b8b8" font-weight="400" text-anchor="start">进程分流</text>
+<text x="478" y="67" font-size="13" fill="#b8b8b8" font-weight="400" text-anchor="start">出口</text>
+<text x="556" y="67" font-size="13" fill="#b8b8b8" font-weight="400" text-anchor="start">节点</text>
+<text x="634" y="67" font-size="13" fill="#b8b8b8" font-weight="400" text-anchor="start">Tailscale</text>
+<rect x="184" y="82" width="20" height="3" rx="1.5" fill="#60cdff" stroke="none" />
+<circle cx="1146" cy="62" r="5.5" fill="none" stroke="#c6c6c6" stroke-width="2.5" stroke-dasharray="3 2"/>
+<circle cx="1146" cy="62" r="2.3" fill="none" stroke="#c6c6c6"/>
+<text x="32" y="134" font-size="27" fill="#f5f5f5" font-weight="600" text-anchor="start">概览</text>
+<circle cx="1042" cy="125" r="3" fill="#6ccb5f"/>
+<text x="1054" y="130" font-size="12" fill="#c2c2c2" font-weight="400" text-anchor="start">内核运行中</text>
+<rect x="1058" y="153" width="110" height="32" rx="4" fill="#60cdff" stroke="none" />
+<text x="1113.0" y="174" font-size="12" fill="#202020" font-weight="500" text-anchor="middle">＋ 新建监听器</text>
+<text x="32" y="177" font-size="14" fill="#eeeeee" font-weight="600" text-anchor="start">流量监控</text>
+<rect x="32" y="201" width="744" height="267" rx="7" fill="#292929" stroke="#383838" />
+<text x="53" y="232" font-size="11" fill="#aaa" font-weight="400" text-anchor="start">下载速率</text>
+<text x="53" y="267" font-size="32" fill="#f5f5f5" font-weight="600" text-anchor="start">444</text>
+<text x="130" y="265" font-size="14" fill="#aaa" font-weight="400" text-anchor="start">B/s</text>
+<text x="235" y="232" font-size="11" fill="#aaa" font-weight="400" text-anchor="start">上传速率</text>
+<text x="235" y="266" font-size="21" fill="#d3d3d3" font-weight="500" text-anchor="start">0 B/s</text>
+<text x="754" y="232" font-size="11" fill="#999" font-weight="400" text-anchor="end">最近 60 秒</text>
+<path d="M54 308.45L752 308.45" fill="none" stroke="#363636" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M54 358.5L752 358.5" fill="none" stroke="#363636" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M54 408.55L752 408.55" fill="none" stroke="#363636" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M54.0 417.1L71.9 412.8L89.8 415.7L107.7 411.4L125.6 412.8L143.5 410.0L161.4 414.3L179.3 401.4L197.2 407.1L215.1 395.7L233.0 385.7L250.9 388.5L268.8 364.2L286.7 377.1L304.6 369.9L322.5 328.5L340.4 352.8L358.3 341.3L376.2 365.6L394.1 304.2L411.9 327.0L429.8 359.9L447.7 351.4L465.6 378.5L483.5 388.5L501.4 381.4L519.3 402.8L537.2 398.5L555.1 407.1L573.0 404.3L590.9 410.0L608.8 402.8L626.7 408.6L644.6 400.0L662.5 408.6L680.4 405.7L698.3 407.1L716.2 410.0L734.1 404.3L752.0 407.1L752 430L54 430Z" fill="url(#graphwash)"/>
+<path d="M54.0 417.1L71.9 412.8L89.8 415.7L107.7 411.4L125.6 412.8L143.5 410.0L161.4 414.3L179.3 401.4L197.2 407.1L215.1 395.7L233.0 385.7L250.9 388.5L268.8 364.2L286.7 377.1L304.6 369.9L322.5 328.5L340.4 352.8L358.3 341.3L376.2 365.6L394.1 304.2L411.9 327.0L429.8 359.9L447.7 351.4L465.6 378.5L483.5 388.5L501.4 381.4L519.3 402.8L537.2 398.5L555.1 407.1L573.0 404.3L590.9 410.0L608.8 402.8L626.7 408.6L644.6 400.0L662.5 408.6L680.4 405.7L698.3 407.1L716.2 410.0L734.1 404.3L752.0 407.1" fill="none" stroke="#60cdff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+<text x="54" y="449" font-size="10" fill="#999" font-weight="400" text-anchor="start">60 秒前</text>
+<text x="754" y="449" font-size="10" fill="#999" font-weight="400" text-anchor="end">现在</text>
+<rect x="792" y="201" width="376" height="267" rx="7" fill="#292929" stroke="#383838" />
+<text x="814" y="232" font-size="12" fill="#aaa" font-weight="400" text-anchor="start">运行状态</text>
+<text x="814" y="284" font-size="44" fill="#f4f4f4" font-weight="600" text-anchor="start">3</text>
+<text x="854" y="282" font-size="15" fill="#e3e3e3" font-weight="400" text-anchor="start">个监听器运行中</text>
+<circle cx="818" cy="312" r="3" fill="#6ccb5f"/>
+<text x="830" y="317" font-size="12" fill="#b9b9b9" font-weight="400" text-anchor="start">所有配置均已生效</text>
+<path d="M814 339L1146 339" fill="none" stroke="#414141" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="814" y="367" font-size="11" fill="#aaa" font-weight="400" text-anchor="start">累计上传</text>
+<text x="1146" y="367" font-size="15" fill="#f2f2f2" font-weight="500" text-anchor="end">153.1 MB</text>
+<text x="814" y="400" font-size="11" fill="#aaa" font-weight="400" text-anchor="start">累计下载</text>
+<text x="1146" y="400" font-size="15" fill="#f2f2f2" font-weight="500" text-anchor="end">164.2 MB</text>
+<text x="814" y="443" font-size="11" fill="#a6a6a6" font-weight="400" text-anchor="start">内核操作</text>
+<circle cx="1134" cy="438" r="1.1" fill="#aaa"/>
+<circle cx="1138" cy="438" r="1.1" fill="#aaa"/>
+<circle cx="1142" cy="438" r="1.1" fill="#aaa"/>
+<text x="32" y="510" font-size="16" fill="#eee" font-weight="600" text-anchor="start">监听器</text>
+<text x="113" y="509" font-size="12" fill="#999" font-weight="400" text-anchor="start">3 个</text>
+<text x="1168" y="509" font-size="12" fill="#b0b0b0" font-weight="400" text-anchor="end">全部 3     异常 0</text>
+<rect x="32" y="530" width="1136" height="240" rx="7" fill="#292929" stroke="#383838" />
+<text x="52" y="556" font-size="11" fill="#999" font-weight="400" text-anchor="start">入口</text>
+<text x="302" y="556" font-size="11" fill="#999" font-weight="400" text-anchor="start">出口 / 节点</text>
+<text x="735" y="556" font-size="11" fill="#999" font-weight="400" text-anchor="start">网卡</text>
+<text x="895" y="556" font-size="11" fill="#999" font-weight="400" text-anchor="start">延迟与流量</text>
+<text x="1086" y="556" font-size="11" fill="#999" font-weight="400" text-anchor="start">操作</text>
+<path d="M32 572L1168 572" fill="none" stroke="#414141" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="33" y="572" width="1134" height="66" rx="0" fill="#2d353c" stroke="none" />
+<rect x="33" y="588" width="3" height="34" rx="1.5" fill="#60cdff" stroke="none" />
+<circle cx="56" cy="596" r="3" fill="#6ccb5f"/>
+<text x="68" y="601" font-size="14" fill="#eee" font-weight="600" text-anchor="start">机场</text>
+<text x="68" y="621" font-size="11" fill="#aaa" font-weight="400" text-anchor="start">7893 · SOCKS5</text>
+<text x="302" y="601" font-size="13" fill="#eee" font-weight="400" text-anchor="start">机场出口</text>
+<text x="405" y="601" font-size="13" fill="#777" font-weight="400" text-anchor="start">→</text>
+<text x="435" y="601" font-size="13" fill="#eee" font-weight="400" text-anchor="start">SG 新加坡01</text>
+<path d="M596 594l3.5 3.5 3.5-3.5" fill="none" stroke="#aaa" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<text x="302" y="621" font-size="10" fill="#9aa7b1" font-weight="400" text-anchor="start">共用 · 2 个入口</text>
+<text x="735" y="601" font-size="12" fill="#c1c1c1" font-weight="400" text-anchor="start">系统默认</text>
+<text x="895" y="599" font-size="12" fill="#6ccb5f" font-weight="400" text-anchor="start">182 ms</text>
+<text x="982" y="599" font-size="11" fill="#c4c4c4" font-weight="400" text-anchor="start">↓ 359 B/s</text>
+<text x="895" y="620" font-size="10" fill="#999" font-weight="400" text-anchor="start">↑ 0 B/s</text>
+<rect x="1086" y="596" width="32" height="17" rx="8.5" fill="#60cdff" stroke="none" />
+<circle cx="1110" cy="604.5" r="5.5" fill="#fff"/>
+<circle cx="1142" cy="604" r="1.1" fill="#aaa"/>
+<circle cx="1146" cy="604" r="1.1" fill="#aaa"/>
+<circle cx="1150" cy="604" r="1.1" fill="#aaa"/>
+<path d="M32 638L1168 638" fill="none" stroke="#383838" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="56" cy="662" r="3" fill="#6ccb5f"/>
+<text x="68" y="667" font-size="14" fill="#eee" font-weight="600" text-anchor="start">浏览器</text>
+<text x="68" y="687" font-size="11" fill="#aaa" font-weight="400" text-anchor="start">7894 · 混合</text>
+<text x="302" y="667" font-size="13" fill="#eee" font-weight="400" text-anchor="start">机场出口</text>
+<text x="405" y="667" font-size="13" fill="#777" font-weight="400" text-anchor="start">→</text>
+<text x="435" y="667" font-size="13" fill="#eee" font-weight="400" text-anchor="start">SG 新加坡01</text>
+<path d="M596 660l3.5 3.5 3.5-3.5" fill="none" stroke="#aaa" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<text x="302" y="687" font-size="10" fill="#9aa7b1" font-weight="400" text-anchor="start">共用 · 2 个入口</text>
+<text x="735" y="667" font-size="12" fill="#c1c1c1" font-weight="400" text-anchor="start">系统默认</text>
+<text x="895" y="665" font-size="12" fill="#6ccb5f" font-weight="400" text-anchor="start">182 ms</text>
+<text x="982" y="665" font-size="11" fill="#c4c4c4" font-weight="400" text-anchor="start">↓ 0 B/s</text>
+<text x="895" y="686" font-size="10" fill="#999" font-weight="400" text-anchor="start">↑ 0 B/s</text>
+<rect x="1086" y="662" width="32" height="17" rx="8.5" fill="#60cdff" stroke="none" />
+<circle cx="1110" cy="670.5" r="5.5" fill="#fff"/>
+<circle cx="1142" cy="670" r="1.1" fill="#aaa"/>
+<circle cx="1146" cy="670" r="1.1" fill="#aaa"/>
+<circle cx="1150" cy="670" r="1.1" fill="#aaa"/>
+<path d="M32 704L1168 704" fill="none" stroke="#383838" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="56" cy="728" r="3" fill="#6ccb5f"/>
+<text x="68" y="733" font-size="14" fill="#eee" font-weight="600" text-anchor="start">下载器</text>
+<text x="68" y="753" font-size="11" fill="#aaa" font-weight="400" text-anchor="start">7895 · SOCKS5</text>
+<text x="302" y="733" font-size="13" fill="#eee" font-weight="400" text-anchor="start">下载专用</text>
+<text x="405" y="733" font-size="13" fill="#777" font-weight="400" text-anchor="start">→</text>
+<text x="435" y="733" font-size="13" fill="#eee" font-weight="400" text-anchor="start">JP 东京02</text>
+<path d="M596 726l3.5 3.5 3.5-3.5" fill="none" stroke="#aaa" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+<text x="302" y="753" font-size="10" fill="#9aa7b1" font-weight="400" text-anchor="start">独立出口</text>
+<text x="735" y="733" font-size="12" fill="#c1c1c1" font-weight="400" text-anchor="start">系统默认</text>
+<text x="895" y="731" font-size="12" fill="#6ccb5f" font-weight="400" text-anchor="start">96 ms</text>
+<text x="982" y="731" font-size="11" fill="#c4c4c4" font-weight="400" text-anchor="start">↓ 85 B/s</text>
+<text x="895" y="752" font-size="10" fill="#999" font-weight="400" text-anchor="start">↑ 0 B/s</text>
+<rect x="1086" y="728" width="32" height="17" rx="8.5" fill="#60cdff" stroke="none" />
+<circle cx="1110" cy="736.5" r="5.5" fill="#fff"/>
+<circle cx="1142" cy="736" r="1.1" fill="#aaa"/>
+<circle cx="1146" cy="736" r="1.1" fill="#aaa"/>
+<circle cx="1150" cy="736" r="1.1" fill="#aaa"/>
+<text x="32" y="803" font-size="11" fill="#a1a1a1" font-weight="400" text-anchor="start">机场   ·   127.0.0.1:7893</text>
+<rect x="245" y="793" width="9" height="11" rx="1.5" fill="none" stroke="#a1a1a1" />
+<path d="M250 790H242v10" fill="none" stroke="#a1a1a1" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="1168" y="803" font-size="11" fill="#a1a1a1" font-weight="400" text-anchor="end">仅本机访问</text>
+</g></svg>

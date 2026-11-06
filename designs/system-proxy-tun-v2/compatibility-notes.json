@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-29",
+  "scope": "仓库只读静态核查与官方资料核对；未启动 TUN、未切换系统代理、未进行共存实机测试。",
+  "findings": [
+    {
+      "topic": "系统代理目标",
+      "conclusion": "产品默认提供 HTTP 或 Mixed 入口；不能将 Socks-only 入口当作通用 Windows SOCKS5 系统代理。",
+      "sources": [
+        "https://learn.microsoft.com/en-us/windows/win32/wininet/wininet-vs-winhttp",
+        "https://wiki.metacubex.one/config/inbound/port/"
+      ]
+    },
+    {
+      "topic": "系统代理与进程规则",
+      "conclusion": "不是天然互斥，但当前进程规则绕过本地回环。程序遵循指向入口 B 的系统代理时，可能进入 B，而不是其进程规则指定的入口 A；不能承诺进程规则始终优先。",
+      "evidence": [
+        "src-tauri/procsvc/src/pb_ffi.rs:396-404 localhost_via_proxy=FALSE",
+        "third_party/proxybridge/src/ProxyBridge.c:918-923 回环改为 DIRECT",
+        "src-tauri/procsvc/src/wfp.rs:3 回环放行权重高于阻断"
+      ]
+    },
+    {
+      "topic": "TUN 独立出站配置",
+      "conclusion": "端口已有 proxy 指定出口，全局兜底为 MATCH,REJECT。仅追加 tun.enable 不会继承端口出口。TUN 应独立关联默认出口或专用路由。",
+      "evidence": [
+        "src-tauri/src/config_gen/mod.rs:294 MATCH,REJECT",
+        "src-tauri/src/config_gen/mod.rs:391 端口 proxy",
+        "src-tauri/src/config_gen/mod.rs:546-547 当前不生成 tun/dns"
+      ],
+      "sources": [
+        "https://wiki.metacubex.one/config/inbound/tun/",
+        "https://wiki.metacubex.one/config/inbound/listeners/tun/"
+      ]
+    }
+  ],
+  "requires_runtime_validation": [
+    "TUN 与 WinDivert 的捕获顺序、出站防回环和 TCP/UDP 回程",
+    "IPv4/IPv6 与域名、Fake-IP、DNS 行为",
+    "strict-route 与现有 WFP 放行/阻断规则的交互",
+    "服务退出、内核重启、切换模式时的路由、DNS、系统代理和 WFP 恢复"
+  ],
+  "design_rule": "保留独立状态和当前目标；不宣称组合模式已有固定优先级，不将 TUN 与进程代理写死为必须互斥或无条件兼容。"
+}

@@ -1,0 +1,87 @@
+{
+  "baseline": {
+    "cardHeight": 88,
+    "chosen": "0",
+    "current": "1",
+    "dialogHeight": 720,
+    "dialogWidth": 960,
+    "footerTop": 757
+  },
+  "empty": {
+    "count": "0 / 20 个候选节点",
+    "empty": "未找到匹配节点",
+    "footerTop": 757,
+    "height": 720
+  },
+  "moreCheck": {
+    "menuOpen": true,
+    "selected": "0"
+  },
+  "pendingCheck": {
+    "busy": 20,
+    "cardHeight": 88,
+    "dialogHeight": 720,
+    "footerTop": 757,
+    "text": "测量中"
+  },
+  "completedCheck": {
+    "busy": 0,
+    "button": "◴ 测延迟",
+    "firstResult": "48ms"
+  },
+  "sameNodeCheck": {
+    "disabled": true,
+    "label": "✓当前使用"
+  },
+  "confirmCheck": {
+    "node": "日本 · 东京 01",
+    "overlayHidden": true,
+    "proxyDelay": "待重测 ⓘ"
+  },
+  "stableHeight": true,
+  "stableFooter": true,
+  "palette": [
+    {
+      "color": "rgb(15, 123, 15)",
+      "index": 0,
+      "matches": true,
+      "text": "48ms"
+    },
+    {
+      "color": "rgb(157, 93, 0)",
+      "index": 1,
+      "matches": true,
+      "text": "487ms"
+    },
+    {
+      "color": "rgb(196, 43, 28)",
+      "index": 2,
+      "matches": true,
+      "text": "782ms"
+    },
+    {
+      "color": "rgb(15, 123, 15)",
+      "index": 3,
+      "matches": true,
+      "text": "170ms"
+    },
+    {
+      "color": "rgb(196, 43, 28)",
+      "index": 4,
+      "matches": true,
+      "text": "超时"
+    },
+    {
+      "color": "rgb(196, 43, 28)",
+      "index": 5,
+      "matches": true,
+      "text": "连接失败"
+    },
+    {
+      "color": "rgb(97, 97, 97)",
+      "index": 7,
+      "matches": true,
+      "text": "未测试"
+    }
+  ]
+}
