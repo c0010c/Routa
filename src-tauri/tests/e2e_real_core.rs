@@ -112,7 +112,7 @@ async fn real_core_two_listeners_direct_exit() {
 
     // Model: one Direct exit, two listeners, free ports (controller included).
     let (p1, p2, ctrl) = (free_port(), free_port(), free_port());
-    let exit = Exit { id: ExitId::new(), name: "直连".into(), kind: ExitKind::Direct, interface: None };
+    let exit = Exit { id: ExitId::new(), name: "直连".into(), kind: ExitKind::Direct, interface: None, hidden: false };
     let mut l1 = Listener::new_default("监听一".into(), p1);
     l1.exit = Some(exit.id.clone());
     let mut l2 = Listener::new_default("监听二".into(), p2);

@@ -128,6 +128,7 @@ mod tests {
     fn listener(listen: &str) -> Listener {
         Listener {
             routing: None,
+            hidden: false,
             id: ListenerId("l1".into()),
             name: "L1".into(),
             listener_type: ListenerType::Socks,
@@ -147,6 +148,8 @@ mod tests {
             match_full_path: true,
             exe_path: String::new(),
             listener: ListenerId("l1".into()),
+            node: None,
+            interface: None,
             on_fault,
             reset_on_change: true,
             user_enabled: true,

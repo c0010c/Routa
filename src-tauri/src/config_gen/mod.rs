@@ -636,9 +636,11 @@ mod tests {
             name: name.into(),
             kind,
             interface: Some(InterfaceGuid(g.into())),
+            hidden: false,
         };
         let lis = |id: &str, name: &str, t, listen: &str, port, auth, e: &str| Listener {
             routing: None,
+            hidden: false,
             id: ListenerId(id.into()),
             name: name.into(),
             listener_type: t,
@@ -1259,6 +1261,7 @@ mod tests {
             name: "出口D".into(),
             kind: group_kind(vec![ExitMember::Node(mref("t1"))]),
             interface: None,
+            hidden: false,
         });
         let v = parse(&gen(&m).yaml);
         let ts: Vec<_> = v["proxies"]

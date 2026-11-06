@@ -192,6 +192,7 @@ fn model_with_listener(bind_nic: bool) -> Model {
         name: "直连出口".into(),
         kind: ExitKind::Direct,
         interface: bind_nic.then(|| InterfaceGuid(NIC_GUID.into())),
+        hidden: false,
     };
     let mut l = Listener::new_default("L1".into(), PORT);
     l.id = ListenerId("lis-1".into());

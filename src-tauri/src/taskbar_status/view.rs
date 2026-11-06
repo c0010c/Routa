@@ -292,7 +292,7 @@ mod tests {
     }
 
     fn exit(id: &str, name: &str, kind: ExitKind) -> Exit {
-        Exit { id: ExitId(id.into()), name: name.into(), kind, interface: None }
+        Exit { id: ExitId(id.into()), name: name.into(), kind, interface: None, hidden: false }
     }
 
     fn manual(id: &str, name: &str) -> ManualNode {
