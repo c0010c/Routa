@@ -1,4 +1,5 @@
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import { visibleListeners } from "../lib/hidden";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import {
   Alert,
@@ -141,7 +142,7 @@ export function TailscaleDialog({ node, onClose }: { node: ManualNode; onClose: 
   const toggleGroup = (id: string) => setGroups((gs) => (gs.includes(id) ? gs.filter((g) => g !== id) : [...gs, id]));
 
   if (creatingExit) {
-    return <ListenerDialog listener={{...newListener(model.data?.listeners ?? []), name: current.name}} initialNode={{manual_id: node.id}} onClose={()=>setCreatingExit(false)} />;
+    return <ListenerDialog listener={{...newListener(model.data ? visibleListeners(model.data) : []), name: current.name}} initialNode={{manual_id: node.id}} onClose={()=>setCreatingExit(false)} />;
   }
 
   const nodeGroups = model.data?.node_groups ?? [];

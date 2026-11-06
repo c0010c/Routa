@@ -74,3 +74,11 @@ describe("collectProblems", () => {
     expect(collectProblems(m, st)).toEqual([]);
   });
 });
+
+describe("collectProblems hidden failed listeners", () => {
+  it("skips failed hidden listeners by id", () => {
+    const m = { ...model, listeners: [...model.listeners, { ...model.listeners[0], id: "h", name: "同名", hidden: true }] };
+    const st: RuntimeStatus = { ...status, health: { exits: {}, listeners: {} }, failed_listeners: [{ id: "h", name: "办公", port: 37800 }] };
+    expect(collectProblems(m, st)).toEqual([]);
+  });
+});
