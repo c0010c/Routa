@@ -791,62 +791,115 @@ fn read_log_tail(path: &std::path::Path, max_bytes: u64) -> Result<String, Strin
     } else { 0 };
     Ok(String::from_utf8_lossy(&bytes[first..]).into_owned())
 }
-#[tauri::command]
-#[specta::specta]
-pub async fn change_process_listener(
-    dt: Dt<'_>,
-    rt: Rt<'_>,
-    id: ProcessRuleId,
-    listener: ListenerId,
-) -> Result<(), String> {
-    let _guard = dt.operation.lock().await;
-    let model = rt.model();
-    let old = model
-        .process_routing
-        .rules
-        .iter()
-        .find(|r| r.id == id)
-        .cloned()
-        .ok_or("规则已不存在")?;
-    let target = model
-        .listeners
-        .iter()
-        .find(|l| l.id == listener)
-        .ok_or("监听器已不存在")?;
-    if target.listener_type == ListenerType::Http || !target.user_enabled {
-        return Err("请选择已启用的混合或 SOCKS5 监听器".into());
-    }
-    rt.mutate_process_routing(|pr| {
-        if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id) {
-            r.listener = listener.clone();
-        }
-    })
-    .await
-    .map_err(validation)?;
-    let needs_ack = model.process_routing.enabled
-        && old.user_enabled
-        && matches!(
-            crate::procroute::client::status().component,
-            crate::procroute::client::ComponentState::Running
-        );
-    if !needs_ack {
-        return Ok(());
-    }
+fn procroute_running() -> bool {
+    matches!(
+        crate::procroute::client::status().component,
+        crate::procroute::client::ComponentState::Running
+    )
+}
+
+/// Asks the process routing component to pick up the current rules and waits
+/// up to 5 s for it to confirm them. Returns whether it confirmed; if not,
+/// applies `revert` to the process routing and returns `Ok(false)`.
+async fn confirm_or_revert(rt: &Runtime, revert: impl FnOnce(&mut ProcessRouting)) -> Result<bool, String> {
     crate::procroute::client::runtime_changed();
     for _ in 0..50 {
-        if crate::procroute::client::current_rules_confirmed(&rt) {
-            return Ok(());
+        if crate::procroute::client::current_rules_confirmed(rt) {
+            return Ok(true);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    rt.mutate_process_routing(|pr| {
-        if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id && r.listener == listener) {
-            r.listener = old.listener.clone();
+    rt.mutate_process_routing(revert).await.map_err(validation)?;
+    Ok(false)
+}
+
+impl Desktop {
+    /// Points rule `id` at `node`. While process routing is on and the rule is
+    /// enabled, waits for the component to confirm; otherwise restores the
+    /// previous node.
+    pub async fn change_process_node(&self, rt: &Runtime, id: ProcessRuleId, node: NodeRef) -> Result<(), String> {
+        let _guard = self.operation.lock().await;
+        let model = rt.model();
+        let old = model
+            .process_routing
+            .rules
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
+            .ok_or("规则已不存在")?;
+        if resolve(&model, &node).is_none() {
+            return Err("节点已失效，请重新选择".into());
         }
-    })
-    .await
-    .map_err(validation)?;
-    Err("监听器切换未能确认生效，已恢复原监听器，请检查组件状态后重试".into())
+        rt.mutate_process_routing(|pr| {
+            if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id) {
+                r.node = Some(node.clone());
+            }
+        })
+        .await
+        .map_err(validation)?;
+        if !(model.process_routing.enabled && old.user_enabled && procroute_running()) {
+            return Ok(());
+        }
+        let confirmed = confirm_or_revert(rt, |pr| {
+            if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id && r.node.as_ref() == Some(&node)) {
+                r.node = old.node.clone();
+            }
+        })
+        .await?;
+        if confirmed {
+            Ok(())
+        } else {
+            Err("节点切换未能确认生效，已恢复原节点，请检查组件状态后重试".into())
+        }
+    }
+
+    /// Enables or disables rule `id`. While process routing is on, waits for
+    /// the component to confirm; otherwise restores the previous state.
+    pub async fn set_process_rule_enabled(&self, rt: &Runtime, id: ProcessRuleId, enabled: bool) -> Result<(), String> {
+        let _guard = self.operation.lock().await;
+        let model = rt.model();
+        let old = model
+            .process_routing
+            .rules
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.user_enabled)
+            .ok_or("规则已不存在")?;
+        rt.mutate_process_routing(|pr| {
+            if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id) {
+                r.user_enabled = enabled;
+            }
+        })
+        .await
+        .map_err(validation)?;
+        if !(model.process_routing.enabled && procroute_running()) {
+            return Ok(());
+        }
+        let confirmed = confirm_or_revert(rt, |pr| {
+            if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id && r.user_enabled == enabled) {
+                r.user_enabled = old;
+            }
+        })
+        .await?;
+        if confirmed {
+            Ok(())
+        } else {
+            let what = if enabled { "启用" } else { "停用" };
+            Err(format!("规则{what}未能确认生效，已恢复原状态，请检查组件状态后重试"))
+        }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn change_process_node(dt: Dt<'_>, rt: Rt<'_>, id: ProcessRuleId, node: NodeRef) -> Result<(), String> {
+    dt.change_process_node(&rt, id, node).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_process_rule_enabled(dt: Dt<'_>, rt: Rt<'_>, id: ProcessRuleId, enabled: bool) -> Result<(), String> {
+    dt.set_process_rule_enabled(&rt, id, enabled).await
 }
 
 #[cfg(test)]

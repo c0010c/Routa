@@ -473,6 +473,28 @@ impl Inner {
         res
     }
 
+    /// `m` is normalized and validated: `mihomo -t` → save → apply. A changed
+    /// controller port or core path restarts a supervised core instead (the
+    /// restart applies the new model). A rejected config changes nothing.
+    async fn check_commit_apply(
+        self: &Arc<Self>,
+        eng: &mut Engine,
+        m: Model,
+    ) -> Result<ApplyOutcome, Vec<ValidationError>> {
+        self.check_model(eng, &m).await?;
+        // A new controller port or binary only takes effect on a fresh core.
+        let (old, new) = (&eng.model.settings, &m.settings);
+        let restart = eng.supervise && (old.controller_port != new.controller_port || old.core_path != new.core_path);
+        self.commit_model(eng, m);
+        if restart {
+            return Ok(match self.start_core(eng).await {
+                Ok(()) => self.status.lock().unwrap().last_apply.clone().unwrap_or_else(core_not_running),
+                Err(error) => ApplyOutcome::NotRunning { error },
+            });
+        }
+        Ok(self.apply(eng).await)
+    }
+
     /// The config `m` would generate must pass `mihomo -t`, or mihomo rejects
     /// the whole config on every later apply. A check that cannot run (e.g.
     /// the core binary is missing) is skipped: nothing would start anyway.
@@ -1220,31 +1242,14 @@ impl Runtime {
         let r = f(&mut m)?;
         normalize(&mut m);
         validate(&m)?;
-        self.inner.check_model(&mut eng, &m).await?;
-        // A new controller port or binary only takes effect on a fresh core.
-        let (old, new) = (&eng.model.settings, &m.settings);
-        let restart = eng.supervise && (old.controller_port != new.controller_port || old.core_path != new.core_path);
-        self.inner.commit_model(&mut eng, m);
-        if restart {
-            let outcome = match self.inner.start_core(&mut eng).await {
-                Ok(()) => self
-                    .inner
-                    .status
-                    .lock()
-                    .unwrap()
-                    .last_apply
-                    .clone()
-                    .unwrap_or_else(core_not_running),
-                Err(error) => ApplyOutcome::NotRunning { error },
-            };
-            return Ok((outcome, r));
-        }
-        Ok((self.inner.apply(&mut eng).await, r))
+        Ok((self.inner.check_commit_apply(&mut eng, m).await?, r))
     }
 
     /// clone → f → normalize → validate (the rules must not name Routa or a
-    /// mihomo binary) → save → update the model → emit. Never reloads or
-    /// restarts mihomo: process routing is not part of its config. Validation
+    /// mihomo binary) → save → update the model → emit. Reloads mihomo (as
+    /// `mutate` does, including `mihomo -t`) only when normalizing changed
+    /// the hidden process-routing listeners/exits; otherwise the change is not
+    /// part of mihomo's config and nothing is reloaded. Validation
     /// errors leave everything untouched. After `shutdown` nothing is saved
     /// and `Ok(())` is returned (the app is exiting; there is nobody to tell).
     pub async fn mutate_process_routing(
@@ -1265,7 +1270,11 @@ impl Runtime {
         if !errors.is_empty() {
             return Err(errors);
         }
-        self.inner.commit_model(&mut eng, m);
+        if m.listeners != eng.model.listeners || m.exits != eng.model.exits {
+            self.inner.check_commit_apply(&mut eng, m).await?;
+        } else {
+            self.inner.commit_model(&mut eng, m);
+        }
         self.inner.emit_status();
         Ok(())
     }
