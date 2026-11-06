@@ -870,6 +870,14 @@ async fn confirm_or_revert(rt: &Runtime, revert: impl FnOnce(&mut ProcessRouting
     Ok(false)
 }
 
+/// Why the rule dialog's save failed: field errors for the form, or a message.
+#[derive(Serialize, Debug, PartialEq, specta::Type)]
+#[serde(untagged)]
+pub enum RuleSaveError {
+    Validation(Vec<ValidationError>),
+    Operation(String),
+}
+
 /// `Err` with the user-facing message when a reload happened and did not
 /// fully succeed.
 fn reload_ok(outcome: &Option<ApplyOutcome>) -> Result<(), String> {
@@ -924,6 +932,49 @@ impl Desktop {
         }
     }
 
+    /// Saves (creates or edits) `rule` from the rule dialog. While process
+    /// routing is on and the rule is (or was) enabled, waits for the component
+    /// to confirm; a failed reload or a missing confirmation restores the
+    /// previous rule (or removes a new one).
+    pub async fn save_process_rule_confirmed(
+        &self,
+        rt: &Runtime,
+        rule: ProcessRule,
+    ) -> Result<Option<ApplyOutcome>, RuleSaveError> {
+        let _guard = self.operation.lock().await;
+        let model = rt.model();
+        let id = rule.id.clone();
+        let old = model.process_routing.rules.iter().find(|r| r.id == id).cloned();
+        let enabled = rule.user_enabled || old.as_ref().is_some_and(|o| o.user_enabled);
+        let outcome = crate::commands::ops::save_process_rule(rt, rule)
+            .await
+            .map_err(RuleSaveError::Validation)?;
+        let saved = rt.model().process_routing.rules.iter().find(|r| r.id == id).cloned();
+        let revert = |pr: &mut ProcessRouting| {
+            let Some(pos) = pr.rules.iter().position(|r| Some(r) == saved.as_ref()) else { return };
+            match &old {
+                Some(o) => pr.rules[pos] = o.clone(),
+                None => {
+                    pr.rules.remove(pos);
+                }
+            }
+        };
+        if let Err(e) = reload_ok(&outcome) {
+            let _ = rt.mutate_process_routing(revert).await;
+            return Err(RuleSaveError::Operation(e));
+        }
+        if !(model.process_routing.enabled && enabled && procroute_running()) {
+            return Ok(outcome);
+        }
+        if confirm_or_revert(rt, revert).await.map_err(RuleSaveError::Operation)? {
+            Ok(outcome)
+        } else {
+            Err(RuleSaveError::Operation(
+                "规则保存未能确认生效，已恢复原状态，请检查组件状态后重试".into(),
+            ))
+        }
+    }
+
     /// Enables or disables rule `id`. While process routing is on, waits for
     /// the component to confirm; otherwise restores the previous state.
     pub async fn set_process_rule_enabled(&self, rt: &Runtime, id: ProcessRuleId, enabled: bool) -> Result<(), String> {
@@ -970,6 +1021,16 @@ impl Desktop {
 #[specta::specta]
 pub async fn change_process_node(dt: Dt<'_>, rt: Rt<'_>, id: ProcessRuleId, node: NodeRef) -> Result<(), String> {
     dt.change_process_node(&rt, id, node).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_process_rule_confirmed(
+    dt: Dt<'_>,
+    rt: Rt<'_>,
+    rule: ProcessRule,
+) -> Result<Option<ApplyOutcome>, RuleSaveError> {
+    dt.save_process_rule_confirmed(&rt, rule).await
 }
 
 #[tauri::command]

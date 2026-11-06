@@ -176,6 +176,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             desktop::set_simple_port,
             desktop::change_process_node,
             desktop::set_process_rule_enabled,
+            desktop::save_process_rule_confirmed,
             desktop::get_connection_details,
             desktop::read_core_log,
             updater::update_status,

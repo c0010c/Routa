@@ -400,6 +400,14 @@ async setProcessRuleEnabled(id: ProcessRuleId, enabled: boolean) : Promise<Resul
     else return { status: "error", error: e  as any };
 }
 },
+async saveProcessRuleConfirmed(rule: ProcessRule) : Promise<Result<ApplyOutcome | null, RuleSaveError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_process_rule_confirmed", { rule }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getConnectionDetails() : Promise<Result<ConnectionInfo[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_connection_details") };
@@ -684,6 +692,10 @@ export type ProjectLink = "Website" | "GitHub"
 export type Rate = { up: number; down: number }
 export type RuleAction = "Proxy" | "Direct" | "Reject"
 export type RuleMatch = "Domain" | "DomainSuffix" | "Ipv4Cidr"
+/**
+ * Why the rule dialog's save failed: field errors for the form, or a message.
+ */
+export type RuleSaveError = ValidationError[] | string
 export type RuleView = { 
 /**
  * "Proxy" | "Direct" | "Block" | "Pending" | "Failed" | "Unknown"

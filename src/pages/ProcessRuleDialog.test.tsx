@@ -9,6 +9,7 @@ vi.mock("../bindings", () => ({
     getStatus: vi.fn(),
     testDelays: vi.fn(),
     saveProcessRule: vi.fn(),
+    saveProcessRuleConfirmed: vi.fn(),
     listRunningProcesses: vi.fn(),
   },
 }));
@@ -94,7 +95,7 @@ describe("ProcessRuleDialog", () => {
   });
 
   it("maps duplicate error to path field", async () => {
-    vi.mocked(commands.saveProcessRule).mockResolvedValue({
+    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({
       status: "error",
       error: [{ DuplicateProcessRule: { exe_path: "C:\\Apps\\curl.exe" } }],
     });
@@ -107,9 +108,31 @@ describe("ProcessRuleDialog", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("saves typed process names and closes", async () => {
-    vi.mocked(commands.saveProcessRule).mockResolvedValue({ status: "ok", data: null });
+  it("saves through save_process_rule_confirmed, not saveProcessRule", async () => {
+    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "ok", data: null });
+    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
     vi.mocked(commands.saveProcessRule).mockClear();
+    const onClose = renderDialog(rule);
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(commands.saveProcessRuleConfirmed).toHaveBeenCalledWith(expect.objectContaining({ id: "r1" }));
+    expect(commands.saveProcessRule).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dialog open and shows the message when the save is not confirmed", async () => {
+    const text = "规则保存未能确认生效，已恢复原状态，请检查组件状态后重试";
+    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "error", error: text });
+    const onClose = renderDialog(rule);
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(text);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("saves typed process names and closes", async () => {
+    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "ok", data: null });
+    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
     const onClose = renderDialog();
     await loaded();
     await pickNode("n1 · 来源甲");
@@ -120,7 +143,7 @@ describe("ProcessRuleDialog", () => {
     fireEvent.change(input, { target: { value: "D:\\Tools\\codex.exe" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    const saved = vi.mocked(commands.saveProcessRule).mock.calls[0][0];
+    const saved = vi.mocked(commands.saveProcessRuleConfirmed).mock.calls[0][0];
     expect(saved).toMatchObject({
       name: "",
       processes: ["ChatGPT.exe", "codex.exe"],
@@ -159,42 +182,42 @@ describe("ProcessRuleDialog", () => {
   });
 
   it("requires at least one process", async () => {
-    vi.mocked(commands.saveProcessRule).mockClear();
+    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
     renderDialog();
     await loaded();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText("至少添加一个进程")).toBeInTheDocument();
-    expect(commands.saveProcessRule).not.toHaveBeenCalled();
+    expect(commands.saveProcessRuleConfirmed).not.toHaveBeenCalled();
   });
 
   it("requires a node and does not save without one", async () => {
-    vi.mocked(commands.saveProcessRule).mockClear();
+    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
     renderDialog();
     await loaded();
     const input = screen.getByRole("combobox", { name: "进程" });
     fireEvent.change(input, { target: { value: "a.exe" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText("请选择一个节点")).toBeInTheDocument();
-    expect(commands.saveProcessRule).not.toHaveBeenCalled();
+    expect(commands.saveProcessRuleConfirmed).not.toHaveBeenCalled();
   });
 
   it("saves the picked node with a null interface", async () => {
-    vi.mocked(commands.saveProcessRule).mockResolvedValue({ status: "ok", data: null });
-    vi.mocked(commands.saveProcessRule).mockClear();
+    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "ok", data: null });
+    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
     const onClose = renderDialog();
     await loaded();
     fireEvent.change(screen.getByRole("combobox", { name: "进程" }), { target: { value: "a.exe" } });
     await pickNode("n1 · 来源甲");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    const saved = vi.mocked(commands.saveProcessRule).mock.calls[0][0];
+    const saved = vi.mocked(commands.saveProcessRuleConfirmed).mock.calls[0][0];
     expect(saved.node).toEqual(n1);
     expect(saved.interface).toBeNull();
   });
 
   it("locks the exit NIC for a Tailscale node and shows the instance NIC", async () => {
-    vi.mocked(commands.saveProcessRule).mockResolvedValue({ status: "ok", data: null });
-    vi.mocked(commands.saveProcessRule).mockClear();
+    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "ok", data: null });
+    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
     const onClose = renderDialog({ ...rule, interface: "{OTHER}" });
     await loaded();
     fireEvent.click(screen.getByText("高级选项"));
@@ -206,7 +229,7 @@ describe("ProcessRuleDialog", () => {
     expect(screen.getByText("在 Tailscale 节点设置里修改")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    const saved = vi.mocked(commands.saveProcessRule).mock.calls[0][0];
+    const saved = vi.mocked(commands.saveProcessRuleConfirmed).mock.calls[0][0];
     expect(saved.node).toEqual({ manual_id: "ts" });
     expect(saved.interface).toBeNull();
   });

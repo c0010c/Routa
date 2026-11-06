@@ -21,8 +21,8 @@ import {
   Typography,
 } from "@mui/material";
 import { useState } from "react";
-import { isValidationError, useModel } from "../api/client";
-import { useRunningProcesses, useSaveProcessRule } from "../api/procroute";
+import { errorMessage, isValidationError, useModel } from "../api/client";
+import { useRunningProcesses, useSaveProcessRuleConfirmed } from "../api/procroute";
 import type { FaultPolicy, ProcessRule, RunningProcess, ValidationError } from "../bindings";
 import { FormDialog } from "../components/FormDialog";
 import { InterfacePicker } from "../components/InterfacePicker";
@@ -65,7 +65,8 @@ export function ProcessRuleDialog({ open, rule, onClose }: { open: boolean; rule
 function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }) {
   const model = useModel();
   const running = useRunningProcesses();
-  const save = useSaveProcessRule();
+  // The dialog stays open on failure and shows the reason itself.
+  const save = useSaveProcessRuleConfirmed({ errorFeedback: "local" });
   const others = (model.data?.process_routing.rules ?? []).filter((x) => x.id !== rule?.id);
   // Mirrors `ProcessRule::default`.
   const [r, setR] = useState<ProcessRule>(
@@ -153,7 +154,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
       await save.mutateAsync({ ...r, name: r.name.trim(), processes, interface: tailscale ? null : (r.interface ?? null) });
       onClose();
     } catch (e) {
-      if (isValidationError(e)) setErrs(ruleErrors(e.errors));
+      setErrs(isValidationError(e) ? ruleErrors(e.errors) : { form: [errorMessage(e)] });
     }
   };
 
