@@ -1816,3 +1816,82 @@ async fn change_process_node_switches_hidden_listener() {
     let gone = NodeRef::Manual { manual_id: ManualNodeId("nope".into()) };
     assert_eq!(ui.change_process_node(&h.rt, rule.id.clone(), gone).await.unwrap_err(), "节点已失效，请重新选择");
 }
+
+fn simple_model_with_two_nodes() -> Model {
+    let mut m = model_with_node();
+    m.manual_nodes.push(ManualNode {
+        id: ManualNodeId("m2".into()),
+        name: "节点2".into(),
+        groups: vec![],
+        kind: ManualNodeKind::Proxy { raw: serde_json::json!({"name":"节点2","type":"socks5","server":"127.0.0.1","port":1081}) },
+    });
+    m
+}
+
+#[tokio::test(start_paused = true)]
+async fn simple_app_rule_uses_simple_node() {
+    let h = harness(&simple_model_with_two_nodes());
+    h.rt.restart_core().await;
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    ui.bind(&h.rt, Some(ListenerId("lis-1".into()))).await.unwrap();
+    assert_eq!(ui.save_app(&h.rt, r"C:\a\a.exe".into(), true).await.unwrap_err(), "请先选择节点");
+    ui.select_node(&h.rt, m1_ref()).await.unwrap();
+    ui.save_app(&h.rt, r"C:\a\a.exe".into(), true).await.unwrap();
+    let rules = h.rt.model().process_routing.rules;
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].node, Some(m1_ref()));
+    assert_eq!(rules[0].interface, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn simple_node_switch_moves_managed_rules() {
+    let h = harness(&simple_model_with_two_nodes());
+    h.rt.restart_core().await;
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    ui.bind(&h.rt, Some(ListenerId("lis-1".into()))).await.unwrap();
+    ui.select_node(&h.rt, m1_ref()).await.unwrap();
+    ui.save_app(&h.rt, r"C:\a\a.exe".into(), true).await.unwrap();
+    ui.save_app(&h.rt, r"C:\b\b.exe".into(), true).await.unwrap();
+    assert_eq!(hidden(&h.rt.model()).len(), 1);
+    let m2 = NodeRef::Manual { manual_id: ManualNodeId("m2".into()) };
+
+    ui.select_node(&h.rt, m2.clone()).await.unwrap();
+
+    let m = h.rt.model();
+    assert_eq!(m.process_routing.rules.len(), 2);
+    assert!(m.process_routing.rules.iter().all(|r| r.node == Some(m2.clone())));
+    let hid = hidden(&m);
+    assert_eq!(hid.len(), 1);
+    let exit = m.exits.iter().find(|e| Some(&e.id) == hid[0].exit.as_ref()).unwrap();
+    assert!(matches!(&exit.kind, ExitKind::Node { node } if *node == m2));
+}
+
+#[tokio::test(start_paused = true)]
+async fn desktop_init_fills_node_for_managed_rules() {
+    let rule = ProcessRule { processes: vec![r"C:\a\a.exe".into()], match_full_path: true, ..ProcessRule::default() };
+    let mut m = simple_model_with_two_nodes();
+    m.exits.push(Exit {
+        id: ExitId("simple-exit".into()),
+        name: "默认代理".into(),
+        kind: ExitKind::Node { node: m1_ref() },
+        interface: None,
+        hidden: false,
+    });
+    m.process_routing.rules.push(rule.clone());
+    let prefs = crate::desktop::UiPreferences {
+        mode: Some(crate::desktop::InterfaceMode::Simple),
+        listener_id: Some(ListenerId("lis-1".into())),
+        exit_id: Some(ExitId("simple-exit".into())),
+        managed_rules: vec![rule.id.clone()],
+        ..Default::default()
+    };
+    let h = harness_with(Some(&m), |data| {
+        std::fs::write(data.join("ui-preferences.json"), serde_json::to_string(&prefs).unwrap()).unwrap();
+    });
+    h.rt.restart_core().await;
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+
+    ui.initialize(&h.rt).await.unwrap();
+
+    assert_eq!(h.rt.model().process_routing.rules[0].node, Some(m1_ref()));
+}
