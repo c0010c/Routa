@@ -1995,3 +1995,51 @@ async fn set_rule_enabled_reverts_when_the_reload_fails() {
     assert!(m.process_routing.rules[0].user_enabled);
     assert!(hidden(&m)[0].user_enabled);
 }
+
+#[tokio::test(start_paused = true)]
+async fn confirmed_rule_save_without_component_saves_and_returns_outcome() {
+    let h = harness(&model_with_node());
+    h.rt.restart_core().await;
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    let mut rule = node_rule(r"C:\Apps\game.exe");
+
+    let out = ui.save_process_rule_confirmed(&h.rt, rule.clone()).await.unwrap();
+    assert!(matches!(out, Some(ApplyOutcome::Reloaded { .. })), "{out:?}");
+    assert_eq!(h.rt.model().process_routing.rules, vec![rule.clone()]);
+    assert_eq!(hidden(&h.rt.model()).len(), 1);
+
+    rule.name = "游戏".into();
+    assert_eq!(ui.save_process_rule_confirmed(&h.rt, rule.clone()).await.unwrap(), None);
+    assert_eq!(h.rt.model().process_routing.rules[0].name, "游戏");
+
+    let bad = ProcessRule { processes: vec![r"C:\app\a.exe".into()], ..ProcessRule::default() };
+    let err = ui.save_process_rule_confirmed(&h.rt, bad).await.unwrap_err();
+    assert!(matches!(err, crate::desktop::RuleSaveError::Validation(ref e) if !e.is_empty()), "{err:?}");
+    assert_eq!(h.rt.model().process_routing.rules.len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn confirmed_rule_save_reverts_when_the_reload_fails() {
+    let h = harness(&simple_model_with_two_nodes());
+    h.rt.restart_core().await;
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    let rule = node_rule(r"C:\Apps\game.exe");
+
+    // A new rule is removed again.
+    reject_next_reload(&h.api);
+    let err = ui.save_process_rule_confirmed(&h.rt, rule.clone()).await.unwrap_err();
+    assert!(
+        matches!(err, crate::desktop::RuleSaveError::Operation(ref e) if e.starts_with("内核重载失败：")),
+        "{err:?}"
+    );
+    assert!(h.rt.model().process_routing.rules.is_empty());
+    assert!(hidden(&h.rt.model()).is_empty());
+
+    // An edited rule gets its previous version back.
+    ui.save_process_rule_confirmed(&h.rt, rule.clone()).await.unwrap();
+    let mut edited = rule.clone();
+    edited.node = Some(NodeRef::Manual { manual_id: ManualNodeId("m2".into()) });
+    reject_next_reload(&h.api);
+    assert!(ui.save_process_rule_confirmed(&h.rt, edited).await.is_err());
+    assert_eq!(h.rt.model().process_routing.rules, vec![rule]);
+}

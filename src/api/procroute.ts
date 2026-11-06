@@ -11,7 +11,8 @@ export function useRunningProcesses() {
   return useQuery({ queryKey: ["runningProcesses"], queryFn: () => commands.listRunningProcesses() });
 }
 
-export const useSaveProcessRule = make(() => commands.saveProcessRule);
+/** The rule dialog's save: waits for the routing component and reverts on failure. */
+export const useSaveProcessRuleConfirmed = make(() => commands.saveProcessRuleConfirmed);
 export const useDeleteProcessRule = make(() => commands.deleteProcessRule);
 export const useSaveProcessRoutingSettings = make(() => commands.saveProcessRoutingSettings);
 // 这三个会弹 UAC；被拒绝时返回的错误文本（如"已取消"）由通用的错误提示显示。
