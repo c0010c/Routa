@@ -127,10 +127,6 @@ fn validation(e: Vec<ValidationError>) -> String {
             }
             ValidationError::CoreRejected { message } => format!("内核未接受配置：{message}"),
             ValidationError::DuplicateProcessRule { exe_path } => format!("{exe_path} 已有分流规则"),
-            ValidationError::ListenerTypeNotAllowed { listener } => format!("监听器「{listener}」不支持 SOCKS5"),
-            ValidationError::ListenerAddressNotAllowed { listener, .. } => {
-                format!("监听器「{listener}」需要 IPv4 地址")
-            }
             ValidationError::TooManyProcessRules { max } => format!("最多同时分流 {max} 个程序"),
             ValidationError::EmptyProcessRule { rule } => format!("规则「{rule}」至少要有一个进程"),
             ValidationError::ProcessNameCannotBlock { rule } => {

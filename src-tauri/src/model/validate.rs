@@ -16,8 +16,6 @@ pub enum ValidationError {
     /// 同一个程序（按文件名）出现在多处：一个程序只能属于一条规则。
     DuplicateProcessRule { exe_path: String },
     InvalidExePath { exe_path: String, reason: String },
-    ListenerTypeNotAllowed { listener: String },
-    ListenerAddressNotAllowed { listener: String, listen: String },
     /// 已启用规则里的进程总数超过上限。
     TooManyProcessRules { max: u32 },
     EmptyProcessRule { rule: String },
@@ -80,21 +78,6 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
             if !seen.insert(key.clone()) && reported.insert(key) {
                 errors.push(ValidationError::DuplicateProcessRule { exe_path: process_file_name(&p).to_string() });
             }
-        }
-        match model.listeners.iter().find(|l| l.id == r.listener) {
-            None => errors.push(ValidationError::DanglingRef {
-                what: format!("process rule[{}].listener -> {}", process_rule_label(r), r.listener.0),
-            }),
-            Some(l) if l.listener_type == ListenerType::Http => {
-                errors.push(ValidationError::ListenerTypeNotAllowed { listener: l.name.clone() })
-            }
-            Some(l) if process_proxy_host(&l.listen).is_none() => {
-                errors.push(ValidationError::ListenerAddressNotAllowed {
-                    listener: l.name.clone(),
-                    listen: l.listen.clone(),
-                })
-            }
-            Some(_) => {}
         }
     }
     if pr.rules.iter().filter(|r| r.user_enabled).map(|r| r.processes.len()).sum::<usize>() > MAX_PROCESS_RULES as usize {
@@ -510,33 +493,19 @@ mod tests {
     }
 
     #[test]
-    fn process_rule_rejects_http_listener() {
-        let mut m = pmodel(|l| vec![prule("C:\\a.exe", l)]);
-        m.listeners[0].listener_type = ListenerType::Http;
-        assert!(errs(&m).contains(&ValidationError::ListenerTypeNotAllowed { listener: "l1".into() }));
-        m.listeners[0].listener_type = ListenerType::Socks;
+    fn process_rule_without_node_or_with_missing_node_is_valid() {
+        let dangling = |e: &[ValidationError]| e.iter().any(|x| matches!(x, ValidationError::DanglingRef { what } if what.contains("process rule")));
+        // node = None, listener points at a nonexistent id.
+        let mut m = pmodel(|l| vec![prule(r"C:\a.exe", l)]);
+        m.process_routing.rules[0].listener = ListenerId("gone".into());
+        assert!(!dangling(&errs(&m)), "{:?}", errs(&m));
         assert_eq!(validate(&m), Ok(()));
-    }
-
-    #[test]
-    fn process_rule_requires_ipv4_listener_but_other_listeners_can_use_ipv6() {
-        let mut m = pmodel(|l| vec![prule("C:\\a.exe", l)]);
-        for listen in ["::", "::1", "[::1]", "2001:db8::1", "::ffff:127.0.0.1", "host.lan"] {
-            m.listeners[0].listen = listen.into();
-            assert!(
-                errs(&m).contains(&ValidationError::ListenerAddressNotAllowed {
-                    listener: "l1".into(),
-                    listen: listen.into(),
-                }),
-                "{listen}"
-            );
-        }
-        for listen in ["0.0.0.0", "127.0.0.1", "192.168.1.5", "localhost", ""] {
-            m.listeners[0].listen = listen.into();
-            assert_eq!(validate(&m), Ok(()), "{listen}");
-        }
-        m.listeners[0].listen = "::1".into();
-        m.process_routing.rules.clear();
+        // node = a subscription node that does not exist.
+        m.process_routing.rules[0].node = Some(NodeRef::Subscription {
+            subscription_id: SubscriptionId("nope".into()),
+            name: "n1".into(),
+        });
+        assert!(!dangling(&errs(&m)), "{:?}", errs(&m));
         assert_eq!(validate(&m), Ok(()));
     }
 
@@ -569,13 +538,6 @@ mod tests {
         let e = validate_forbidden_exes(&m.process_routing, &forbidden).unwrap_err();
         assert!(matches!(&e[0], ValidationError::InvalidExePath { .. }));
         assert_eq!(validate_forbidden_exes(&m.process_routing, &forbidden[..1]), Ok(()));
-    }
-
-    #[test]
-    fn process_rule_dangling_listener() {
-        let mut m = pmodel(|l| vec![prule("C:\\a.exe", l)]);
-        m.listeners.clear();
-        assert!(errs(&m).iter().any(|x| matches!(x, ValidationError::DanglingRef { .. })));
     }
 
     #[test]
