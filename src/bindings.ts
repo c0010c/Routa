@@ -252,7 +252,7 @@ async retryTailscaleExitNodes() : Promise<Result<ApplyOutcome, null>> {
     else return { status: "error", error: e  as any };
 }
 },
-async saveProcessRule(rule: ProcessRule) : Promise<Result<null, ValidationError[]>> {
+async saveProcessRule(rule: ProcessRule) : Promise<Result<ApplyOutcome | null, ValidationError[]>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_process_rule", { rule }) };
 } catch (e) {
@@ -260,7 +260,7 @@ async saveProcessRule(rule: ProcessRule) : Promise<Result<null, ValidationError[
     else return { status: "error", error: e  as any };
 }
 },
-async deleteProcessRule(id: ProcessRuleId) : Promise<Result<null, ValidationError[]>> {
+async deleteProcessRule(id: ProcessRuleId) : Promise<Result<ApplyOutcome | null, ValidationError[]>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_process_rule", { id }) };
 } catch (e) {

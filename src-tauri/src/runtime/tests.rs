@@ -1931,3 +1931,61 @@ async fn desktop_init_survives_failed_node_fill() {
     assert_eq!(h.rt.model().process_routing.rules[0].node, None);
     assert!(ui.state(&h.rt).error.is_some());
 }
+
+fn reject_next_reload(api: &FakeApi) {
+    api.reload_results
+        .lock()
+        .unwrap()
+        .push_back(Err(crate::core::api::ApiError::Rejected { status: 400, message: "bad".into() }));
+}
+
+#[tokio::test(start_paused = true)]
+async fn process_rule_save_and_delete_return_the_reload_outcome() {
+    let h = harness(&model_with_node());
+    h.rt.restart_core().await;
+    let mut rule = node_rule(r"C:\Apps\game.exe");
+    reject_next_reload(&h.api);
+    let out = crate::commands::ops::save_process_rule(&h.rt, rule.clone()).await.unwrap();
+    assert!(matches!(out, Some(ApplyOutcome::FailedKeptPrevious { .. })), "{out:?}");
+
+    rule.name = "游戏".into();
+    assert_eq!(crate::commands::ops::save_process_rule(&h.rt, rule.clone()).await.unwrap(), None);
+
+    let out = crate::commands::ops::delete_process_rule(&h.rt, rule.id).await.unwrap();
+    assert!(matches!(out, Some(ApplyOutcome::Reloaded { .. })), "{out:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn change_process_node_reverts_when_the_reload_fails() {
+    let h = harness(&simple_model_with_two_nodes());
+    h.rt.restart_core().await;
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    let rule = node_rule(r"C:\Apps\game.exe");
+    crate::commands::ops::save_process_rule(&h.rt, rule.clone()).await.unwrap();
+    let m2 = NodeRef::Manual { manual_id: ManualNodeId("m2".into()) };
+
+    reject_next_reload(&h.api);
+    let err = ui.change_process_node(&h.rt, rule.id.clone(), m2).await.unwrap_err();
+    assert!(err.starts_with("内核重载失败："), "{err}");
+    let m = h.rt.model();
+    assert_eq!(m.process_routing.rules[0].node, Some(m1_ref()));
+    let hid = hidden(&m);
+    let exit = m.exits.iter().find(|e| Some(&e.id) == hid[0].exit.as_ref()).unwrap();
+    assert!(matches!(&exit.kind, ExitKind::Node { node } if *node == m1_ref()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn set_rule_enabled_reverts_when_the_reload_fails() {
+    let h = harness(&model_with_node());
+    h.rt.restart_core().await;
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    let rule = node_rule(r"C:\Apps\game.exe");
+    crate::commands::ops::save_process_rule(&h.rt, rule.clone()).await.unwrap();
+
+    reject_next_reload(&h.api);
+    let err = ui.set_process_rule_enabled(&h.rt, rule.id.clone(), false).await.unwrap_err();
+    assert!(err.starts_with("内核重载失败："), "{err}");
+    let m = h.rt.model();
+    assert!(m.process_routing.rules[0].user_enabled);
+    assert!(hidden(&m)[0].user_enabled);
+}

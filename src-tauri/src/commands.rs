@@ -220,7 +220,7 @@ pub mod ops {
     }
 
     /// Upsert by id. Reloads mihomo only when the hidden listeners change.
-    pub async fn save_process_rule(rt: &Runtime, rule: ProcessRule) -> Result<(), Vec<ValidationError>> {
+    pub async fn save_process_rule(rt: &Runtime, rule: ProcessRule) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
         rt.mutate_process_routing(|p| {
             let id = rule.id.clone();
             upsert(&mut p.rules, rule, |x| x.id == id)
@@ -228,7 +228,7 @@ pub mod ops {
         .await
     }
 
-    pub async fn delete_process_rule(rt: &Runtime, id: ProcessRuleId) -> Result<(), Vec<ValidationError>> {
+    pub async fn delete_process_rule(rt: &Runtime, id: ProcessRuleId) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
         rt.mutate_process_routing(|p| p.rules.retain(|r| r.id != id)).await
     }
 
@@ -242,6 +242,7 @@ pub mod ops {
             p.on_routa_exit = on_routa_exit;
         })
         .await
+        .map(|_| ())
     }
 
     /// Through the connected service when there is one, else an elevated
@@ -553,13 +554,13 @@ pub fn open_project_link(link: ProjectLink) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn save_process_rule(rt: Rt<'_>, rule: ProcessRule) -> Result<(), Vec<ValidationError>> {
+pub async fn save_process_rule(rt: Rt<'_>, rule: ProcessRule) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
     ops::save_process_rule(&rt, rule).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn delete_process_rule(rt: Rt<'_>, id: ProcessRuleId) -> Result<(), Vec<ValidationError>> {
+pub async fn delete_process_rule(rt: Rt<'_>, id: ProcessRuleId) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
     ops::delete_process_rule(&rt, id).await
 }
 

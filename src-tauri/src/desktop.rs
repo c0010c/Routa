@@ -870,6 +870,15 @@ async fn confirm_or_revert(rt: &Runtime, revert: impl FnOnce(&mut ProcessRouting
     Ok(false)
 }
 
+/// `Err` with the user-facing message when a reload happened and did not
+/// fully succeed.
+fn reload_ok(outcome: &Option<ApplyOutcome>) -> Result<(), String> {
+    match outcome {
+        Some(o) => result_ok(o).map_err(|e| format!("内核重载失败：{e}")),
+        None => Ok(()),
+    }
+}
+
 impl Desktop {
     /// Points rule `id` at `node`. While process routing is on and the rule is
     /// enabled, waits for the component to confirm; otherwise restores the
@@ -887,22 +896,27 @@ impl Desktop {
         if resolve(&model, &node).is_none() {
             return Err("节点已失效，请重新选择".into());
         }
-        rt.mutate_process_routing(|pr| {
-            if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id) {
-                r.node = Some(node.clone());
-            }
-        })
-        .await
-        .map_err(validation)?;
-        if !(model.process_routing.enabled && old.user_enabled && procroute_running()) {
-            return Ok(());
-        }
-        let confirmed = confirm_or_revert(rt, |pr| {
+        let outcome = rt
+            .mutate_process_routing(|pr| {
+                if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id) {
+                    r.node = Some(node.clone());
+                }
+            })
+            .await
+            .map_err(validation)?;
+        let revert = |pr: &mut ProcessRouting| {
             if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id && r.node.as_ref() == Some(&node)) {
                 r.node = old.node.clone();
             }
-        })
-        .await?;
+        };
+        if let Err(e) = reload_ok(&outcome) {
+            let _ = rt.mutate_process_routing(revert).await;
+            return Err(e);
+        }
+        if !(model.process_routing.enabled && old.user_enabled && procroute_running()) {
+            return Ok(());
+        }
+        let confirmed = confirm_or_revert(rt, revert).await?;
         if confirmed {
             Ok(())
         } else {
@@ -922,22 +936,27 @@ impl Desktop {
             .find(|r| r.id == id)
             .map(|r| r.user_enabled)
             .ok_or("规则已不存在")?;
-        rt.mutate_process_routing(|pr| {
-            if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id) {
-                r.user_enabled = enabled;
-            }
-        })
-        .await
-        .map_err(validation)?;
-        if !(model.process_routing.enabled && procroute_running()) {
-            return Ok(());
-        }
-        let confirmed = confirm_or_revert(rt, |pr| {
+        let outcome = rt
+            .mutate_process_routing(|pr| {
+                if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id) {
+                    r.user_enabled = enabled;
+                }
+            })
+            .await
+            .map_err(validation)?;
+        let revert = |pr: &mut ProcessRouting| {
             if let Some(r) = pr.rules.iter_mut().find(|r| r.id == id && r.user_enabled == enabled) {
                 r.user_enabled = old;
             }
-        })
-        .await?;
+        };
+        if let Err(e) = reload_ok(&outcome) {
+            let _ = rt.mutate_process_routing(revert).await;
+            return Err(e);
+        }
+        if !(model.process_routing.enabled && procroute_running()) {
+            return Ok(());
+        }
+        let confirmed = confirm_or_revert(rt, revert).await?;
         if confirmed {
             Ok(())
         } else {
