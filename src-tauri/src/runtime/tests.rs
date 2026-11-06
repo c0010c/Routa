@@ -1647,17 +1647,18 @@ async fn process_routing_rejects_forbidden_and_invalid_rules() {
             .unwrap_err();
         assert!(errs.iter().any(|e| matches!(e, ValidationError::InvalidExePath { .. })), "{exe}: {errs:?}");
     }
-    // The full model validation runs too (the listener must exist).
+    // The full model validation runs too (one program, one rule).
     let errs = h
         .rt
         .mutate_process_routing(|pr| {
-            let mut r = process_rule(r"C:\Apps\game.exe");
-            r.listener = ListenerId("gone".into());
-            pr.rules.push(r);
+            pr.rules.push(process_rule(r"C:\Apps\game.exe"));
+            let mut dup = process_rule(r"C:\Apps\game.exe");
+            dup.id = ProcessRuleId::new();
+            pr.rules.push(dup);
         })
         .await
         .unwrap_err();
-    assert!(errs.iter().any(|e| matches!(e, ValidationError::DanglingRef { .. })), "{errs:?}");
+    assert!(errs.iter().any(|e| matches!(e, ValidationError::DuplicateProcessRule { .. })), "{errs:?}");
 
     assert_eq!(std::fs::read_to_string(h.data.join("state.json")).unwrap(), before);
     assert_eq!(h.rt.model(), m);

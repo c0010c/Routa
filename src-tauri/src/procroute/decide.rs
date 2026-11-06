@@ -6,8 +6,9 @@ use routa_procsvc_proto::{Action, DesiredState, ExitPolicy, FaultPolicy, ProxyKi
 
 use crate::core::process::CoreState;
 use crate::model::health::ListenerStatus;
+use crate::model::hidden::rule_listener;
 use crate::model::validate::process_proxy_host;
-use crate::model::{Listener, ListenerType, Model, ProcessRule, ProcessRuleId};
+use crate::model::{Listener, Model, ProcessRule, ProcessRuleId};
 use crate::runtime::{CoreStopReason, RuntimeStatus};
 
 /// 根据模型和运行状态算出下发给助手的期望状态。全局开关关闭或规则被禁用时，
@@ -69,16 +70,19 @@ fn rule_action(model: &Model, status: &RuntimeStatus, rule: &ProcessRule) -> (Ac
             Some(CoreStopReason::User) => (exit_action(on_exit), Some("内核已手动停止")),
             _ => (Action::Block, Some("内核未运行")),
         },
-        // Listener 被停用 / 未生效 / 已删除 / 类型不对：一律阻断，与 on_fault 无关。
-        CoreState::Running => match model.listeners.iter().find(|l| l.id == rule.listener) {
-            None => (Action::Block, Some("Listener 已删除")),
-            Some(l) if l.listener_type == ListenerType::Http => (Action::Block, Some("HTTP 类型的 Listener 不能使用")),
-            Some(l) if !listener_in_effect(status, l) => (Action::Block, Some("Listener 未生效")),
-            Some(l) => match proxy_target(l) {
-                Some(t) => (Action::Proxy(t), None),
-                None => (Action::Block, Some("进程分流仅支持 IPv4 入口，请修改 Listener 的监听地址")),
-            },
-        },
+        // 未选节点 / 节点失效（无隐藏监听器或未生效）：一律阻断，与 on_fault 无关。
+        CoreState::Running => {
+            if rule.node.is_none() {
+                return (Action::Block, Some("未选择节点，请选择节点"));
+            }
+            match rule_listener(model, rule) {
+                Some(l) if listener_in_effect(status, l) => match proxy_target(l) {
+                    Some(t) => (Action::Proxy(t), None),
+                    None => (Action::Block, Some("节点已失效，请更换节点")),
+                },
+                _ => (Action::Block, Some("节点已失效，请更换节点")),
+            }
+        }
     }
 }
 
@@ -119,25 +123,14 @@ mod tests {
     use super::*;
     use crate::core::apply::FailedListener;
     use crate::model::health::Health;
-    use crate::model::{Auth, ListenerId};
+    use crate::model::{ListenerId, Node, NodeRef, Subscription, SubscriptionId};
     use crate::stats::delay::DelayBook;
 
     const PID: u32 = 4242;
     const EXE: &str = r"C:\Program Files\App\app.exe";
 
-    fn listener(listen: &str) -> Listener {
-        Listener {
-            routing: None,
-            hidden: false,
-            id: ListenerId("l1".into()),
-            name: "L1".into(),
-            listener_type: ListenerType::Socks,
-            listen: listen.into(),
-            port: 7891,
-            auth: Some(Auth { username: "u".into(), password: "p".into() }),
-            exit: None,
-            user_enabled: true,
-        }
+    fn n1() -> NodeRef {
+        NodeRef::Subscription { subscription_id: SubscriptionId("s".into()), name: "n1".into() }
     }
 
     fn rule(on_fault: FaultPolicy) -> ProcessRule {
@@ -147,8 +140,8 @@ mod tests {
             processes: vec![EXE.into()],
             match_full_path: true,
             exe_path: String::new(),
-            listener: ListenerId("l1".into()),
-            node: None,
+            listener: ListenerId(String::new()),
+            node: Some(n1()),
             interface: None,
             on_fault,
             reset_on_change: true,
@@ -156,17 +149,27 @@ mod tests {
         }
     }
 
-    fn model_with(listen: &str, on_fault: FaultPolicy, on_exit: ExitPolicy) -> Model {
+    /// 一条选了节点 n1 的规则；隐藏监听器由 reconcile 生成，id 改成 "l1" 以便与 `running()` 对应。
+    fn model(on_fault: FaultPolicy, on_exit: ExitPolicy) -> Model {
         let mut m = Model::default();
-        m.listeners.push(listener(listen));
+        m.subscriptions.push(Subscription {
+            id: SubscriptionId("s".into()),
+            name: "s".into(),
+            url: "https://x".into(),
+            update_interval_mins: None,
+            fallback_exit: None,
+            fallback_listener: None,
+            last_updated: None,
+            last_result: None,
+            nodes: vec![Node { name: "n1".into(), proxy_type: "ss".into(), server: "x".into(), raw: serde_json::Value::Null }],
+        });
         m.process_routing.enabled = true;
         m.process_routing.on_routa_exit = on_exit;
         m.process_routing.rules.push(rule(on_fault));
+        crate::model::hidden::reconcile_hidden_listeners(&mut m);
+        let l = m.listeners.iter_mut().find(|l| l.hidden).unwrap();
+        l.id = ListenerId("l1".into());
         m
-    }
-
-    fn model(on_fault: FaultPolicy, on_exit: ExitPolicy) -> Model {
-        model_with("0.0.0.0", on_fault, on_exit)
     }
 
     /// 内核在运行，l1 Active 且生效。
@@ -210,9 +213,9 @@ mod tests {
         Action::Proxy(ProxyTarget {
             kind: ProxyKind::Socks5,
             host: host.into(),
-            port: 7891,
-            username: Some("u".into()),
-            password: Some("p".into()),
+            port: 37800,
+            username: None,
+            password: None,
         })
     }
 
@@ -243,7 +246,7 @@ mod tests {
     #[test]
     fn block_when_listener_failed() {
         let mut s = running();
-        s.failed_listeners.push(FailedListener { id: ListenerId("l1".into()), name: "L1".into(), port: 7891 });
+        s.failed_listeners.push(FailedListener { id: ListenerId("l1".into()), name: "L1".into(), port: 37800 });
         let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Direct), &s, PID);
         assert_eq!(only_action(&d), Action::Block);
     }
@@ -322,53 +325,34 @@ mod tests {
     }
 
     #[test]
-    fn missing_listener_blocks() {
+    fn rule_without_node_blocks_regardless_of_fault_policy() {
         let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
-        m.process_routing.rules[0].listener = ListenerId("gone".into());
-        let mut s = running();
-        s.health.listeners.insert(ListenerId("gone".into()), ListenerStatus::Active);
-        s.effective_listeners.push(ListenerId("gone".into()));
-        let d = decide(&m, &s, PID);
-        assert_eq!(only_action(&d), Action::Block);
-
-        // Http 类型的 Listener 不能用作进程分流目标。
-        let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
-        m.listeners[0].listener_type = ListenerType::Http;
+        m.process_routing.rules[0].node = None;
         let d = decide(&m, &running(), PID);
         assert_eq!(only_action(&d), Action::Block);
+        assert_eq!(reasons(&m, &running())[&ProcessRuleId("r1".into())].as_deref(), Some("未选择节点，请选择节点"));
     }
 
     #[test]
-    fn proxy_host_for_lan_listen_address() {
-        let d = decide(&model_with("192.168.1.5", FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
-        assert_eq!(only_action(&d), proxy("192.168.1.5"));
-        for listen in ["0.0.0.0", "127.0.0.1", "", "localhost", "LocalHost", "[0.0.0.0]"] {
-            let d = decide(&model_with(listen, FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
-            assert_eq!(only_action(&d), proxy("127.0.0.1"), "listen {listen:?}");
-        }
+    fn rule_with_missing_or_inactive_node_listener_blocks() {
+        // 选了节点但没有隐藏监听器。
+        let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        m.listeners.clear();
+        assert_eq!(only_action(&decide(&m, &running(), PID)), Action::Block);
+        assert_eq!(reasons(&m, &running())[&ProcessRuleId("r1".into())].as_deref(), Some("节点已失效，请更换节点"));
+
+        // 有隐藏监听器但出口损坏。
+        let m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let mut s = running();
+        s.health.listeners.insert(ListenerId("l1".into()), ListenerStatus::ExitBroken { exit_status: crate::model::health::ExitStatus::NodeMissing });
+        assert_eq!(only_action(&decide(&m, &s, PID)), Action::Block);
+        assert_eq!(reasons(&m, &s)[&ProcessRuleId("r1".into())].as_deref(), Some("节点已失效，请更换节点"));
     }
 
     #[test]
-    fn ipv6_listener_blocks_even_when_fault_policy_is_direct() {
-        for listen in ["::", "::1", "[::]", " [::1] ", "[fe80::1]", "2001:db8::1", "::ffff:127.0.0.1"] {
-            let m = model_with(listen, FaultPolicy::Direct, ExitPolicy::Direct);
-            assert_eq!(only_action(&decide(&m, &running(), PID)), Action::Block, "listen {listen:?}");
-            assert_eq!(
-                reasons(&m, &running())[&ProcessRuleId("r1".into())].as_deref(),
-                Some("进程分流仅支持 IPv4 入口，请修改 Listener 的监听地址")
-            );
-        }
-    }
-
-    #[test]
-    fn non_ip_listen_blocks() {
-        for listen in ["myhost.lan", "[]x", "192.168.1"] {
-            let m = model_with(listen, FaultPolicy::Direct, ExitPolicy::Direct);
-            let d = decide(&m, &running(), PID);
-            assert_eq!(only_action(&d), Action::Block, "listen {listen:?}");
-            let why = reasons(&m, &running());
-            assert_eq!(why[&ProcessRuleId("r1".into())].as_deref(), Some("进程分流仅支持 IPv4 入口，请修改 Listener 的监听地址"));
-        }
+    fn rule_with_active_hidden_listener_proxies_to_loopback_socks() {
+        let d = decide(&model(FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
+        assert_eq!(only_action(&d), proxy("127.0.0.1"));
     }
 
     #[test]
@@ -396,7 +380,6 @@ mod tests {
     #[test]
     fn rule_order_preserved_and_no_auth_passes_none() {
         let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
-        m.listeners[0].auth = None;
         let mut second = rule(FaultPolicy::Block);
         second.id = ProcessRuleId("r0".into());
         m.process_routing.rules.push(second);
