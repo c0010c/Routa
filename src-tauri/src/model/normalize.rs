@@ -27,6 +27,7 @@ pub fn migrate_legacy_process_rules(pr: &mut ProcessRouting) {
 }
 
 pub fn normalize(model: &mut Model) {
+    super::hidden::reconcile_hidden_listeners(model);
     for sub in &mut model.subscriptions {
         if let Some(id) = &sub.fallback_listener {
             sub.fallback_exit = model.listeners.iter().find(|l| &l.id == id).and_then(|l| l.exit.clone());
