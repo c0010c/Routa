@@ -14,7 +14,7 @@ use crate::core::process::CoreState;
 use crate::desktop::Desktop;
 use crate::runtime::Runtime;
 use host::{Host, Snapshot};
-use view::{candidates, screen, History, Input, Screen};
+use view::{candidates, capture_of, effective_rates, screen, History, Input, Screen};
 
 const UPDATE_EVERY: Duration = Duration::from_secs(1);
 
@@ -32,10 +32,13 @@ fn snapshot(rt: &Runtime, desktop: &Desktop, history: &mut History) -> Snapshot 
     let (model, status) = (rt.model(), rt.status());
     let running = status.core == CoreState::Running;
     let no_rates = HashMap::new();
-    let rates = status.traffic.as_ref().map_or(&no_rates, |t| &t.per_listener_rate);
-    history.record(running, rates, &model);
-    let input = Input { running, delays: &status.delays, rates };
-    let views = candidates(&model)
+    let raw = status.traffic.as_ref().map_or(&no_rates, |t| &t.per_listener_rate);
+    let tun = status.traffic.as_ref().map(|t| t.tun_rate.clone()).unwrap_or_default();
+    let capture = capture_of(desktop.active_capture());
+    let rates = effective_rates(raw, capture.as_ref(), &tun);
+    history.record(running, &rates, &model, capture.as_ref());
+    let input = Input { running, delays: &status.delays, rates: &rates, capture: capture.as_ref() };
+    let views = candidates(&model, capture.as_ref())
         .iter()
         .filter_map(|id| match screen(&model, &input, history, Some(id)) {
             Screen::Listener(view) => Some(view),

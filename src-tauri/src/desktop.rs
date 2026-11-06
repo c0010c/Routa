@@ -256,6 +256,13 @@ impl Desktop {
     pub fn taskbar_status(&self) -> TaskbarStatusPrefs {
         self.prefs().taskbar_status
     }
+    /// The capture switched on and the listener it goes through, without the
+    /// health checks `state` runs.
+    pub fn active_capture(&self) -> Option<(CaptureMode, ListenerId)> {
+        let mode = (*self.active.lock().unwrap())?;
+        let override_id = self.active_system_listener.lock().unwrap().clone();
+        Some((mode, override_id.or(self.prefs().listener_id)?))
+    }
     pub async fn disable_taskbar_status(&self) -> Result<UiPreferences, String> {
         let _guard = self.operation.lock().await;
         let mut p = self.prefs();

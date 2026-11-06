@@ -97,6 +97,7 @@ const initialStatus: RuntimeStatus = {
   traffic: {
     total_rate: { up: 1024, down: 2048 },
     per_listener_rate: {},
+    tun_rate: { up: 0, down: 0 },
     totals: { total: { up: 1024, down: 2048 }, per_listener: {} },
   },
 };

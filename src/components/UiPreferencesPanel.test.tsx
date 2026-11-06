@@ -169,3 +169,15 @@ it("blocks repeated submissions and shows an error without a false success or ch
   expect(screen.queryByText("已保存")).not.toBeInTheDocument();
   expect(screen.queryByText(/internal:/)).not.toBeInTheDocument();
 });
+
+it("says the bar shows the system proxy or TUN traffic while one is on", async () => {
+  const { unmount } = setup({ connection: "Tun", requested: "Tun" });
+  expect(await screen.findByText("已开启 TUN，状态栏显示 TUN 的流量")).toBeInTheDocument();
+  unmount();
+  const second = setup({ connection: "System", requested: "System" });
+  expect(await screen.findByText("已开启系统代理，状态栏显示系统代理的流量")).toBeInTheDocument();
+  second.unmount();
+  setup({ connection: "Apps", requested: "Apps" });
+  await screen.findByRole("combobox", { name: "显示内容" });
+  expect(screen.queryByText(/状态栏显示/)).not.toBeInTheDocument();
+});

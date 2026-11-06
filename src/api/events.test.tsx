@@ -35,7 +35,7 @@ describe("traffic event synchronization", () => {
   it("applies clear/stop corrections immediately and resumes history only on real samples", async () => {
     render(<QueryClientProvider client={new QueryClient()}><Probe /></QueryClientProvider>);
     const running: TrafficTick = {
-      total_rate: { up: 5, down: 7 }, per_listener_rate: { l1: { up: 5, down: 7 } },
+      total_rate: { up: 5, down: 7 }, per_listener_rate: { l1: { up: 5, down: 7 } }, tun_rate: { up: 0, down: 0 },
       totals: { total: { up: 100, down: 200 }, per_listener: { l1: { up: 100, down: 200 } } },
     };
     emit("traffic", running);

@@ -10,17 +10,27 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::Foundation::SIZE;
 
 use super::view::{chart_points, format_rate, DelayView, Screen, Tone};
-use crate::desktop::TaskbarTraffic;
+use crate::desktop::{CaptureMode, TaskbarTraffic};
 
 const HEIGHT: i32 = 36;
 const CHART_W: i32 = 26;
-const VALUES_W: i32 = 27;
+/// Fits the widest rate `format_rate` gives, "999M".
+const VALUES_W: i32 = 34;
 const NODE_W: i32 = 36;
 const GAP: i32 = 6;
 /// Breathing room from the last task button and from the tray arrow.
 const PAD_LEFT: i32 = 2;
 const PAD_RIGHT: i32 = 4;
 const FONT_H: i32 = 12;
+/// The capture icon stands in front of the delay, in place of its dot.
+const ICON_W: i32 = 12;
+const ICON_GAP: i32 = 2;
+const ICON_FONT_H: i32 = 11;
+/// Segoe Fluent Icons, shipped with Windows 11 (the only system the bar runs
+/// on): a PC tower on a network cable for system proxy, a monitor for TUN.
+const ICON_FONT: &str = "Segoe Fluent Icons";
+const SYSTEM_ICON: &str = "\u{E968}";
+const TUN_ICON: &str = "\u{E7F4}";
 const SCROLL_PAUSE: Duration = Duration::from_secs(1);
 const SCROLL_PX_PER_SEC: f32 = 24.0;
 /// Keeps transparent pixels clickable: a zero alpha lets the mouse through.
@@ -71,6 +81,9 @@ pub struct Layout {
     pub node_w: i32,
     pub gap: i32,
     pub font_h: i32,
+    pub icon_w: i32,
+    pub icon_gap: i32,
+    pub icon_font_h: i32,
 }
 
 pub fn layout(dpi: u32, traffic: TaskbarTraffic) -> Layout {
@@ -91,6 +104,9 @@ pub fn layout(dpi: u32, traffic: TaskbarTraffic) -> Layout {
         node_w: scale(NODE_W),
         gap: scale(GAP),
         font_h: scale(FONT_H),
+        icon_w: scale(ICON_W),
+        icon_gap: scale(ICON_GAP),
+        icon_font_h: scale(ICON_FONT_H),
     }
 }
 
@@ -154,8 +170,12 @@ struct Painter<'a> {
     dc: HDC,
     bitmap: *mut core::ffi::c_void,
     font: *mut core::ffi::c_void,
+    icon_font: *mut core::ffi::c_void,
     mask: *mut u32,
 }
+
+/// Inked area of the mask in supersampled pixels: left, right, top, bottom (exclusive).
+type Ink = (i32, i32, i32, i32);
 
 impl<'a> Painter<'a> {
     fn new(layout: Layout, palette: Palette, pixels: &'a mut [u32]) -> Option<Self> {
@@ -182,10 +202,15 @@ impl<'a> Painter<'a> {
             let font = CreateFontW(
                 -layout.font_h * TEXT_SUPERSAMPLE, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, ANTIALIASED_QUALITY as _, 0, face.as_ptr(),
             );
+            let icon_face: Vec<u16> = ICON_FONT.encode_utf16().chain(Some(0)).collect();
+            let icon_font = CreateFontW(
+                -layout.icon_font_h * TEXT_SUPERSAMPLE, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, ANTIALIASED_QUALITY as _, 0,
+                icon_face.as_ptr(),
+            );
             SelectObject(dc, font);
             SetBkMode(dc, TRANSPARENT as _);
             SetTextColor(dc, 0x00FF_FFFF);
-            Some(Self { layout, palette, pixels, dc, bitmap, font, mask: bits as *mut u32 })
+            Some(Self { layout, palette, pixels, dc, bitmap, font, icon_font, mask: bits as *mut u32 })
         }
     }
 
@@ -196,15 +221,63 @@ impl<'a> Painter<'a> {
         SIZE { cx: size.cx / TEXT_SUPERSAMPLE, cy: size.cy / TEXT_SUPERSAMPLE }
     }
 
+    fn mask(&mut self) -> &mut [u32] {
+        let (w, h, n) = (self.layout.width, self.layout.height, TEXT_SUPERSAMPLE);
+        unsafe { std::slice::from_raw_parts_mut(self.mask, (w * h * n * n) as usize) }
+    }
+
+    /// Clears the mask and draws `text` at supersampled `(x, y)`.
+    fn draw(&mut self, font: *mut core::ffi::c_void, text: &[u16], x: i32, y: i32) {
+        self.mask().fill(0);
+        unsafe {
+            SelectObject(self.dc, font);
+            TextOutW(self.dc, x, y, text.as_ptr(), text.len() as i32);
+            SelectObject(self.dc, self.font);
+        }
+    }
+
+    fn ink(&mut self) -> Option<Ink> {
+        let row = self.layout.width * TEXT_SUPERSAMPLE;
+        let mut ink: Option<Ink> = None;
+        for (i, m) in self.mask().iter().enumerate() {
+            if (m >> 8) & 255 >= 128 {
+                let (x, y) = (i as i32 % row, i as i32 / row);
+                ink = Some(ink.map_or((x, x + 1, y, y + 1), |(l, r, t, b)| (l.min(x), r.max(x + 1), t.min(y), b.max(y + 1))));
+            }
+        }
+        ink
+    }
+
     /// GDI leaves alpha at zero, so text goes white-on-black into the mask and
     /// its brightness becomes the coverage of the wanted color.
     fn text(&mut self, text: &str, x: i32, center_y: i32, clip: (i32, i32), rgb: u32, offset: i32) {
-        let (w, h, n) = (self.layout.width, self.layout.height, TEXT_SUPERSAMPLE);
+        let n = TEXT_SUPERSAMPLE;
         let utf16: Vec<u16> = text.encode_utf16().collect();
         let top = center_y - self.text_size(&utf16).cy / 2;
-        let mask = unsafe { std::slice::from_raw_parts_mut(self.mask, (w * h * n * n) as usize) };
-        mask.fill(0);
-        unsafe { TextOutW(self.dc, (x - offset) * n, top * n, utf16.as_ptr(), utf16.len() as i32) };
+        self.draw(self.font, &utf16, (x - offset) * n, top * n);
+        self.composite(clip, rgb);
+    }
+
+    /// Centers the icon in its column and on the ink of digits drawn on the
+    /// same line: the icon font's cell sits lower than Microsoft YaHei's.
+    fn icon(&mut self, icon: &str, x: i32, center_y: i32, rgb: u32) {
+        let (h, n) = (self.layout.height, TEXT_SUPERSAMPLE);
+        let digits: Vec<u16> = "0123456789".encode_utf16().collect();
+        // Measured on the middle line, where a sliding screen cannot clip it.
+        self.draw(self.font, &digits, 0, (h / 2 - self.text_size(&digits).cy / 2) * n);
+        let Some((_, _, top, bottom)) = self.ink() else { return };
+        let middle = (top + bottom) / 2 + (center_y - h / 2) * n;
+        let glyph: Vec<u16> = icon.encode_utf16().collect();
+        self.draw(self.icon_font, &glyph, 0, 0);
+        let Some((left, right, top, bottom)) = self.ink() else { return };
+        let icon_w = self.layout.icon_w;
+        self.draw(self.icon_font, &glyph, x * n + (icon_w * n - (right - left)) / 2 - left, middle - (top + bottom) / 2);
+        self.composite((x, x + icon_w), rgb);
+    }
+
+    fn composite(&mut self, clip: (i32, i32), rgb: u32) {
+        let (w, h, n) = (self.layout.width, self.layout.height, TEXT_SUPERSAMPLE);
+        let mask = unsafe { std::slice::from_raw_parts(self.mask, (w * h * n * n) as usize) };
         for py in 0..h {
             for px in clip.0.max(0)..clip.1.min(w) {
                 let mut sum = 0;
@@ -290,19 +363,28 @@ impl<'a> Painter<'a> {
                 let name_width = self.text_size(&name).cx;
                 let (offset, scroll_done) = scroll_offset(name_width, node_w, name_elapsed);
                 self.text(&view.node, node_x, top, node_clip, palette.text, offset);
-                let (delay, rgb) = match view.delay {
+                let (ms, rgb) = match view.delay {
                     DelayView::Ms(ms, tone) => (
-                        format!("● {ms}"),
+                        ms.to_string(),
                         match tone {
                             Tone::Good => palette.good,
                             Tone::Warn => palette.warn,
                             Tone::Bad => palette.bad,
                         },
                     ),
-                    DelayView::Failed => ("● --".to_string(), palette.bad),
-                    DelayView::Unknown => ("● --".to_string(), palette.dim),
+                    DelayView::Failed => ("--".to_string(), palette.bad),
+                    DelayView::Unknown => ("--".to_string(), palette.dim),
                 };
-                self.text(&delay, node_x, bottom, node_clip, rgb, 0);
+                // The icon tells system proxy from TUN; its color still grades the delay.
+                match view.capture {
+                    Some(mode) => {
+                        let icon = if mode == CaptureMode::Tun { TUN_ICON } else { SYSTEM_ICON };
+                        self.icon(icon, node_x, bottom, rgb);
+                        let text_x = node_x + self.layout.icon_w + self.layout.icon_gap;
+                        self.text(&ms, text_x, bottom, node_clip, rgb, 0);
+                    }
+                    None => self.text(&format!("● {ms}"), node_x, bottom, node_clip, rgb, 0),
+                }
                 Painted { scroll_done, name_width }
             }
         }
@@ -315,6 +397,7 @@ impl Drop for Painter<'_> {
             DeleteDC(self.dc);
             DeleteObject(self.bitmap);
             DeleteObject(self.font);
+            DeleteObject(self.icon_font);
         }
     }
 }
@@ -335,6 +418,7 @@ mod tests {
             up: 12_400,
             down: 3_355_443,
             series: (0..10).map(|i| Rate { up: i, down: i * 10 }).collect(),
+            capture: None,
         })
     }
 
@@ -355,7 +439,7 @@ mod tests {
 
     #[test]
     fn layout_keeps_only_the_chosen_traffic_view() {
-        assert_eq!((layout(96, Values).width, layout(96, Values).traffic_w), (75, 27));
+        assert_eq!((layout(96, Values).width, layout(96, Values).traffic_w), (82, 34));
         assert_eq!((layout(96, Chart).width, layout(96, Chart).traffic_w), (74, 26));
         for traffic in [Values, Chart] {
             let (one, two) = (layout(96, traffic), layout(192, traffic));
@@ -530,5 +614,60 @@ mod tests {
         let (up, down) = (rows(CHART_UP), rows(CHART_DOWN));
         assert!(!up.is_empty() && !down.is_empty());
         assert!(up.iter().min() > down.iter().max());
+    }
+
+    #[test]
+    fn every_rate_fits_the_values_column() {
+        let widest = ["999B", "999K", "999M", "999G", "9.9K", "8.8M", "1.0G", "888M", "100M"];
+        for dpi in [96, 120, 144, 168, 192] {
+            let l = layout(dpi, Values);
+            let mut pixels = vec![0; (l.width * l.height) as usize];
+            let painter = Painter::new(l, palette(false), &mut pixels).unwrap();
+            for text in widest {
+                let width = painter.text_size(&text.encode_utf16().collect::<Vec<_>>()).cx;
+                assert!(width <= l.values_w, "{text} is {width}px at {dpi} DPI, column {}", l.values_w);
+            }
+        }
+    }
+
+    fn captured(mode: Option<CaptureMode>) -> Screen {
+        let Screen::Listener(mut view) = listener_screen() else { unreachable!() };
+        view.capture = mode;
+        Screen::Listener(view)
+    }
+
+    /// Inked rows (top, bottom exclusive) in the delay line between these columns.
+    fn delay_ink(pixels: &[u32], l: &Layout, columns: std::ops::Range<i32>) -> Option<(i32, i32)> {
+        let rows: Vec<i32> = (l.height / 2..l.height)
+            .filter(|y| columns.clone().any(|x| pixels[(y * l.width + x) as usize] >> 24 > 96))
+            .collect();
+        Some((*rows.first()?, *rows.last()? + 1))
+    }
+
+    #[test]
+    fn capture_icon_sits_level_with_the_delay() {
+        for dpi in [96, 144] {
+            let l = layout(dpi, Values);
+            for mode in [CaptureMode::System, CaptureMode::Tun] {
+                let mut pixels = vec![0; (l.width * l.height) as usize];
+                paint(&frame(captured(Some(mode))), &l, &mut pixels);
+                let node_x = l.width - l.pad_right - l.node_w;
+                let icon = delay_ink(&pixels, &l, node_x..node_x + l.icon_w).expect("icon drawn");
+                let digits_x = node_x + l.icon_w + l.icon_gap;
+                let digits = delay_ink(&pixels, &l, digits_x..node_x + l.node_w).expect("delay drawn");
+                let (icon_mid, digits_mid) = (icon.0 + icon.1, digits.0 + digits.1);
+                assert!((icon_mid - digits_mid).abs() <= 2, "{mode:?} at {dpi}: icon {icon:?}, digits {digits:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn system_proxy_and_tun_have_different_icons() {
+        let system = painted(&frame(captured(Some(CaptureMode::System)))).0;
+        let tun = painted(&frame(captured(Some(CaptureMode::Tun)))).0;
+        let plain = painted(&frame(captured(None))).0;
+        assert_ne!(system, tun);
+        assert_ne!(system, plain);
+        assert_ne!(tun, plain);
     }
 }

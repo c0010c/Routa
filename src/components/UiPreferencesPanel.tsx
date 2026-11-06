@@ -1,4 +1,4 @@
-import { MenuItem, Select, Stack, Switch } from "@mui/material";
+import { MenuItem, Select, Stack, Switch, Typography } from "@mui/material";
 import type { ReactNode } from "react";
 import { useInterface } from "./InterfaceProvider";
 import { useModel } from "../api/client";
@@ -25,6 +25,13 @@ export function UiPreferencesPanel({ startupRows = [] }: { startupRows?: ReactNo
   const supported = ui.state.taskbar_status_supported;
   const pinned = typeof taskbar.mode === "object" ? taskbar.mode.Fixed : null;
   const shown = pinned && listeners.some((l) => l.id === pinned) ? pinned : "rotate";
+  // System proxy and TUN each have one stream of traffic, so the bar shows only that one.
+  const captureNote =
+    ui.state.connection === "System"
+      ? "已开启系统代理，状态栏显示系统代理的流量"
+      : ui.state.connection === "Tun"
+        ? "已开启 TUN，状态栏显示 TUN 的流量"
+        : null;
   return (
     <>
       <Section title="启动与窗口">
@@ -86,51 +93,58 @@ export function UiPreferencesPanel({ startupRows = [] }: { startupRows?: ReactNo
             description={supported ? "在托盘旁显示流量、节点和延迟" : "仅支持 Windows 11"}
             feedback={<SaveFeedback notice={feedback.notices.taskbar_status} />}
             below={supported && taskbar.enabled && (
-              <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
-                <Select
-                  size="small"
-                  aria-label="流量显示"
-                  value={taskbar.traffic}
-                  disabled={busy}
-                  onChange={(e) =>
-                    void update({ taskbar_status: { ...taskbar, traffic: e.target.value as typeof taskbar.traffic } })
-                  }
-                >
-                  <MenuItem value="Values">数值</MenuItem>
-                  <MenuItem value="Chart">折线图</MenuItem>
-                </Select>
-                <Select
-                  size="small"
-                  aria-label="显示内容"
-                  value={shown === "rotate" ? "rotate" : "fixed"}
-                  disabled={busy}
-                  onChange={(e) => {
-                    const first = listeners[0]?.id;
-                    const mode = e.target.value === "fixed" && first ? { Fixed: first } : "Rotate";
-                    void update({ taskbar_status: { ...taskbar, mode } });
-                  }}
-                >
-                  <MenuItem value="rotate">轮播</MenuItem>
-                  <MenuItem value="fixed" disabled={listeners.length === 0}>
-                    固定
-                  </MenuItem>
-                </Select>
-                {shown !== "rotate" && (
+              <Stack spacing={0.75}>
+                <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
                   <Select
                     size="small"
-                    aria-label="固定的代理"
-                    value={shown}
+                    aria-label="流量显示"
+                    value={taskbar.traffic}
                     disabled={busy}
                     onChange={(e) =>
-                      void update({ taskbar_status: { ...taskbar, mode: { Fixed: e.target.value } } })
+                      void update({ taskbar_status: { ...taskbar, traffic: e.target.value as typeof taskbar.traffic } })
                     }
                   >
-                    {listeners.map((l) => (
-                      <MenuItem key={l.id} value={l.id}>
-                        {l.name}（{l.port}）
-                      </MenuItem>
-                    ))}
+                    <MenuItem value="Values">数值</MenuItem>
+                    <MenuItem value="Chart">折线图</MenuItem>
                   </Select>
+                  <Select
+                    size="small"
+                    aria-label="显示内容"
+                    value={shown === "rotate" ? "rotate" : "fixed"}
+                    disabled={busy}
+                    onChange={(e) => {
+                      const first = listeners[0]?.id;
+                      const mode = e.target.value === "fixed" && first ? { Fixed: first } : "Rotate";
+                      void update({ taskbar_status: { ...taskbar, mode } });
+                    }}
+                  >
+                    <MenuItem value="rotate">轮播</MenuItem>
+                    <MenuItem value="fixed" disabled={listeners.length === 0}>
+                      固定
+                    </MenuItem>
+                  </Select>
+                  {shown !== "rotate" && (
+                    <Select
+                      size="small"
+                      aria-label="固定的代理"
+                      value={shown}
+                      disabled={busy}
+                      onChange={(e) =>
+                        void update({ taskbar_status: { ...taskbar, mode: { Fixed: e.target.value } } })
+                      }
+                    >
+                      {listeners.map((l) => (
+                        <MenuItem key={l.id} value={l.id}>
+                          {l.name}（{l.port}）
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  )}
+                </Stack>
+                {captureNote && (
+                  <Typography variant="caption" color="text.secondary">
+                    {captureNote}
+                  </Typography>
                 )}
               </Stack>
             )}

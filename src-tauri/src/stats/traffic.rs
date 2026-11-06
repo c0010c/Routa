@@ -11,6 +11,8 @@ use crate::store::{Bytes, TrafficTotals};
 
 /// Inbound name prefix used by the tool's own subscription fetches.
 const FETCH_PREFIX: &str = "__fetch__";
+/// Inbound name mihomo gives every connection captured by its TUN adapter.
+pub const TUN_INBOUND: &str = "DEFAULT-TUN";
 
 /// Bytes per second.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, specta::Type)]
@@ -24,6 +26,8 @@ pub struct TrafficTick {
     pub total_rate: Rate,
     /// Every listener that had a delta in this tick.
     pub per_listener_rate: HashMap<ListenerId, Rate>,
+    /// Connections captured by TUN; they belong to no listener.
+    pub tun_rate: Rate,
     pub totals: TrafficTotals,
 }
 
@@ -73,6 +77,7 @@ impl TrafficAggregator {
         let secs = elapsed.as_secs_f64();
         let mut per_listener: HashMap<ListenerId, (u64, u64)> = HashMap::new();
         let mut next_conn = HashMap::with_capacity(snap.connections.len());
+        let mut tun = (0, 0);
 
         for c in &snap.connections {
             let (pu, pd) = self.last_conn.get(&c.id).copied().unwrap_or((0, 0));
@@ -80,6 +85,10 @@ impl TrafficAggregator {
             next_conn.insert(c.id.clone(), (c.upload, c.download));
             let name = &c.metadata.inbound_name;
             if name.starts_with(FETCH_PREFIX) {
+                continue;
+            }
+            if name == TUN_INBOUND {
+                tun = (tun.0 + du, tun.1 + dd);
                 continue;
             }
             if let Some(id) = name_to_id.get(name) {
@@ -120,6 +129,10 @@ impl TrafficAggregator {
                 down: rate(gd, secs),
             },
             per_listener_rate,
+            tun_rate: Rate {
+                up: rate(tun.0, secs),
+                down: rate(tun.1, secs),
+            },
             totals: self.totals.clone(),
         }
     }
@@ -253,6 +266,21 @@ mod tests {
         );
         assert!(tick.per_listener_rate.is_empty());
         assert!(agg.totals.per_listener.is_empty());
+    }
+
+    #[test]
+    fn tun_connections_get_their_own_rate() {
+        let mut agg = TrafficAggregator::new(TrafficTotals::default());
+        let map = HashMap::from([("in-a".to_string(), lid("a"))]);
+        agg.ingest(&snap(0, 0, vec![conn("1", TUN_INBOUND, 100, 200), conn("2", "in-a", 1, 1)]), &map, SEC);
+        let tick = agg.ingest(
+            &snap(0, 0, vec![conn("1", TUN_INBOUND, 300, 1200), conn("3", TUN_INBOUND, 10, 20), conn("2", "in-a", 6, 6)]),
+            &map,
+            Duration::from_secs(2),
+        );
+        assert_eq!(tick.tun_rate, Rate { up: 105, down: 510 });
+        assert_eq!(tick.per_listener_rate[&lid("a")], Rate { up: 2, down: 2 });
+        assert!(!agg.totals.per_listener.contains_key(&lid("DEFAULT-TUN")));
     }
 
     #[test]

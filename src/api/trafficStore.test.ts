@@ -4,6 +4,7 @@ import { getTraffic, getTrafficHistory, HISTORY_LEN, resetTrafficStore, setTraff
 const tick = (up: number, down = up): TrafficTick => ({
   total_rate: { up, down },
   per_listener_rate: {},
+  tun_rate: { up: 0, down: 0 },
   totals: { total: { up: 0, down: 0 }, per_listener: {} },
 });
 

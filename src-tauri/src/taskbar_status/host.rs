@@ -635,6 +635,7 @@ mod tests {
             up: 0,
             down: 0,
             series: vec![],
+            capture: None,
         };
         let mut snapshot = Snapshot {
             running: true,

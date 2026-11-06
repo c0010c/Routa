@@ -763,7 +763,11 @@ export type TrafficTick = { total_rate: Rate;
 /**
  * Every listener that had a delta in this tick.
  */
-per_listener_rate: Partial<{ [key in ListenerId]: Rate }>; totals: TrafficTotals }
+per_listener_rate: Partial<{ [key in ListenerId]: Rate }>; 
+/**
+ * Connections captured by TUN; they belong to no listener.
+ */
+tun_rate: Rate; totals: TrafficTotals }
 export type TrafficTotals = { total: Bytes; per_listener: Partial<{ [key in ListenerId]: Bytes }> }
 export type UiPreferences = { mode: InterfaceMode | null; listener_id: ListenerId | null; exit_id: ExitId | null; system_listener_id: ListenerId | null; capture_mode: CaptureMode; auto_connect: boolean; close_to_tray: boolean; managed_rules: ProcessRuleId[]; selected_apps: ProcessRuleId[]; taskbar_status: TaskbarStatusPrefs }
 export type UpdateState = 
