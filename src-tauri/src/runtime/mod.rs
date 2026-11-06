@@ -1254,15 +1254,16 @@ impl Runtime {
     /// `mutate` does, including `mihomo -t`) only when normalizing changed
     /// the hidden process-routing listeners/exits; otherwise the change is not
     /// part of mihomo's config and nothing is reloaded. Validation
-    /// errors leave everything untouched. After `shutdown` nothing is saved
-    /// and `Ok(())` is returned (the app is exiting; there is nobody to tell).
+    /// errors leave everything untouched. Returns the reload's outcome, or
+    /// `None` when nothing was reloaded. After `shutdown` nothing is saved
+    /// and `Ok(None)` is returned (the app is exiting; there is nobody to tell).
     pub async fn mutate_process_routing(
         &self,
         f: impl FnOnce(&mut ProcessRouting),
-    ) -> Result<(), Vec<ValidationError>> {
+    ) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
         let mut eng = self.inner.engine.lock().await;
         if self.inner.is_shut_down() {
-            return Ok(());
+            return Ok(None);
         }
         let mut m = eng.model.clone();
         f(&mut m.process_routing);
@@ -1274,13 +1275,14 @@ impl Runtime {
         if !errors.is_empty() {
             return Err(errors);
         }
-        if m.listeners != eng.model.listeners || m.exits != eng.model.exits {
-            self.inner.check_commit_apply(&mut eng, m).await?;
+        let outcome = if m.listeners != eng.model.listeners || m.exits != eng.model.exits {
+            Some(self.inner.check_commit_apply(&mut eng, m).await?)
         } else {
             self.inner.commit_model(&mut eng, m);
-        }
+            None
+        };
         self.inner.emit_status();
-        Ok(())
+        Ok(outcome)
     }
 
     /// Re-lists adapters; on any change re-evaluates and re-applies.
