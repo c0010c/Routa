@@ -81,6 +81,14 @@ fn taskbar_status_supported() -> bool {
     #[cfg(not(windows))]
     false
 }
+/// The node the simple-mode default exit points at.
+fn simple_node(model: &Model, prefs: &UiPreferences) -> Option<NodeRef> {
+    let id = prefs.exit_id.as_ref()?;
+    match &model.exits.iter().find(|e| &e.id == id)?.kind {
+        ExitKind::Node { node } => Some(node.clone()),
+        _ => None,
+    }
+}
 pub struct Desktop {
     file: PathBuf,
     prefs: Mutex<UiPreferences>,
@@ -187,6 +195,30 @@ impl Desktop {
         if self.fresh && self.prefs().listener_id.is_none() && rt.model().listeners.is_empty() {
             self.bind_inner(rt, None).await?;
         }
+        self.fill_managed_rule_nodes(rt).await
+    }
+    /// Rules made before rules carried a node follow the simple-mode node.
+    async fn fill_managed_rule_nodes(&self, rt: &Runtime) -> Result<(), String> {
+        let p = self.prefs();
+        let model = rt.model();
+        let Some(node) = simple_node(&model, &p) else { return Ok(()) };
+        if !model
+            .process_routing
+            .rules
+            .iter()
+            .any(|r| p.managed_rules.contains(&r.id) && r.node.is_none())
+        {
+            return Ok(());
+        }
+        rt.mutate_process_routing(|pr| {
+            for r in &mut pr.rules {
+                if p.managed_rules.contains(&r.id) && r.node.is_none() {
+                    r.node = Some(node.clone());
+                }
+            }
+        })
+        .await
+        .map_err(validation)?;
         Ok(())
     }
     pub fn state(&self, rt: &Runtime) -> DesktopState {
@@ -220,7 +252,7 @@ impl Desktop {
                                     .process_routing
                                     .rules
                                     .iter()
-                                    .any(|r| &r.id == id && Some(&r.listener) == prefs.listener_id.as_ref())
+                                    .any(|r| &r.id == id && r.node.is_some() && r.node == simple_node(&rt.model(), &prefs))
                         })
                 }
                 Some(CaptureMode::Tun) => rt.tun_adapter_ready(),
@@ -324,6 +356,13 @@ impl Desktop {
             .cloned()
             .ok_or("默认监听器已删除，请重新选择")?;
         let previous_exit = before.exits.iter().find(|e| e.id == exit_id).cloned();
+        let previous_rule_nodes: Vec<(ProcessRuleId, Option<NodeRef>)> = before
+            .process_routing
+            .rules
+            .iter()
+            .filter(|r| p.managed_rules.contains(&r.id))
+            .map(|r| (r.id.clone(), r.node.clone()))
+            .collect();
         let outcome = rt
             .mutate(|m| {
                 let name = previous_exit.as_ref().map(|e| e.name.clone()).unwrap_or_else(|| {
@@ -338,7 +377,7 @@ impl Desktop {
                 let exit = Exit {
                     id: exit_id.clone(),
                     name,
-                    kind: ExitKind::Node { node },
+                    kind: ExitKind::Node { node: node.clone() },
                     interface: None,
                     hidden: false,
                 };
@@ -350,6 +389,11 @@ impl Desktop {
                 let l = m.listeners.iter_mut().find(|l| l.id == id).unwrap();
                 l.exit = Some(exit_id.clone());
                 l.user_enabled = true;
+                for r in &mut m.process_routing.rules {
+                    if p.managed_rules.contains(&r.id) {
+                        r.node = Some(node.clone());
+                    }
+                }
             })
             .await
             .map_err(validation)?;
@@ -365,6 +409,11 @@ impl Desktop {
                         if let Some(e) = previous_exit {
                             m.exits.push(e);
                         }
+                        for (id, node) in previous_rule_nodes {
+                            if let Some(r) = m.process_routing.rules.iter_mut().find(|r| r.id == id) {
+                                r.node = node;
+                            }
+                        }
                     })
                     .await;
                 return Err(error);
@@ -378,10 +427,11 @@ impl Desktop {
     pub async fn save_app(&self, rt: &Runtime, path: String, selected: bool) -> Result<(), String> {
         let _guard = self.operation.lock().await;
         let mut p = self.prefs();
-        let listener = p.listener_id.clone().ok_or("请先设置默认代理")?;
+        p.listener_id.as_ref().ok_or("请先设置默认代理")?;
+        let model = rt.model();
+        let node = simple_node(&model, &p).ok_or("请先选择节点")?;
         let normalized = crate::model::normalize::normalize_exe_path(&path);
         let file_name = process_file_name(&normalized).to_lowercase();
-        let model = rt.model();
         // 同名程序只能属于一条规则（按名字的完整版规则会命中它）。
         let existing = model
             .process_routing
@@ -396,10 +446,10 @@ impl Desktop {
             processes: vec![path],
             match_full_path: true,
             on_fault: crate::model::FaultPolicy::Block,
-            listener: listener.clone(),
             ..Default::default()
         });
-        rule.listener = listener;
+        rule.node = Some(node);
+        rule.interface = None;
         rule.user_enabled = selected && self.active.lock().unwrap().as_ref() == Some(&CaptureMode::Apps);
         if !p.managed_rules.contains(&rule.id) {
             p.managed_rules.push(rule.id.clone());
@@ -506,10 +556,10 @@ impl Desktop {
                     .process_routing
                     .rules
                     .iter()
-                    .find(|r| p.selected_apps.contains(&r.id) && &r.listener != id)
+                    .find(|r| p.selected_apps.contains(&r.id) && r.node != simple_node(&model, &p))
                 {
                     return Err(format!(
-                        "{} 在完整版使用了其他监听器，请在简洁版关闭并重新勾选该应用，再开启代理",
+                        "{} 在完整版使用了其他节点，请在简洁版关闭并重新勾选该应用，再开启代理",
                         process_rule_label(rule)
                     ));
                 }
