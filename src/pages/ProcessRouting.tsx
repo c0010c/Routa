@@ -27,7 +27,6 @@ import {
   useProcRouteStatus,
   useProcRouteRetry,
   useSaveProcessRoutingSettings,
-  useSaveProcessRule,
 } from "../api/procroute";
 import type {
   ComponentState,
@@ -42,7 +41,9 @@ import { RowActions } from "../components/RowActions";
 import { formatBytes, type Label } from "../lib/format";
 import { fileName, ruleLabel } from "../lib/processRule";
 import { ProcessRuleDialog } from "./ProcessRuleDialog";
-import { ProcessListenerSelect } from "../components/ProcessListenerSelect";
+import { ProcessNodeSelect } from "../components/ProcessNodeSelect";
+import { desktopApi, useDesktopMutation } from "../api/desktop";
+import { errorMessage } from "../api/client";
 
 export const EXIT_POLICY_LABEL = "Routa 不提供代理时";
 export const EXIT_POLICY_HINT =
@@ -375,7 +376,23 @@ function FlowsDrawer({
 export function ProcessRoutingPage() {
   const model = useModel();
   const status = useProcRouteStatus();
-  const saveRule = useSaveProcessRule();
+  const setEnabled = useDesktopMutation(
+    (a: { id: string; enabled: boolean }) =>
+      desktopApi.setRuleEnabled(a.id, a.enabled),
+  );
+  const [togglingIds, setTogglingIds] = useState<string[]>([]);
+  const [toggleErrors, setToggleErrors] = useState<Record<string, string>>({});
+  const toggle = async (id: string, enabled: boolean) => {
+    setTogglingIds((v) => [...v, id]);
+    setToggleErrors(({ [id]: _, ...rest }) => rest);
+    try {
+      await setEnabled.mutateAsync({ id, enabled });
+    } catch (e) {
+      setToggleErrors((v) => ({ ...v, [id]: errorMessage(e) }));
+    } finally {
+      setTogglingIds((v) => v.filter((x) => x !== id));
+    }
+  };
   const delRule = useDeleteProcessRule();
   const [editing, setEditing] = useState<{ rule?: ProcessRule } | null>(null);
   const [deleting, setDeleting] = useState<ProcessRule | null>(null);
@@ -418,14 +435,14 @@ export function ProcessRoutingPage() {
         <EmptyState
           icon={<AppsOutlined />}
           title="还没有分流规则"
-          description="规则让指定程序的流量走某个监听器，程序本身不需要设置代理。"
+          description="规则让指定程序的流量走某个节点，程序本身不需要设置代理。"
         />
       ) : (
         <TableContainer component={Paper}>
           <Table size="small">
             <TableHead>
               <TableRow>
-                {["规则", "监听器", "状态", "启用", ""].map((h) => (
+                {["规则", "节点", "状态", "启用", ""].map((h) => (
                   <TableCell key={h}>{h}</TableCell>
                 ))}
               </TableRow>
@@ -455,20 +472,25 @@ export function ProcessRoutingPage() {
                       <ProcessChips rule={r} />
                     </TableCell>
                     <TableCell>
-                      <ProcessListenerSelect rule={r} listeners={m.listeners} />
+                      <ProcessNodeSelect rule={r} model={m} reason={view?.reason} />
                     </TableCell>
                     <TableCell>
                       <GuardChips view={view} active={pr.enabled && r.user_enabled} />
+                      {toggleErrors[r.id] && (
+                        <Typography role="alert" variant="caption" color="error" sx={{ display: "block" }}>
+                          {toggleErrors[r.id]}
+                        </Typography>
+                      )}
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <Switch
                         checked={r.user_enabled}
-                        disabled={saveRule.isPending}
+                        disabled={togglingIds.includes(r.id)}
                         slotProps={{
                           input: { "aria-label": `启用 ${name}` },
                         }}
                         onChange={(_, checked) =>
-                          saveRule.mutate({ ...r, user_enabled: checked })
+                          void toggle(r.id, checked)
                         }
                       />
                     </TableCell>
@@ -482,11 +504,7 @@ export function ProcessRoutingPage() {
                           },
                           {
                             label: r.user_enabled ? "禁用" : "启用",
-                            onClick: () =>
-                              saveRule.mutate({
-                                ...r,
-                                user_enabled: !r.user_enabled,
-                              }),
+                            onClick: () => void toggle(r.id, !r.user_enabled),
                           },
                           {
                             label: "删除",
@@ -516,7 +534,7 @@ export function ProcessRoutingPage() {
           <br />
           HTTP 类型的监听器不能选：它转发不了 UDP，程序的 UDP
           流量会悄悄走直连。请选混合或 SOCKS 类型。
-          监听器可直接在行内更改，后续新连接使用新目标，不强制断开已有连接。
+          节点可直接在行内更改，后续新连接使用新目标，不强制断开已有连接。
           <br />
           退出 Routa 后的行为、卸载组件和清理残留阻断规则在「设置 → 进程分流」中。
         </Typography>

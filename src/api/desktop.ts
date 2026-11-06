@@ -28,8 +28,10 @@ export const desktopApi = {
   app: (path: string, selected: boolean) =>
     invoke<void>("save_simple_app", { path, selected }),
   port: (port: number) => invoke<void>("set_simple_port", { port }),
-  changeListener: (id: string, listener: string) =>
-    invoke<void>("change_process_listener", { id, listener }),
+  changeNode: (id: string, node: NodeRef) =>
+    invoke<void>("change_process_node", { id, node }),
+  setRuleEnabled: (id: string, enabled: boolean) =>
+    invoke<void>("set_process_rule_enabled", { id, enabled }),
   connections: () => invoke<ConnectionInfo[]>("get_connection_details"),
   logs: () => invoke<string>("read_core_log"),
   /** Starts an elevated copy (UAC) and exits; rejects with "已取消" if declined. */
