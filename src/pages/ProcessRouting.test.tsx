@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import type { Model, ProcRouteStatus } from "../bindings";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 vi.mock("../bindings", () => ({
   commands: {
@@ -31,19 +34,19 @@ const model: Model = {
     { id: "l1", name: "浏览器", listener_type: "Mixed", listen: "0.0.0.0", port: 7891, auth: null, exit: null, user_enabled: true },
   ],
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
-  manual_nodes: [],
+  manual_nodes: [{ id: "m1", name: "东京", kind: { Proxy: { raw: "ss://x" } }, groups: [] }],
   node_groups: [],
   process_routing: {
     enabled: true,
     on_routa_exit: "Block",
     rules: [
-      { id: "r1", name: "", processes: ["curl.exe"], match_full_path: false, listener: "l1", on_fault: "Direct", reset_on_change: false, user_enabled: true },
+      { id: "r1", name: "", processes: ["curl.exe"], match_full_path: false, node: { manual_id: "m1" }, on_fault: "Direct", reset_on_change: false, user_enabled: true },
       {
         id: "r2",
         name: "AI 工具",
         processes: ["ChatGPT.exe", "codex.exe", "Claude.exe", "node.exe", "C:\\Tools\\git.exe"],
         match_full_path: false,
-        listener: "l1",
+        node: { manual_id: "m1" },
         on_fault: "Direct",
         reset_on_change: false,
         user_enabled: true,
@@ -78,7 +81,10 @@ function renderPage(status: ProcRouteStatus, m: Model = model) {
 }
 
 describe("ProcessRoutingPage", () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(invoke).mockReset();
+  });
   afterEach(() => resetFlowsStore());
 
   it("not installed shows enable button", async () => {
@@ -253,5 +259,25 @@ describe("ProcessRoutingPage", () => {
     renderPage({ ...base, component: "NotInstalled" });
     await screen.findByText("未安装");
     expect(screen.queryByRole("switch", { name: "启用进程分流规则" })).not.toBeInTheDocument();
+  });
+
+  it("toggles a rule through set_process_rule_enabled, not saveProcessRule", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    vi.mocked(commands.saveProcessRule).mockClear();
+    renderPage(base);
+    const row = (await screen.findAllByText("curl.exe"))[0].closest("tr")!;
+    fireEvent.click(within(row).getByRole("switch", { name: "启用 curl.exe" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("set_process_rule_enabled", { id: "r1", enabled: false }),
+    );
+    expect(commands.saveProcessRule).not.toHaveBeenCalled();
+  });
+
+  it("shows the error on the row when enabling fails", async () => {
+    vi.mocked(invoke).mockRejectedValue("服务未确认，已恢复原状态");
+    renderPage(base);
+    const row = (await screen.findAllByText("curl.exe"))[0].closest("tr")!;
+    fireEvent.click(within(row).getByRole("switch", { name: "启用 curl.exe" }));
+    expect(await within(row).findByText("服务未确认，已恢复原状态")).toBeInTheDocument();
   });
 });
