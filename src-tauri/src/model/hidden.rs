@@ -80,13 +80,16 @@ pub fn reconcile_hidden_listeners(model: &mut Model) {
     model.listeners.retain(|l| !l.hidden || kept.contains(&l.id));
     model.exits.retain(|e| !removed_exits.contains(&e.id));
 
-    // Enable/disable, and move ports off user listeners / the controller port.
+    // Enable/disable, and move ports off user listeners / the controller port /
+    // an earlier hidden listener (the later one of two sharing a port moves).
+    let mut settled: HashSet<ListenerId> = HashSet::new();
     for ((_, _, enabled), id) in keys.iter().zip(&keep) {
         let Some(id) = id else { continue };
         let Some(idx) = model.listeners.iter().position(|l| &l.id == id) else { continue };
         let port = model.listeners[idx].port;
-        let clash =
-            port == model.settings.controller_port || model.listeners.iter().any(|o| !o.hidden && o.port == port);
+        let clash = port == model.settings.controller_port
+            || model.listeners.iter().any(|o| o.port == port && (!o.hidden || settled.contains(&o.id)));
+        settled.insert(id.clone());
         let new_port = if clash { free_port(model, Some(id)) } else { None };
         let l = &mut model.listeners[idx];
         l.user_enabled = *enabled;
@@ -296,6 +299,36 @@ mod tests {
         reconcile_hidden_listeners(&mut m);
         let r = m.process_routing.rules[0].clone();
         assert_eq!(rule_listener(&m, &r).unwrap().port, 37802);
+    }
+
+    #[test]
+    fn normalize_is_idempotent_with_normal_and_tailscale_rules() {
+        let mut m = model();
+        m.listeners.push(Listener::new_default("u".into(), 37800));
+        m.process_routing.rules.push(rule(Some(n1()), None, true));
+        m.process_routing.rules.push(rule(Some(n1()), Some(g("B")), false));
+        m.process_routing.rules.push(rule(Some(n("n2")), None, true));
+        m.process_routing.rules.push(rule(Some(ts_ref()), Some(g("B")), true));
+        m.process_routing.rules.push(rule(None, None, true));
+        crate::model::normalize::normalize(&mut m);
+        let once = m.clone();
+        crate::model::normalize::normalize(&mut m);
+        assert_eq!(m, once);
+        assert_eq!(hidden_count(&m), 4);
+    }
+
+    #[test]
+    fn reconcile_moves_later_hidden_listener_off_a_shared_port() {
+        let mut m = model();
+        m.process_routing.rules.push(rule(Some(n1()), None, true));
+        m.process_routing.rules.push(rule(Some(n("n2")), None, true));
+        reconcile_hidden_listeners(&mut m);
+        let (a, b) = (m.process_routing.rules[0].clone(), m.process_routing.rules[1].clone());
+        let bid = rule_listener(&m, &b).unwrap().id.clone();
+        m.listeners.iter_mut().find(|l| l.id == bid).unwrap().port = 37800;
+        reconcile_hidden_listeners(&mut m);
+        assert_eq!(rule_listener(&m, &a).unwrap().port, 37800);
+        assert_eq!(rule_listener(&m, &b).unwrap().port, 37801);
     }
 
     #[test]
