@@ -13,36 +13,32 @@ import {
   FormControlLabel,
   FormHelperText,
   FormLabel,
-  InputLabel,
-  Link,
-  MenuItem,
   Radio,
   RadioGroup,
-  Select,
   Stack,
   Switch,
   TextField,
   Typography,
 } from "@mui/material";
 import { useState } from "react";
-import { Link as RouterLink } from "react-router-dom";
 import { isValidationError, useModel } from "../api/client";
 import { useRunningProcesses, useSaveProcessRule } from "../api/procroute";
 import type { FaultPolicy, ProcessRule, RunningProcess, ValidationError } from "../bindings";
 import { FormDialog } from "../components/FormDialog";
+import { InterfacePicker } from "../components/InterfacePicker";
+import { NodePickerDialog } from "../components/NodePickerDialog";
 import { fileName, ruleLabel } from "../lib/processRule";
+import { isTailscaleRef, nodeLabel } from "../lib/refs";
 import { fieldErrors } from "../lib/validation";
 
-export const FAULT_POLICY_HINT = "只在 mihomo 或分流组件意外故障时生效；Listener 因节点失效、网卡断开被停用时，始终阻断";
+export const FAULT_POLICY_HINT = "只在 mihomo 或分流组件意外故障时生效；节点失效、网卡断开时，始终阻断";
 export const RESET_HINT = "仅对 IPv4 TCP 连接有效；更换代理目标不触发断开";
 export const NAME_MATCH_HINT = "按进程名匹配：同名程序装在哪里都会被分流；组件故障时只能直连。需要更严格时，在高级选项里打开「按完整路径匹配」。";
 export const FULL_PATH_HINT = "关闭时只看进程名，同名程序装在哪里都会命中；打开后只命中指定路径下的那个程序，组件故障时也能阻断。";
 
-const TYPE_TEXT = { Mixed: "混合", Http: "HTTP", Socks: "SOCKS" } as const;
-
 interface RuleErrors {
   processes?: string;
-  listener?: string;
+  node?: string;
   form: string[];
 }
 
@@ -53,7 +49,6 @@ function ruleErrors(errors: ValidationError[]): RuleErrors {
     const text = fieldErrors([e]);
     const msg = [...(text.name ? [text.name] : []), ...(text.port ? [text.port] : []), ...text.form].join("\n");
     if ("DuplicateProcessRule" in e || "InvalidExePath" in e || "EmptyProcessRule" in e) out.processes ??= msg;
-    else if ("ListenerTypeNotAllowed" in e || "ListenerAddressNotAllowed" in e) out.listener ??= msg;
     else out.form.push(msg);
   }
   return out;
@@ -71,9 +66,8 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
   const model = useModel();
   const running = useRunningProcesses();
   const save = useSaveProcessRule();
-  const listeners = (model.data?.listeners ?? []).filter((l) => l.listener_type !== "Http");
   const others = (model.data?.process_routing.rules ?? []).filter((x) => x.id !== rule?.id);
-  // Mirrors `ProcessRule::default`; the listener defaults to the first usable one once the model is in.
+  // Mirrors `ProcessRule::default`.
   const [r, setR] = useState<ProcessRule>(
     () =>
       rule ?? {
@@ -81,7 +75,8 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
         name: "",
         processes: [],
         match_full_path: false,
-        listener: "",
+        node: null,
+        interface: null,
         on_fault: "Direct",
         reset_on_change: false,
         user_enabled: true,
@@ -90,9 +85,16 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
   const [input, setInput] = useState("");
   const [advanced, setAdvanced] = useState(() => !!rule?.match_full_path);
   const [errs, setErrs] = useState<RuleErrors>({ form: [] });
-  const listenerId = r.listener !== "" ? r.listener : (listeners[0]?.id ?? "");
-  // An HTTP or deleted listener is not an option: show the select empty instead of an out-of-range value.
-  const selectValue = listeners.some((l) => l.id === listenerId) ? listenerId : "";
+  const [picking, setPicking] = useState(false);
+  const m = model.data;
+  const node = r.node ?? null;
+  const tailscale = !!m && !!node && isTailscaleRef(m, node);
+  /** A Tailscale instance has its own NIC (set in its node settings); the rule's value doesn't apply. */
+  const tailscaleNic = (() => {
+    if (!m || !node || !tailscale || !("manual_id" in node)) return null;
+    const kind = m.manual_nodes.find((x) => x.id === node.manual_id)?.kind;
+    return kind && typeof kind === "object" && "Tailscale" in kind ? kind.Tailscale.interface : null;
+  })();
   const runningPath = (name: string) => running.data?.find((p) => same(p.name, name))?.exe_path;
   /** The rule that already has a program with this file name (one program belongs to one rule). */
   const ownerOf = (p: string) => others.find((x) => x.processes.some((q) => same(fileName(q), fileName(p))));
@@ -142,13 +144,13 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
       setErrs({ form: [], processes: "至少添加一个进程" });
       return;
     }
-    if (selectValue === "") {
-      setErrs({ form: [], listener: "请选择一个监听器" });
+    if (!node) {
+      setErrs({ form: [], node: "请选择一个节点" });
       return;
     }
     setErrs({ form: [] });
     try {
-      await save.mutateAsync({ ...r, name: r.name.trim(), processes, listener: selectValue });
+      await save.mutateAsync({ ...r, name: r.name.trim(), processes, interface: tailscale ? null : (r.interface ?? null) });
       onClose();
     } catch (e) {
       if (isValidationError(e)) setErrs(ruleErrors(e.errors));
@@ -264,38 +266,29 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
               {NAME_MATCH_HINT}
             </Alert>
           )}
-          <FormControl size="small" error={!!errs.listener}>
-            <InputLabel id="pr-listener">监听器</InputLabel>
-            <Select
-              labelId="pr-listener"
-              label="监听器"
-              value={selectValue}
-              onChange={(e) => {
-                setR({ ...r, listener: e.target.value });
-                setErrs((x) => ({ ...x, listener: undefined }));
-              }}
+          <FormControl size="small" error={!!errs.node}>
+            <Button
+              variant="outlined"
+              color={errs.node ? "error" : "inherit"}
+              onClick={() => setPicking(true)}
+              sx={{ justifyContent: "flex-start", textTransform: "none" }}
             >
-              {listeners.map((l) => (
-                <MenuItem key={l.id} value={l.id}>
-                  {`${l.name}（${TYPE_TEXT[l.listener_type]} :${l.port}）`}
-                </MenuItem>
-              ))}
-            </Select>
-            {errs.listener ? (
-              <FormHelperText>{errs.listener}</FormHelperText>
-            ) : (
-              model.data &&
-              listeners.length === 0 && (
-                <FormHelperText>
-                  没有可用的混合或 SOCKS 监听器，请先到
-                  <Link component={RouterLink} to="/listeners">
-                    监听器
-                  </Link>
-                  页新建
-                </FormHelperText>
-              )
-            )}
+              {`节点：${node && m ? nodeLabel(m, node) : "未选择"}`}
+            </Button>
+            {errs.node && <FormHelperText>{errs.node}</FormHelperText>}
           </FormControl>
+          {picking && (
+            <NodePickerDialog
+              title="选择节点"
+              value={node}
+              onClose={() => setPicking(false)}
+              onPick={(n) => {
+                setR((x) => ({ ...x, node: n, interface: m && isTailscaleRef(m, n) ? null : x.interface }));
+                setErrs((x) => ({ ...x, node: undefined }));
+                setPicking(false);
+              }}
+            />
+          )}
           <FormControlLabel
             control={<Switch checked={r.user_enabled} onChange={(e) => setR({ ...r, user_enabled: e.target.checked })} />}
             label="启用"
@@ -311,6 +304,15 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
                   label="按完整路径匹配"
                 />
                 <FormHelperText sx={{ mx: 0, mt: 0 }}>{FULL_PATH_HINT}</FormHelperText>
+              </Box>
+              <Box>
+                <InterfacePicker
+                  label="出口网卡"
+                  value={tailscale ? tailscaleNic : (r.interface ?? null)}
+                  onChange={(v) => setR({ ...r, interface: v })}
+                  disabled={tailscale}
+                />
+                {tailscale && <FormHelperText sx={{ mx: 0 }}>在 Tailscale 节点设置里修改</FormHelperText>}
               </Box>
               <FormControl>
                 <FormLabel id="pr-fault">组件故障时</FormLabel>
