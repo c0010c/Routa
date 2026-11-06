@@ -678,7 +678,7 @@ mod tests {
     }
 
     fn direct_exit(name: &str) -> Exit {
-        Exit { id: ExitId::new(), name: name.into(), kind: ExitKind::Direct, interface: None }
+        Exit { id: ExitId::new(), name: name.into(), kind: ExitKind::Direct, interface: None, hidden: false }
     }
 
     #[tokio::test]
@@ -794,6 +794,7 @@ mod tests {
                 selected: None,
             },
             interface: None,
+            hidden: false,
         };
         ops::save_exit(&rt, group.clone()).await.unwrap();
         ops::select_group_member(&rt, group.id.clone(), node.clone()).await.unwrap();
@@ -864,6 +865,7 @@ mod tests {
             name: "组".into(),
             kind: ExitKind::Group { strategy: GroupStrategy::Select, members: vec![], selected: None },
             interface: None,
+            hidden: false,
         };
         ops::save_exit(&rt, group.clone()).await.unwrap();
         let not_member = ops::select_group_member(&rt, group.id, node).await;
@@ -928,7 +930,7 @@ mod tests {
         let rt = runtime(&td);
         let n = proxy_node("m1", vec![]);
         ops::save_manual_node(&rt, n.clone()).await.unwrap();
-        let exit = Exit { id: ExitId::new(), name: "e".into(), kind: ExitKind::Node { node: mref(&n) }, interface: None };
+        let exit = Exit { id: ExitId::new(), name: "e".into(), kind: ExitKind::Node { node: mref(&n) }, interface: None, hidden: false };
         ops::save_exit(&rt, exit).await.unwrap();
         let before = rt.model();
 
@@ -970,6 +972,7 @@ mod tests {
                 selected: None,
             },
             interface: None,
+            hidden: false,
         };
         ops::save_exit(&rt, exit).await.unwrap();
         let errs = ops::delete_node_group(&rt, g.id).await.unwrap_err();
@@ -1005,9 +1008,9 @@ mod tests {
         ops::save_manual_node(&rt, t.clone()).await.unwrap();
         ops::save_manual_node(&rt, p.clone()).await.unwrap();
         let only_ts =
-            Exit { id: ExitId::new(), name: "ts".into(), kind: ExitKind::Node { node: mref(&t) }, interface: None };
+            Exit { id: ExitId::new(), name: "ts".into(), kind: ExitKind::Node { node: mref(&t) }, interface: None, hidden: false };
         let other =
-            Exit { id: ExitId::new(), name: "p".into(), kind: ExitKind::Node { node: mref(&p) }, interface: None };
+            Exit { id: ExitId::new(), name: "p".into(), kind: ExitKind::Node { node: mref(&p) }, interface: None, hidden: false };
         ops::save_exit(&rt, only_ts.clone()).await.unwrap();
         ops::save_exit(&rt, other.clone()).await.unwrap();
 
@@ -1045,6 +1048,7 @@ mod tests {
                 selected: None,
             },
             interface: None,
+            hidden: false,
         };
         ops::save_exit(&rt, group.clone()).await.unwrap();
         let jp = NodeRef::Subscription { subscription_id: sid.clone(), name: "JP".into() };

@@ -126,7 +126,14 @@ pub struct Exit {
     pub name: String,
     pub kind: ExitKind,
     pub interface: Option<InterfaceGuid>,
+    /// 进程分流按节点自动创建的出口：不在出口页显示，没有规则引用时自动删除。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[specta(optional)]
+    pub hidden: bool,
 }
+
+/// 隐藏监听器（进程分流自动管理）使用的端口范围。
+pub const HIDDEN_PORT_RANGE: std::ops::RangeInclusive<u16> = 37800..=37999;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
 pub enum ListenerType {
@@ -155,6 +162,10 @@ pub struct Listener {
     #[serde(default)]
     #[specta(optional)]
     pub routing: Option<ListenerRouting>,
+    /// 进程分流按节点自动创建的监听器：不在监听器页显示，没有规则引用时自动删除。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[specta(optional)]
+    pub hidden: bool,
 }
 
 /// Per-port routing; None preserves legacy uniform forwarding.
@@ -192,7 +203,7 @@ impl Default for Subscription {
 
 impl Default for Exit {
     fn default() -> Self {
-        Self { id: ExitId::new(), name: String::new(), kind: ExitKind::Direct, interface: None }
+        Self { id: ExitId::new(), name: String::new(), kind: ExitKind::Direct, interface: None, hidden: false }
     }
 }
 
@@ -214,6 +225,7 @@ impl Listener {
             exit: None,
             user_enabled: true,
             routing: None,
+            hidden: false,
         }
     }
 }
@@ -329,6 +341,12 @@ pub struct ProcessRule {
     /// 按完整路径匹配。按进程名匹配的规则没法在组件故障时阻断（`on_fault` 只能是 `Direct`）。
     pub match_full_path: bool,
     pub listener: ListenerId,
+    /// 直接选择的节点；设置后由程序自动管理隐藏监听器。
+    #[serde(default)]
+    pub node: Option<NodeRef>,
+    /// 出站网卡（仅 `node` 模式使用）。
+    #[serde(default)]
+    pub interface: Option<InterfaceGuid>,
     pub on_fault: FaultPolicy,
     pub reset_on_change: bool,
     pub user_enabled: bool,
@@ -346,6 +364,8 @@ impl Default for ProcessRule {
             processes: vec![],
             match_full_path: false,
             listener: ListenerId(String::new()),
+            node: None,
+            interface: None,
             on_fault: FaultPolicy::Direct,
             reset_on_change: false,
             user_enabled: true,
@@ -371,6 +391,22 @@ impl Default for ProcessRouting {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_rule_with_listener_loads_without_node() {
+        let r: ProcessRule = serde_json::from_str(r#"{"id":"r1","processes":["a.exe"],"listener":"l1"}"#).unwrap();
+        assert_eq!(r.node, None);
+        assert_eq!(r.interface, None);
+    }
+
+    #[test]
+    fn hidden_exit_flag_round_trips_and_is_omitted_when_false() {
+        let e = Exit::default();
+        assert!(!serde_json::to_string(&e).unwrap().contains("hidden"));
+        let e = Exit { hidden: true, ..Exit::default() };
+        let back: Exit = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert!(back.hidden);
+    }
 
     #[test]
     fn settings_defaults() {
@@ -454,6 +490,7 @@ mod tests {
                 selected: None,
             },
             interface: Some(InterfaceGuid("{abc}".into())),
+            hidden: false,
         };
         let mut l = Listener::new_default("监听 😀".into(), 7891);
         l.exit = Some(exit.id.clone());
@@ -485,6 +522,7 @@ mod tests {
                     name: "直连".into(),
                     kind: ExitKind::Direct,
                     interface: None,
+                    hidden: false,
                 },
             ],
             listeners: vec![l],

@@ -121,7 +121,7 @@ mod tests {
         }
     }
     fn exit(kind: ExitKind, interface: Option<InterfaceGuid>) -> Exit {
-        Exit { id: ExitId::new(), name: "e".into(), kind, interface }
+        Exit { id: ExitId::new(), name: "e".into(), kind, interface, hidden: false }
     }
 
     #[test]

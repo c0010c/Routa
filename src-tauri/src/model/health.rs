@@ -144,6 +144,7 @@ mod tests {
             name: id.into(),
             kind,
             interface: interface.map(|g| InterfaceGuid(g.into())),
+            hidden: false,
         }
     }
 

@@ -425,6 +425,7 @@ mod tests {
             name: name.into(),
             kind: ExitKind::Direct,
             interface: None,
+            hidden: false,
         }
     }
     fn sub(name: &str) -> Subscription {
@@ -765,6 +766,7 @@ mod tests {
             name: name.into(),
             kind: ExitKind::Group { strategy: GroupStrategy::Select, members, selected },
             interface: None,
+            hidden: false,
         }
     }
 
@@ -900,7 +902,7 @@ mod tests {
         ));
         assert_eq!(dangling(&m), 2);
         let mut m = Model::default();
-        m.exits.push(Exit { id: ExitId::new(), name: "n".into(), kind: ExitKind::Node { node: mref("zz") }, interface: None });
+        m.exits.push(Exit { id: ExitId::new(), name: "n".into(), kind: ExitKind::Node { node: mref("zz") }, interface: None, hidden: false });
         assert_eq!(dangling(&m), 1);
         let mut m = Model::default();
         let mut n = mnode("a", "n", ss());

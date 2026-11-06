@@ -344,6 +344,7 @@ impl Desktop {
                     name,
                     kind: ExitKind::Node { node },
                     interface: None,
+                    hidden: false,
                 };
                 if let Some(e) = m.exits.iter_mut().find(|e| e.id == exit_id) {
                     *e = exit;
