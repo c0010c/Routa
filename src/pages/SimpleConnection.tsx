@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { visibleListeners } from "../lib/hidden";
 import { Link } from "react-router-dom";
 import {
   Alert,
@@ -402,16 +403,14 @@ export function SimpleConnection() {
                         {ruleLabel(r)}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {r.listener !== p.listener_id
-                          ? `使用其他监听器 · 关闭并重新勾选后使用当前节点`
-                          : requested ||
-                              (m.process_routing.enabled && r.user_enabled)
-                            ? (routing.data?.actions[r.id]?.reason ??
-                              routing.data?.actions[r.id]?.action ??
-                              "等待确认")
-                            : p.selected_apps.includes(r.id)
-                              ? "已选择"
-                              : "直连"}
+                        {requested ||
+                        (m.process_routing.enabled && r.user_enabled)
+                          ? (routing.data?.actions[r.id]?.reason ??
+                            routing.data?.actions[r.id]?.action ??
+                            "等待确认")
+                          : p.selected_apps.includes(r.id)
+                            ? "已选择"
+                            : "直连"}
                       </Typography>
                     </Box>
                     <Switch
@@ -507,7 +506,7 @@ export function SimpleConnection() {
           </Collapse>
         </>
       )}
-      {(m.listeners.some((l) => l.id !== p.listener_id && l.user_enabled) ||
+      {(visibleListeners(m).some((l) => l.id !== p.listener_id && l.user_enabled) ||
         m.process_routing.rules.some(
           (r) => !p.managed_rules.includes(r.id) && r.user_enabled,
         ) ||
@@ -659,7 +658,7 @@ export function SimpleConnection() {
               仅绑定你选中的监听器，其他配置保持原样。
             </Typography>
             <List>
-              {m.listeners
+              {visibleListeners(m)
                 .filter((l) => l.listener_type !== "Http" && !l.auth)
                 .map((l) => (
                   <ListItemButton

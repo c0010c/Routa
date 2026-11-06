@@ -13,6 +13,7 @@ import {
   Stack,
   TextField,
 } from "@mui/material";
+import { visibleListeners } from "../lib/hidden";
 import { useState } from "react";
 import {
   errorMessage,
@@ -54,7 +55,7 @@ export function SubscriptionDialog({
   );
   const [fallback, setFallback] = useState(
     subscription.fallback_listener ??
-      model.data?.listeners.find((l) => l.exit === subscription.fallback_exit)
+      (model.data ? visibleListeners(model.data) : []).find((l) => l.exit === subscription.fallback_exit)
         ?.id ??
       null,
   );
@@ -80,7 +81,7 @@ export function SubscriptionDialog({
     }
   };
 
-  const exits = (model.data?.listeners ?? [])
+  const exits = (model.data ? visibleListeners(model.data) : [])
     .filter((l) => l.exit)
     .map((l) => ({ id: l.id, name: l.name }));
   const suggestedName = () => {

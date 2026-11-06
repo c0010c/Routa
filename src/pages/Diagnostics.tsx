@@ -32,7 +32,9 @@ export function Diagnostics() {
     ],
     [
       "端口冲突",
-      st?.failed_listeners.map((x) => `${x.name} (${x.port})`).join("、") ||
+      st?.failed_listeners
+        .filter((x) => !model.data?.listeners.some((h) => h.hidden && h.id === x.id))
+        .map((x) => `${x.name} (${x.port})`).join("、") ||
         "未发现",
     ],
     ["系统代理 / TUN", ui?.state?.connection ?? "未开启"],

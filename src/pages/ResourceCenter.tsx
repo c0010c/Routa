@@ -1,4 +1,5 @@
 import ArrowBackOutlined from "@mui/icons-material/ArrowBackOutlined";
+import { visibleListeners } from "../lib/hidden";
 import { NodeCard } from "../components/NodeCard";
 import { FixedCardGrid } from "../components/FixedCardGrid";
 import { SearchField } from "../components/SearchField";
@@ -297,7 +298,7 @@ export function ResourceCenter({
                   </Typography>
                   <Typography variant="body2">
                     备用代理：
-                    {m.listeners.find((l) => l.exit === s.fallback_exit)
+                    {visibleListeners(m).find((l) => l.exit === s.fallback_exit)
                       ?.name ??
                       (s.fallback_exit ? "旧配置（请重新选择代理）" : "不使用")}
                   </Typography>
@@ -572,7 +573,7 @@ export function ResourceCenter({
       {proxy && (
         <ListenerDialog
           listener={{
-            ...newListener(m.listeners),
+            ...newListener(visibleListeners(m)),
             name:
               nodes.find((n) => nodeKey(n.ref) === nodeKey(proxy))?.name ??
               "新代理",

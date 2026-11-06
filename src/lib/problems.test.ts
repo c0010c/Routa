@@ -68,4 +68,9 @@ describe("collectProblems", () => {
     expect(of({ FailedCoreStopped: { error: "c" } })).toEqual(["已保存，但未生效，内核已停止，请检查配置后手动重试"]);
     expect(of({ NotRunning: { error: "d" } })).toEqual(["已保存，但内核未能启动，请检查设置后手动重试"]);
   });
+  it("skips health problems of hidden exits", () => {
+    const m = { ...model, exits: [...model.exits, { id: "h", name: "__proc_e", kind: "Direct" as const, interface: null, hidden: true }] };
+    const st = { ...healthy, health: { exits: { h: { status: "NodeMissing" as const, effective_members: [], missing_members: [], interface: null } }, listeners: {} } };
+    expect(collectProblems(m, st)).toEqual([]);
+  });
 });

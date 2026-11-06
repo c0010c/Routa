@@ -1,4 +1,5 @@
 import type { CoreState, Model, RuntimeStatus } from "../bindings";
+import { isHiddenExitId } from "./hidden";
 import { applyOutcomeMessages, exitStatusLabel } from "./format";
 
 function coreText(c: CoreState): string {
@@ -14,11 +15,13 @@ export function collectProblems(model: Model, status: RuntimeStatus): string[] {
   const a = status.last_apply;
   if (a !== null && !("Reloaded" in a)) out.push(...applyOutcomeMessages(a));
   for (const [id, h] of Object.entries(status.health.exits)) {
-    if (!h || h.status === "Ok") continue;
+    if (!h || h.status === "Ok" || isHiddenExitId(model, id)) continue;
     const name = model.exits.find((e) => e.id === id)?.name ?? id;
     out.push(`出口「${name}」${exitStatusLabel(h.status).text}`);
   }
+  const hiddenNames = new Set(model.listeners.filter((l) => l.hidden).map((l) => l.name));
   for (const f of status.failed_listeners) {
+    if (hiddenNames.has(f.name)) continue;
     out.push(`监听器「${f.name}」端口 ${f.port} 被占用`);
   }
   for (const s of model.subscriptions) {

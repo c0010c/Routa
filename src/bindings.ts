@@ -548,11 +548,7 @@ error?: DelayError | null;
  */
 stale?: boolean }
 export type DesktopState = { preferences: UiPreferences; connection: CaptureMode | null; requested: CaptureMode | null; error: string | null; is_admin: boolean; system_listener_id: ListenerId | null; taskbar_status_supported: boolean }
-export type Exit = { id: ExitId; name: string; kind: ExitKind; interface: InterfaceGuid | null; 
-/**
- * 进程分流按节点自动创建的出口：不在出口页显示，没有规则引用时自动删除。
- */
-hidden: boolean }
+export type Exit = { id: ExitId; name: string; kind: ExitKind; interface: InterfaceGuid | null; hidden?: boolean }
 export type ExitHealth = { status: ExitStatus; effective_members: NodeRef[]; missing_members: ExitMember[]; 
 /**
  * Resolved adapter; `Some` even when it is not usable.
@@ -587,11 +583,7 @@ export type InterfaceGuid = string
 export type InterfaceMode = "Simple" | "Full"
 export type InterruptionView = { at_unix: number; reason: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
-export type Listener = { id: ListenerId; name: string; listener_type: ListenerType; listen: string; port: number; auth: Auth | null; exit: ExitId | null; user_enabled: boolean; routing?: ListenerRouting | null; 
-/**
- * 进程分流按节点自动创建的监听器：不在监听器页显示，没有规则引用时自动删除。
- */
-hidden: boolean }
+export type Listener = { id: ListenerId; name: string; listener_type: ListenerType; listen: string; port: number; auth: Auth | null; exit: ExitId | null; user_enabled: boolean; routing?: ListenerRouting | null; hidden?: boolean }
 export type ListenerId = string
 /**
  * Per-port routing; None preserves legacy uniform forwarding.
