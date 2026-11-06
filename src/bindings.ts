@@ -384,9 +384,17 @@ async setSimplePort(port: number) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async changeProcessListener(id: ProcessRuleId, listener: ListenerId) : Promise<Result<null, string>> {
+async changeProcessNode(id: ProcessRuleId, node: NodeRef) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("change_process_listener", { id, listener }) };
+    return { status: "ok", data: await TAURI_INVOKE("change_process_node", { id, node }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async setProcessRuleEnabled(id: ProcessRuleId, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_process_rule_enabled", { id, enabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -540,7 +548,11 @@ error?: DelayError | null;
  */
 stale?: boolean }
 export type DesktopState = { preferences: UiPreferences; connection: CaptureMode | null; requested: CaptureMode | null; error: string | null; is_admin: boolean; system_listener_id: ListenerId | null; taskbar_status_supported: boolean }
-export type Exit = { id: ExitId; name: string; kind: ExitKind; interface: InterfaceGuid | null }
+export type Exit = { id: ExitId; name: string; kind: ExitKind; interface: InterfaceGuid | null; 
+/**
+ * 进程分流按节点自动创建的出口：不在出口页显示，没有规则引用时自动删除。
+ */
+hidden: boolean }
 export type ExitHealth = { status: ExitStatus; effective_members: NodeRef[]; missing_members: ExitMember[]; 
 /**
  * Resolved adapter; `Some` even when it is not usable.
@@ -575,7 +587,11 @@ export type InterfaceGuid = string
 export type InterfaceMode = "Simple" | "Full"
 export type InterruptionView = { at_unix: number; reason: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
-export type Listener = { id: ListenerId; name: string; listener_type: ListenerType; listen: string; port: number; auth: Auth | null; exit: ExitId | null; user_enabled: boolean; routing?: ListenerRouting | null }
+export type Listener = { id: ListenerId; name: string; listener_type: ListenerType; listen: string; port: number; auth: Auth | null; exit: ExitId | null; user_enabled: boolean; routing?: ListenerRouting | null; 
+/**
+ * 进程分流按节点自动创建的监听器：不在监听器页显示，没有规则引用时自动删除。
+ */
+hidden: boolean }
 export type ListenerId = string
 /**
  * Per-port routing; None preserves legacy uniform forwarding.
@@ -655,7 +671,15 @@ processes: string[];
 /**
  * 按完整路径匹配。按进程名匹配的规则没法在组件故障时阻断（`on_fault` 只能是 `Direct`）。
  */
-match_full_path: boolean; listener: ListenerId; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean }
+match_full_path: boolean; 
+/**
+ * 直接选择的节点；设置后由程序自动管理隐藏监听器。
+ */
+node?: NodeRef | null; 
+/**
+ * 出站网卡（仅 `node` 模式使用）。
+ */
+interface?: InterfaceGuid | null; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean }
 export type ProcessRuleId = string
 /**
  * A project page linked from Settings → About; the URLs live here so the
@@ -792,7 +816,7 @@ export type ValidationError = { DuplicateName: { kind: string; name: string } } 
 /**
  * 同一个程序（按文件名）出现在多处：一个程序只能属于一条规则。
  */
-{ DuplicateProcessRule: { exe_path: string } } | { InvalidExePath: { exe_path: string; reason: string } } | { ListenerTypeNotAllowed: { listener: string } } | { ListenerAddressNotAllowed: { listener: string; listen: string } } | 
+{ DuplicateProcessRule: { exe_path: string } } | { InvalidExePath: { exe_path: string; reason: string } } | 
 /**
  * 已启用规则里的进程总数超过上限。
  */

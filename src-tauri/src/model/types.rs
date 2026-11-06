@@ -340,6 +340,9 @@ pub struct ProcessRule {
     pub processes: Vec<String>,
     /// 按完整路径匹配。按进程名匹配的规则没法在组件故障时阻断（`on_fault` 只能是 `Direct`）。
     pub match_full_path: bool,
+    /// 旧字段，只读：旧版规则指向的 Listener，只用于读取旧数据。
+    #[serde(skip_serializing)]
+    #[specta(skip)]
     pub listener: ListenerId,
     /// 直接选择的节点；设置后由程序自动管理隐藏监听器。
     #[serde(default)]
@@ -354,6 +357,18 @@ pub struct ProcessRule {
     #[serde(skip_serializing)]
     #[specta(skip)]
     pub exe_path: String,
+}
+
+#[cfg(test)]
+mod legacy_listener_tests {
+    use super::*;
+
+    #[test]
+    fn saved_rule_omits_legacy_listener() {
+        assert!(!serde_json::to_string(&ProcessRule::default()).unwrap().contains("\"listener\""));
+        let old: ProcessRule = serde_json::from_str(r#"{"listener":"x"}"#).unwrap();
+        assert_eq!(old.listener, ListenerId("x".into()));
+    }
 }
 
 impl Default for ProcessRule {

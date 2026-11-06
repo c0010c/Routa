@@ -743,13 +743,13 @@ mod tests {
         let rt = runtime(&td);
         let l = Listener::new_default("L1".into(), 7891);
         ops::save_listener(&rt, l.clone()).await.unwrap();
-        let mut rule = ProcessRule { processes: vec!["a.exe".into()], listener: l.id.clone(), ..ProcessRule::default() };
+        let mut rule = ProcessRule { processes: vec!["a.exe".into()], ..ProcessRule::default() };
         ops::save_process_rule(&rt, rule.clone()).await.unwrap();
         rule.reset_on_change = true;
         ops::save_process_rule(&rt, rule.clone()).await.unwrap();
         assert_eq!(rt.model().process_routing.rules, vec![rule.clone()]);
 
-        let bad = ProcessRule { processes: vec![r"C:\app\a.exe".into()], listener: l.id.clone(), ..ProcessRule::default() };
+        let bad = ProcessRule { processes: vec![r"C:\app\a.exe".into()], ..ProcessRule::default() };
         assert!(ops::save_process_rule(&rt, bad).await.is_err());
         assert_eq!(rt.model().process_routing.rules.len(), 1, "nothing changed");
 
