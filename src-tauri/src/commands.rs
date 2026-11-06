@@ -219,7 +219,7 @@ pub mod ops {
         .await
     }
 
-    /// Upsert by id. Never reloads mihomo.
+    /// Upsert by id. Reloads mihomo only when the hidden listeners change.
     pub async fn save_process_rule(rt: &Runtime, rule: ProcessRule) -> Result<(), Vec<ValidationError>> {
         rt.mutate_process_routing(|p| {
             let id = rule.id.clone();

@@ -316,8 +316,11 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
     for s in &model.subscriptions {
         check_name(&s.name, true, &mut errors);
     }
+    // Hidden listeners/exits are generated with reserved `__proc` names.
     for e in &model.exits {
-        check_name(&e.name, true, &mut errors);
+        if !e.hidden {
+            check_name(&e.name, true, &mut errors);
+        }
         const BUILTIN: [&str; 6] = ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL"];
         if BUILTIN.iter().any(|b| b.eq_ignore_ascii_case(&e.name)) {
             errors.push(ValidationError::InvalidName {
@@ -326,7 +329,7 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
             });
         }
     }
-    for l in &model.listeners {
+    for l in model.listeners.iter().filter(|l| !l.hidden) {
         check_name(&l.name, false, &mut errors);
     }
 

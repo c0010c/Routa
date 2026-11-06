@@ -1672,3 +1672,147 @@ async fn process_routing_rejects_forbidden_and_invalid_rules() {
     assert_eq!(std::fs::read_to_string(h.data.join("state.json")).unwrap(), before);
     assert_eq!(h.rt.model(), m);
 }
+
+fn m1_ref() -> NodeRef {
+    NodeRef::Manual { manual_id: ManualNodeId("m1".into()) }
+}
+
+/// `model_with_listener` plus manual node `m1`.
+fn model_with_node() -> Model {
+    let mut m = model_with_listener(false);
+    m.manual_nodes.push(ManualNode {
+        id: ManualNodeId("m1".into()),
+        name: "节点1".into(),
+        groups: vec![],
+        kind: ManualNodeKind::Proxy { raw: serde_json::json!({"name":"节点1","type":"socks5","server":"127.0.0.1","port":1080}) },
+    });
+    m
+}
+
+fn node_rule(exe: &str) -> ProcessRule {
+    ProcessRule { processes: vec![exe.into()], match_full_path: true, node: Some(m1_ref()), ..ProcessRule::default() }
+}
+
+fn hidden(m: &Model) -> Vec<Listener> {
+    m.listeners.iter().filter(|l| l.hidden).cloned().collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn saving_rule_with_node_creates_hidden_listener_and_reloads() {
+    let h = harness(&model_with_node());
+    h.rt.restart_core().await;
+    let reloads = h.api.reloads.lock().unwrap().len();
+
+    crate::commands::ops::save_process_rule(&h.rt, node_rule(r"C:\Apps\game.exe")).await.unwrap();
+
+    let hid = hidden(&h.rt.model());
+    assert_eq!(hid.len(), 1);
+    assert_eq!(hid[0].port, 37800);
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads + 1);
+    let yaml = last_reload(&h.api);
+    assert!(listener_names(&yaml).contains(&hid[0].name), "{yaml}");
+    let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml).unwrap();
+    let l = v["listeners"].as_sequence().unwrap().iter().find(|l| l["name"].as_str() == Some(hid[0].name.as_str())).unwrap();
+    assert_eq!(l["type"].as_str(), Some("socks"));
+    assert_eq!(l["port"].as_u64(), Some(37800));
+    assert_eq!(Store::open(h.data.clone()).unwrap().load_model().unwrap(), h.rt.model());
+}
+
+#[tokio::test(start_paused = true)]
+async fn renaming_rule_does_not_reload() {
+    let h = harness(&model_with_node());
+    h.rt.restart_core().await;
+    let mut rule = node_rule(r"C:\Apps\game.exe");
+    crate::commands::ops::save_process_rule(&h.rt, rule.clone()).await.unwrap();
+    let reloads = h.api.reloads.lock().unwrap().len();
+    let checks = h.launcher.checks.lock().unwrap().len();
+
+    rule.name = "游戏".into();
+    crate::commands::ops::save_process_rule(&h.rt, rule).await.unwrap();
+
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    assert_eq!(h.launcher.checks.lock().unwrap().len(), checks);
+    assert_eq!(h.rt.model().process_routing.rules[0].name, "游戏");
+}
+
+#[tokio::test(start_paused = true)]
+async fn deleting_manual_node_used_by_rule_succeeds() {
+    let h = harness(&model_with_node());
+    h.rt.restart_core().await;
+    crate::commands::ops::save_process_rule(&h.rt, node_rule(r"C:\Apps\game.exe")).await.unwrap();
+    assert_eq!(hidden(&h.rt.model()).len(), 1);
+
+    crate::commands::ops::delete_manual_node(&h.rt, ManualNodeId("m1".into())).await.unwrap();
+
+    let m = h.rt.model();
+    assert_eq!(m.process_routing.rules[0].node, Some(m1_ref()));
+    assert!(hidden(&m).is_empty());
+    assert!(!m.exits.iter().any(|e| e.hidden));
+}
+
+#[tokio::test(start_paused = true)]
+async fn user_listener_takes_hidden_port() {
+    let h = harness(&model_with_node());
+    h.rt.restart_core().await;
+    crate::commands::ops::save_process_rule(&h.rt, node_rule(r"C:\Apps\game.exe")).await.unwrap();
+    assert_eq!(hidden(&h.rt.model())[0].port, 37800);
+
+    let mut l = Listener::new_default("L2".into(), 37800);
+    l.exit = Some(ExitId("exit-1".into()));
+    crate::commands::ops::save_listener(&h.rt, l).await.unwrap();
+
+    let m = h.rt.model();
+    assert!(m.listeners.iter().any(|l| !l.hidden && l.port == 37800));
+    assert_eq!(hidden(&m)[0].port, 37801);
+}
+
+#[tokio::test(start_paused = true)]
+async fn set_rule_enabled_toggles_hidden_listener() {
+    let h = harness(&model_with_node());
+    h.rt.restart_core().await;
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    let rule = node_rule(r"C:\Apps\game.exe");
+    crate::commands::ops::save_process_rule(&h.rt, rule.clone()).await.unwrap();
+    assert!(hidden(&h.rt.model())[0].user_enabled);
+    let reloads = h.api.reloads.lock().unwrap().len();
+
+    ui.set_process_rule_enabled(&h.rt, rule.id.clone(), false).await.unwrap();
+    let m = h.rt.model();
+    assert!(!m.process_routing.rules[0].user_enabled);
+    assert!(!hidden(&m)[0].user_enabled);
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads + 1);
+
+    ui.set_process_rule_enabled(&h.rt, rule.id.clone(), true).await.unwrap();
+    let m = h.rt.model();
+    assert!(m.process_routing.rules[0].user_enabled);
+    assert!(hidden(&m)[0].user_enabled);
+    assert!(ui.set_process_rule_enabled(&h.rt, ProcessRuleId::new(), true).await.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn change_process_node_switches_hidden_listener() {
+    let mut m = model_with_node();
+    m.manual_nodes.push(ManualNode {
+        id: ManualNodeId("m2".into()),
+        name: "节点2".into(),
+        groups: vec![],
+        kind: ManualNodeKind::Proxy { raw: serde_json::json!({"name":"节点2","type":"socks5","server":"127.0.0.1","port":1081}) },
+    });
+    let h = harness(&m);
+    h.rt.restart_core().await;
+    let ui = crate::desktop::Desktop::open(h.data.clone()).unwrap();
+    let rule = node_rule(r"C:\Apps\game.exe");
+    crate::commands::ops::save_process_rule(&h.rt, rule.clone()).await.unwrap();
+    let m2 = NodeRef::Manual { manual_id: ManualNodeId("m2".into()) };
+
+    ui.change_process_node(&h.rt, rule.id.clone(), m2.clone()).await.unwrap();
+    let m = h.rt.model();
+    assert_eq!(m.process_routing.rules[0].node, Some(m2));
+    let hid = hidden(&m);
+    assert_eq!(hid.len(), 1);
+    let exit = m.exits.iter().find(|e| Some(&e.id) == hid[0].exit.as_ref()).unwrap();
+    assert!(matches!(&exit.kind, ExitKind::Node { node } if *node == NodeRef::Manual { manual_id: ManualNodeId("m2".into()) }));
+
+    let gone = NodeRef::Manual { manual_id: ManualNodeId("nope".into()) };
+    assert_eq!(ui.change_process_node(&h.rt, rule.id.clone(), gone).await.unwrap_err(), "节点已失效，请重新选择");
+}
