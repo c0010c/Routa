@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import type { Listener, Model, ProcessRule } from "../bindings";
+import type { Model, NodeRef, ProcessRule } from "../bindings";
 
 vi.mock("../bindings", () => ({
   commands: {
     getModel: vi.fn(),
     getStatus: vi.fn(),
+    testDelays: vi.fn(),
     saveProcessRule: vi.fn(),
     listRunningProcesses: vi.fn(),
   },
@@ -15,26 +16,22 @@ vi.mock("../bindings", () => ({
 import { commands } from "../bindings";
 import { ProcessRuleDialog } from "./ProcessRuleDialog";
 
-const l = (id: string, name: string, listener_type: Listener["listener_type"], port: number): Listener => ({
-  id,
-  name,
-  listener_type,
-  listen: "127.0.0.1",
-  port,
-  auth: null,
-  exit: null,
-  user_enabled: true,
-});
+const n1: NodeRef = { subscription_id: "s", name: "n1" };
 
-const model: Model = {
-  subscriptions: [],
+const model = {
+  subscriptions: [
+    { id: "s", name: "来源甲", url: "https://example.test/sub", update_interval_mins: 60, fallback_exit: null, last_updated: null, last_result: null,
+      nodes: [{ name: "n1", proxy_type: "ss", server: "example.test", raw: {} }] },
+  ],
   exits: [],
-  listeners: [l("l1", "浏览器", "Mixed", 7891), l("l2", "网页", "Http", 7892), l("l3", "下载", "Socks", 7893)],
+  listeners: [],
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
-  manual_nodes: [],
+  manual_nodes: [
+    { id: "ts", name: "家里", groups: [], kind: { Tailscale: { hostname: "h", exit_node: "x", ephemeral: false, udp: true, auth_key: null, interface: "{NIC-TS}" } } },
+  ],
   node_groups: [],
   process_routing: { enabled: true, on_routa_exit: "Block", rules: [] },
-};
+} as unknown as Model;
 
 /** A rule migrated from the old one-exe shape: matched by full path, blocks on fault. */
 const rule: ProcessRule = {
@@ -42,7 +39,7 @@ const rule: ProcessRule = {
   name: "",
   processes: ["C:\\Apps\\curl.exe"],
   match_full_path: true,
-  listener: "l1",
+  node: n1,
   on_fault: "Block",
   reset_on_change: false,
   user_enabled: true,
@@ -66,32 +63,17 @@ async function loaded() {
   await new Promise((r) => setTimeout(r, 0));
 }
 
+async function pickNode(name: string) {
+  fireEvent.click(screen.getByRole("button", { name: /节点/ }));
+  fireEvent.click(await screen.findByRole("radio", { name }));
+}
+
 describe("ProcessRuleDialog", () => {
   beforeEach(() => {
     vi.mocked(commands.getModel).mockResolvedValue(model);
     vi.mocked(commands.listRunningProcesses).mockResolvedValue([
       { pid: 42, name: "curl.exe", exe_path: "C:\\Apps\\curl.exe" },
     ]);
-  });
-
-  it("listener select excludes http listeners", async () => {
-    renderDialog();
-    await loaded();
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: /监听器/ }));
-    const list = await screen.findByRole("listbox");
-    const names = within(list)
-      .getAllByRole("option")
-      .map((o) => o.textContent);
-    expect(names.some((n) => n?.includes("浏览器"))).toBe(true);
-    expect(names.some((n) => n?.includes("下载"))).toBe(true);
-    expect(names.some((n) => n?.includes("网页"))).toBe(false);
-  });
-
-  it("points to the listeners page when no mixed or socks listener exists", async () => {
-    vi.mocked(commands.getModel).mockResolvedValue({ ...model, listeners: [l("l2", "网页", "Http", 7892)] });
-    renderDialog();
-    await loaded();
-    expect(screen.getByRole("link", { name: "监听器" })).toHaveAttribute("href", "/listeners");
   });
 
   it("shows ipv4 hint when reset enabled", async () => {
@@ -106,7 +88,7 @@ describe("ProcessRuleDialog", () => {
     renderDialog(rule);
     await loaded();
     expect(
-      screen.getByText("只在 mihomo 或分流组件意外故障时生效；Listener 因节点失效、网卡断开被停用时，始终阻断"),
+      screen.getByText("只在 mihomo 或分流组件意外故障时生效；节点失效、网卡断开时，始终阻断"),
     ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "阻断" })).toBeChecked();
   });
@@ -125,22 +107,12 @@ describe("ProcessRuleDialog", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("maps listener type error to listener field", async () => {
-    vi.mocked(commands.saveProcessRule).mockResolvedValue({
-      status: "error",
-      error: [{ ListenerTypeNotAllowed: { listener: "浏览器" } }],
-    });
-    renderDialog(rule);
-    await loaded();
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByText("Listener「浏览器」是 HTTP 类型，不能用于进程分流")).toBeInTheDocument();
-  });
-
   it("saves typed process names and closes", async () => {
     vi.mocked(commands.saveProcessRule).mockResolvedValue({ status: "ok", data: null });
     vi.mocked(commands.saveProcessRule).mockClear();
     const onClose = renderDialog();
     await loaded();
+    await pickNode("n1 · 来源甲");
     const input = screen.getByRole("combobox", { name: "进程" });
     fireEvent.change(input, { target: { value: "ChatGPT.exe" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -153,7 +125,6 @@ describe("ProcessRuleDialog", () => {
       name: "",
       processes: ["ChatGPT.exe", "codex.exe"],
       match_full_path: false,
-      listener: "l1",
       on_fault: "Direct",
       reset_on_change: false,
     });
@@ -196,16 +167,47 @@ describe("ProcessRuleDialog", () => {
     expect(commands.saveProcessRule).not.toHaveBeenCalled();
   });
 
-  it("shows unsupported IPv6 entry errors on the listener field", async () => {
-    vi.mocked(commands.saveProcessRule).mockResolvedValue({
-      status: "error",
-      error: [{ ListenerAddressNotAllowed: { listener: "浏览器", listen: "::1" } }],
-    });
-    const onClose = renderDialog(rule);
+  it("requires a node and does not save without one", async () => {
+    vi.mocked(commands.saveProcessRule).mockClear();
+    renderDialog();
     await loaded();
+    const input = screen.getByRole("combobox", { name: "进程" });
+    fireEvent.change(input, { target: { value: "a.exe" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByText("Listener「浏览器」的监听地址「::1」不能用于进程分流：仅支持 IPv4 入口，请修改监听地址或选择其他 Listener")).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByText("请选择一个节点")).toBeInTheDocument();
+    expect(commands.saveProcessRule).not.toHaveBeenCalled();
+  });
+
+  it("saves the picked node with a null interface", async () => {
+    vi.mocked(commands.saveProcessRule).mockResolvedValue({ status: "ok", data: null });
+    vi.mocked(commands.saveProcessRule).mockClear();
+    const onClose = renderDialog();
+    await loaded();
+    fireEvent.change(screen.getByRole("combobox", { name: "进程" }), { target: { value: "a.exe" } });
+    await pickNode("n1 · 来源甲");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const saved = vi.mocked(commands.saveProcessRule).mock.calls[0][0];
+    expect(saved.node).toEqual(n1);
+    expect(saved.interface).toBeNull();
+  });
+
+  it("locks the exit NIC for a Tailscale node and shows the instance NIC", async () => {
+    vi.mocked(commands.saveProcessRule).mockResolvedValue({ status: "ok", data: null });
+    vi.mocked(commands.saveProcessRule).mockClear();
+    const onClose = renderDialog({ ...rule, interface: "{OTHER}" });
+    await loaded();
+    fireEvent.click(screen.getByText("高级选项"));
+    expect(screen.getByRole("combobox", { name: "出口网卡" })).not.toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: /节点/ }));
+    fireEvent.click(await screen.findByRole("radio", { name: /家里/ }));
+    const nic = screen.getByRole("combobox", { name: "出口网卡" });
+    expect(nic).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("在 Tailscale 节点设置里修改")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const saved = vi.mocked(commands.saveProcessRule).mock.calls[0][0];
+    expect(saved.node).toEqual({ manual_id: "ts" });
+    expect(saved.interface).toBeNull();
   });
 });
