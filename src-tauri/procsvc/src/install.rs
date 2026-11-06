@@ -50,6 +50,9 @@ use crate::{pb_ffi, wfp};
 /// 安装目录里记录组件所有者 SID 的文件。
 pub const OWNER_SID_FILE: &str = "owner.sid";
 const EXE_NAME: &str = "routa-procsvc.exe";
+/// WinDivert 内核驱动文件，以及 WinDivert.dll 为它注册的驱动服务名。
+const DRIVER_FILE: &str = "WinDivert64.sys";
+const DRIVER_SERVICE: &str = "WinDivert";
 const DISPLAY_NAME: &str = "Routa 进程分流";
 const DESCRIPTION: &str = "按进程把程序的网络连接转发到 Routa 的代理或阻断（Routa 进程分流组件）。";
 /// SCM 给新建服务的默认 DACL：SYSTEM 管理、Administrators 完全控制、交互/服务登录用户只读。
@@ -156,7 +159,7 @@ pub fn files_to_copy() -> [&'static str; 4] {
         EXE_NAME,
         pb_ffi::DLL_NAME,
         "WinDivert.dll",
-        "WinDivert64.sys",
+        DRIVER_FILE,
     ]
 }
 
@@ -168,20 +171,24 @@ pub fn install_matches(source_exe: &Path, source: &Path, installed: &Path) -> io
     let pairs = std::iter::once((source_exe.to_path_buf(), exe_name))
         .chain(rest.into_iter().map(|name| (source.join(name), name)));
     for (src, name) in pairs {
-        let dst = installed.join(name);
-        let dst_meta = match fs::metadata(&dst) {
-            Ok(m) => m,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(e) => return Err(e),
-        };
-        if !dst_meta.is_file() || dst_meta.len() != fs::metadata(&src)?.len() {
-            return Ok(false);
-        }
-        if fs::read(&src)? != fs::read(&dst)? {
+        if !same_contents(&src, &installed.join(name))? {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// `dst` 存在、是文件，且与 `src` 内容逐字节相同。`dst` 不存在时为 `Ok(false)`。
+fn same_contents(src: &Path, dst: &Path) -> io::Result<bool> {
+    let dst_meta = match fs::metadata(dst) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if !dst_meta.is_file() || dst_meta.len() != fs::metadata(src)?.len() {
+        return Ok(false);
+    }
+    Ok(fs::read(src)? == fs::read(dst)?)
 }
 
 /// 安装目录里的 owner.sid 内容恰好等于 `sid`（缺失、读不了、不一致都为 false）。
@@ -269,12 +276,25 @@ pub fn install(owner_sid: &str, source: &Path) -> Result<(), String> {
     let dir = install_dir()?;
     fs::create_dir_all(&dir).map_err(|e| format!("创建 {} 失败：{e}", dir.display()))?;
     protect_dir(&dir)?;
+    let mut pending = Vec::new();
     for (src, name) in copies {
         let dst = dir.join(name);
         // 用已安装的 exe 重新安装：就是同一个文件
         if same_path(&src.to_string_lossy(), &dst.to_string_lossy()) {
             continue;
         }
+        // 内容相同就不覆盖：已加载的驱动文件被内核占用，写入必然失败
+        let same = same_contents(&src, &dst)
+            .map_err(|e| format!("比较 {} 与 {} 失败：{e}", src.display(), dst.display()))?;
+        if !same {
+            pending.push((src, dst));
+        }
+    }
+    // 驱动在内核里加载期间，系统一直占用它的 .sys；分流服务停了，驱动也不会自己卸载
+    if pending.iter().any(|(_, dst)| dst.file_name() == Some(DRIVER_FILE.as_ref())) {
+        stop_driver(&mgr, &dir.join(DRIVER_FILE))?;
+    }
+    for (src, dst) in pending {
         retry(|| fs::copy(&src, &dst).map(drop))
             .map_err(|e| format!("复制 {} 到 {} 失败：{e}", src.display(), dst.display()))?;
     }
@@ -482,6 +502,36 @@ fn stop_target(target: &mut impl StopTarget, limit: Duration, poll: Duration) ->
         }
         sleep(poll);
     }
+}
+
+/// 停止并等待从 `driver_file` 加载的 WinDivert 驱动卸载，好让新的 .sys 能覆盖进去。
+/// 驱动服务不存在，或加载的是别处的 .sys（其他程序自带的 WinDivert），就什么都不做。
+/// 只在分流服务已停止后调用：本组件已不再持有 WinDivert 句柄。
+fn stop_driver(mgr: &ServiceManager, driver_file: &Path) -> Result<(), String> {
+    let access = ServiceAccess::QUERY_CONFIG | ServiceAccess::STOP | ServiceAccess::QUERY_STATUS;
+    let svc = match mgr.open_service(DRIVER_SERVICE, access) {
+        Ok(svc) => svc,
+        Err(e) if os_code(&e) == Some(ERROR_SERVICE_DOES_NOT_EXIST) => return Ok(()),
+        Err(e) => return Err(failed("打开 WinDivert 驱动服务", e)),
+    };
+    let image = svc
+        .query_config()
+        .map_err(|e| failed("读取 WinDivert 驱动服务配置", e))?
+        .executable_path;
+    if !same_path(driver_image_path(&image.to_string_lossy()), &driver_file.to_string_lossy()) {
+        return Ok(());
+    }
+    stop_and_wait(&svc).map_err(|e| {
+        format!("WinDivert 驱动没有卸载，无法更新 {DRIVER_FILE}（可能有其他程序正在使用它，重启电脑后再试）：{e}")
+    })
+}
+
+/// 驱动服务的 ImagePath 常带 NT 前缀 `\??\` 或 `\\?\`，去掉后才是普通的 Win32 路径。
+fn driver_image_path(image: &str) -> &str {
+    image
+        .strip_prefix(r"\??\")
+        .or_else(|| image.strip_prefix(r"\\?\"))
+        .unwrap_or(image)
 }
 
 /// 等服务进入运行状态（最多 [`START_TIMEOUT`]）。
@@ -749,6 +799,35 @@ mod tests {
         assert!(!install_matches(&src_exe, src.path(), dst.path()).unwrap());
         std::fs::remove_file(dst.path().join(rest[0])).unwrap();
         assert!(!install_matches(&src_exe, src.path(), dst.path()).unwrap());
+    }
+
+    #[test]
+    fn same_contents_detects_missing_changed_and_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, dst) = (dir.path().join("src.sys"), dir.path().join("dst.sys"));
+        std::fs::write(&src, b"driver").unwrap();
+        assert!(!same_contents(&src, &dst).unwrap());
+        std::fs::write(&dst, b"driveR").unwrap();
+        assert!(!same_contents(&src, &dst).unwrap());
+        std::fs::write(&dst, b"driver").unwrap();
+        assert!(same_contents(&src, &dst).unwrap());
+        // 内容相同时不打开写入：目标被独占（模拟内核占用的 .sys）也能比较
+        use std::os::windows::fs::OpenOptionsExt;
+        let _locked = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&dst).unwrap();
+        assert!(same_contents(&src, &dst).unwrap());
+    }
+
+    #[test]
+    fn driver_image_path_strips_nt_prefixes() {
+        let file = r"C:\Program Files\Routa\ProcessRouting\WinDivert64.sys";
+        for image in [
+            r"\??\C:\Program Files\Routa\ProcessRouting\WinDivert64.sys",
+            r"\\?\C:\Program Files\Routa\ProcessRouting\WinDivert64.sys",
+            r"c:\program files\routa\processrouting\windivert64.sys",
+        ] {
+            assert!(same_path(driver_image_path(image), file), "{image}");
+        }
+        assert!(!same_path(driver_image_path(r"\??\C:\Other\WinDivert64.sys"), file));
     }
 
     #[test]
