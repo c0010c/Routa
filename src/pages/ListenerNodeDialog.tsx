@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState } from "react";
 import {
   Alert,
   Box,
@@ -14,15 +14,11 @@ import {
   useModel,
   useSaveExit,
   useSelectGroupMember,
-  useStatus,
-  useTestDelays,
 } from "../api/client";
 import { FormDialog } from "../components/FormDialog";
-import { FixedCardGrid } from "../components/FixedCardGrid";
-import { NodeCard } from "../components/NodeCard";
-import { SearchField } from "../components/SearchField";
-import { candidateNodeGroups, ungroupedManualNodes } from "../lib/nodeGroups";
-import { expandMembers, nodeKey, nodeLabel, proxyNameOf } from "../lib/refs";
+import { NodeBrowserGrid, NodeBrowserToolbar, useNodeBrowser } from "../components/NodeBrowser";
+import { ungroupedManualNodes } from "../lib/nodeGroups";
+import { expandMembers, nodeKey, nodeLabel } from "../lib/refs";
 import { applyOutcomeMessages } from "../lib/format";
 import { fieldErrors } from "../lib/validation";
 import type { ExitMember, NodeRef } from "../bindings";
@@ -44,14 +40,8 @@ export function ListenerNodeDialog({
   onSwitched?: () => void;
 }) {
   const model = useModel(),
-    status = useStatus(),
     change = useSelectGroupMember(),
-    saveExit = useSaveExit(),
-    test = useTestDelays();
-  const [search, setSearch] = useState("");
-  const [filterGroup, setFilterGroup] = useState("");
-  const [sort, setSort] = useState(false);
-  const [measurementOrder, setMeasurementOrder] = useState<string[]>([]);
+    saveExit = useSaveExit();
   const [selected, setSelected] = useState<NodeRef | null>(null);
   const [error, setError] = useState("");
   const m = model.data;
@@ -85,81 +75,12 @@ export function ListenerNodeDialog({
   // Only a manual group can grow: picking a node outside its members adds it on confirmation.
   const joinsGroup = !!group && chosenKey !== null && !configuredMembers.some((ref) => nodeKey(ref) === chosenKey);
   const busy = change.isPending || saveExit.isPending;
-  const nodes = members.map((ref) => {
-    const sub =
-      "subscription_id" in ref
-        ? m?.subscriptions.find((s) => s.id === ref.subscription_id)
-        : undefined;
-    const manual =
-      "manual_id" in ref
-        ? m?.manual_nodes.find((n) => n.id === ref.manual_id)
-        : undefined;
-    const n =
-      sub && "name" in ref
-        ? sub.nodes.find((n) => n.name === ref.name)
-        : undefined;
-    const source =
-      sub?.name ??
-      (manual && "Tailscale" in manual.kind ? "Tailscale" : "手动节点");
-    const type =
-      n?.proxy_type ??
-      (manual && "Tailscale" in manual.kind
-        ? "Tailscale"
-        : manual && "Proxy" in manual.kind
-          ? String(
-              (manual.kind.Proxy.raw as Record<string, unknown>)?.type ??
-                "代理",
-            )
-          : "代理");
-    const proxy = m ? proxyNameOf(m, ref) : null;
-    return { ref, name: m ? nodeLabel(m, ref) : "", source, type, proxy };
-  });
-  const filters = m ? candidateNodeGroups(m, members) : [];
-  const activeFilter = filters.find((item) => item.id === filterGroup);
-  const shown = nodes.filter((n) =>
-    (!activeFilter || activeFilter.keys.has(nodeKey(n.ref))) && `${n.name} ${n.source} ${n.type}`
-      .toLowerCase()
-      .includes(search.trim().toLowerCase()),
-  );
-  if (sort) {
-    const score = (proxy: string | null) => {
-      const delay = proxy ? status.data?.delays[proxy] : undefined;
-      return delay?.stale ? Infinity : delay?.ms ?? Infinity;
-    };
-    shown.sort((a, b) => test.isPending
-      ? measurementOrder.indexOf(nodeKey(a.ref)) - measurementOrder.indexOf(nodeKey(b.ref))
-      : score(a.proxy) - score(b.proxy));
-  }
-  const measure = (proxies: string[]) => {
-    setMeasurementOrder(nodes.map((n) => n.ref).sort((a, b) => {
-      const delay = (ref: NodeRef) => {
-        const proxy = m ? proxyNameOf(m, ref) : null;
-        const result = proxy ? status.data?.delays[proxy] : undefined;
-        return result?.stale ? Infinity : result?.ms ?? Infinity;
-      };
-      return delay(a) - delay(b);
-    }).map(nodeKey));
-    test.mutate(proxies);
-  };
+  const browser = useNodeBrowser(members);
+  const { nodes, shown, search: searchText, activeFilter } = browser;
   const valid =
     chosenKey !== null && members.some((r) => nodeKey(r) === chosenKey);
   // On the proxy page a click switches right away; inside the editing form it only picks a draft value.
   const direct = !draft;
-  const tabKey = shown.some((n) => nodeKey(n.ref) === chosenKey) ? chosenKey : shown[0] ? nodeKey(shown[0].ref) : null;
-  const navigate = (e: KeyboardEvent<HTMLButtonElement>) => {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
-    const grid = e.currentTarget.closest('[role="radiogroup"]');
-    if (!grid) return;
-    const buttons = Array.from(grid.querySelectorAll<HTMLButtonElement>('button[role="radio"]:not(:disabled)'));
-    const columns = getComputedStyle(grid).gridTemplateColumns.split(/\s+/).filter((v) => v && v !== "none").length || 1;
-    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns }[e.key] ?? 0;
-    const at = buttons.indexOf(e.currentTarget);
-    const next = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, at + step));
-    e.preventDefault();
-    // Picking switches immediately on the proxy page, so arrows only move focus there; Enter/Space switch.
-    if (!direct) buttons[next]?.click();
-    buttons[next]?.focus();
-  };
   const submit = async (node: NodeRef | null = chosen) => {
     if (!available || !node || busy || !members.some((r) => nodeKey(r) === nodeKey(node))) return;
     setError("");
@@ -203,32 +124,7 @@ export function ListenerNodeDialog({
       <DialogTitle>
         {draft ? "选择节点" : "切换节点"} · {listenerName}
       </DialogTitle>
-      <Box sx={{ px: 3, pb: 2, flexShrink: 0 }}>
-        <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
-        <SearchField
-          label="搜索节点、来源或协议"
-          value={search}
-          onChange={setSearch}
-          sx={{ flex: 1, minWidth: 180 }}
-        />
-        <Button disabled={test.isPending} onClick={() => setSort(!sort)}>{sort ? "恢复默认排序" : "延迟排序"}</Button>
-        <Button
-          disabled={test.isPending || !shown.length}
-          onClick={() =>
-            measure(shown.flatMap((n) => (n.proxy ? [n.proxy] : [])))
-          }
-        >
-          {test.isPending ? "测量中…" : "测延迟"}
-        </Button>
-        </Box>
-        <Box role="group" aria-label="按分组筛选" sx={{ display: "flex", gap: 0.75, alignItems: "center", flexWrap: "wrap", mt: 1.5 }}>
-          <Typography variant="caption" color="text.secondary">分组</Typography>
-          {[{ id: "", name: "全部分组" }, ...filters].map((item) => <Button key={item.id} size="small"
-            aria-pressed={item.id === (activeFilter?.id ?? "")} onClick={() => setFilterGroup(item.id)}
-            variant={item.id === (activeFilter?.id ?? "") ? "contained" : "outlined"}
-            sx={{ borderRadius: 5, py: 0.25, minHeight: 28, fontSize: 12 }}>{item.name}</Button>)}
-        </Box>
-      </Box>
+      <NodeBrowserToolbar browser={browser} />
       <DialogContent dividers sx={{ px: 3, py: 2, borderBottom: 0, scrollbarGutter: "stable" }}>
         {!available && (
           <Alert severity="warning">
@@ -240,40 +136,21 @@ export function ListenerNodeDialog({
             {error}
           </Alert>
         )}
-        <FixedCardGrid width={220} stretch animate sx={{ gap: 1.5 }} role="radiogroup" aria-label="候选节点">
-          {shown.map((n) => {
-            const key = nodeKey(n.ref);
-            const active = key === chosenKey;
-            const delay = n.proxy ? status.data?.delays[n.proxy] : undefined;
-            return (
-              <NodeCard
-                key={key}
-                gridKey={key}
-                name={n.name} source={n.source} protocol={n.type} delay={delay}
-                selected={active} current={key === currentKey}
-                disabled={busy}
-                selectionTabIndex={key === tabKey ? 0 : -1}
-                onSelectionKeyDown={navigate}
-                running={status.data?.core === "Running"}
-                testTarget={n.proxy ?? undefined} testUrl={m?.settings.delay_test_url}
-                pending={test.isPending && !!n.proxy && !!test.variables?.[0]?.includes(n.proxy)}
-                actions={[{ label: "测延迟", disabled: test.isPending || !n.proxy, onClick: () => n.proxy && measure([n.proxy]) }]}
-                onSelect={() => {
-                  setSelected(n.ref);
-                  setError("");
-                  if (!direct) return;
-                  if (key === currentKey) onClose();
-                  else void submit(n.ref);
-                }}
-              />
-            );
-          })}
-        </FixedCardGrid>
+        <NodeBrowserGrid
+          browser={browser} chosenKey={chosenKey} currentKey={currentKey} disabled={busy} arrowsSelect={!direct}
+          onPick={(ref) => {
+            setSelected(ref);
+            setError("");
+            if (!direct) return;
+            if (nodeKey(ref) === currentKey) onClose();
+            else void submit(ref);
+          }}
+        />
         {!shown.length && (
           <Typography
             sx={{ p: 5, textAlign: "center", color: "text.secondary" }}
           >
-            {search || activeFilter ? "未找到匹配节点" : group ? "策略暂无候选节点，请先编辑代理配置。" : "暂无可选节点，请先添加订阅或节点。"}
+            {searchText || activeFilter ? "未找到匹配节点" : group ? "策略暂无候选节点，请先编辑代理配置。" : "暂无可选节点，请先添加订阅或节点。"}
           </Typography>
         )}
       </DialogContent>
