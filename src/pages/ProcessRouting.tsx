@@ -30,6 +30,7 @@ import {
   useRemoveLearnedPath,
   useRunningProcesses,
   useSaveProcessRoutingSettings,
+  useDisableRoutingAndQuit,
 } from "../api/procroute";
 import type {
   ComponentState,
@@ -118,6 +119,7 @@ function ComponentStatus({
   enabled: boolean;
 }) {
   const settings = useSaveProcessRoutingSettings();
+  const quit = useDisableRoutingAndQuit();
   const c = status.component;
   const label = componentLabel(c);
   return (
@@ -141,6 +143,16 @@ function ComponentStatus({
           <Typography variant="body2" color="text.secondary">
             {enabled ? "已启用" : "已暂停"}
           </Typography>
+          {enabled && (
+            <Button
+              size="small"
+              sx={{ ml: 1 }}
+              disabled={settings.isPending || quit.isPending}
+              onClick={() => quit.mutate()}
+            >
+              停用并退出
+            </Button>
+          )}
         </Stack>
       )}
     </Stack>

@@ -14,6 +14,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { useRuntimeEvents } from "./api/events";
 import { ApplyResultProvider } from "./components/ApplyResultSnackbar";
+import { ExitConfirmDialog } from "./components/ExitConfirmDialog";
 import { Layout } from "./components/Layout";
 
 import { Listeners } from "./pages/Listeners";
@@ -118,6 +119,7 @@ export default function App() {
       <QueryClientProvider client={queryClient}>
         <ApplyResultProvider>
           <Events />
+          <ExitConfirmDialog />
           <InterfaceProvider>
             <HashRouter>
               <CssBaseline enableColorScheme />

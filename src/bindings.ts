@@ -284,6 +284,31 @@ async saveProcessRoutingSettings(enabled: boolean) : Promise<Result<null, Valida
     else return { status: "error", error: e  as any };
 }
 },
+async setExitPrompt(enabled: boolean) : Promise<Result<null, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_exit_prompt", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Exits right away (the shutdown runs in RunEvent::ExitRequested).
+ */
+async quitApp() : Promise<void> {
+    await TAURI_INVOKE("quit_app");
+},
+/**
+ * Turns process routing off, waits briefly for the service to confirm, then exits.
+ */
+async disableRoutingAndQuit() : Promise<Result<null, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("disable_routing_and_quit") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async procrouteStatus() : Promise<ProcRouteStatus> {
     return await TAURI_INVOKE("procroute_status");
 },

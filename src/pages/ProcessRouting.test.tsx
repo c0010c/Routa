@@ -18,6 +18,7 @@ vi.mock("../bindings", () => ({
     saveProcessRule: vi.fn(),
     deleteProcessRule: vi.fn(),
     saveProcessRoutingSettings: vi.fn(),
+    disableRoutingAndQuit: vi.fn(),
     removeLearnedProcessPath: vi.fn(),
     listRunningProcesses: vi.fn(),
   },
@@ -297,6 +298,19 @@ describe("ProcessRoutingPage", () => {
     // Exit policy and component maintenance live in Settings now.
     expect(screen.queryByText("退出行为与故障策略")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "更多组件操作" })).not.toBeInTheDocument();
+  });
+
+  it("offers 停用并退出 next to the switch while routing is on", async () => {
+    vi.mocked(commands.disableRoutingAndQuit).mockResolvedValue({ status: "ok", data: null });
+    renderPage(base);
+    fireEvent.click(await screen.findByRole("button", { name: "停用并退出" }));
+    await waitFor(() => expect(commands.disableRoutingAndQuit).toHaveBeenCalled());
+  });
+
+  it("hides 停用并退出 while routing is paused", async () => {
+    renderPage(base, { ...model, process_routing: { ...model.process_routing, enabled: false } });
+    await screen.findByRole("switch", { name: "启用进程分流规则" });
+    expect(screen.queryByRole("button", { name: "停用并退出" })).not.toBeInTheDocument();
   });
 
   it("hides the switch until the component is installed", async () => {

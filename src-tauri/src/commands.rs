@@ -623,6 +623,26 @@ pub async fn save_process_routing_settings(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn set_exit_prompt(rt: Rt<'_>, enabled: bool) -> Result<(), Vec<ValidationError>> {
+    rt.mutate_process_routing(|p| p.exit_prompt = enabled).await.map(|_| ())
+}
+
+/// Exits right away (the shutdown runs in RunEvent::ExitRequested).
+#[tauri::command]
+#[specta::specta]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+/// Turns process routing off, waits briefly for the service to confirm, then exits.
+#[tauri::command]
+#[specta::specta]
+pub async fn disable_routing_and_quit(app: AppHandle, rt: Rt<'_>) -> Result<(), Vec<ValidationError>> {
+    crate::tray::disable_routing_and_quit(&app, &rt).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn procroute_status() -> ProcRouteStatus {
     procroute::client::status()
 }
