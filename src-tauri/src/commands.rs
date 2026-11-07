@@ -220,8 +220,9 @@ pub mod ops {
     }
 
     /// Upsert by id. Reloads mihomo only when the hidden listeners change.
-    /// Process names that newly enter learning (Name + Block) get the paths of
-    /// their currently running exes recorded in `learned` first.
+    /// The stored rule's `learned` is kept (the incoming one is ignored; a new
+    /// rule starts empty). Process names that newly enter learning (Name +
+    /// Block) get the paths of their currently running exes recorded first.
     pub async fn save_process_rule(rt: &Runtime, rule: ProcessRule) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
         let model = rt.model();
         let before = model.process_routing.rules.iter().find(|r| r.id == rule.id);
@@ -244,6 +245,8 @@ pub mod ops {
             let id = rule.id.clone();
             let snapshot = Model { process_routing: p.clone(), ..Model::default() };
             let before = p.rules.iter().find(|x| x.id == id);
+            // `learned` belongs to the service: a dialog may hold a stale copy.
+            rule.learned = before.map(|b| b.learned.clone()).unwrap_or_default();
             procroute::learn::seed(&snapshot, before, &mut rule, running);
             upsert(&mut p.rules, rule, |x| x.id == id)
         })
@@ -826,6 +829,30 @@ mod tests {
 
         ops::remove_learned_process_path(&rt, rule.id.clone(), r"c:/b/a.exe".into()).await.unwrap();
         assert_eq!(learned(&rt), vec![r"C:\A\a.exe".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn save_keeps_stored_learned_and_ignores_incoming() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = runtime(&td);
+        ops::save_process_routing_settings(&rt, true).await.unwrap();
+        let rule = ProcessRule {
+            processes: vec![ProcessEntry::name("a.exe")],
+            on_fault: FaultPolicy::Block,
+            // A new rule starts with nothing recorded, whatever it carries.
+            learned: vec![r"C:\X\a.exe".into()],
+            ..ProcessRule::default()
+        };
+        ops::save_process_rule_seeded(&rt, rule.clone(), &[]).await.unwrap();
+        let learned = |rt: &Runtime| rt.model().process_routing.rules[0].learned.clone();
+        assert!(learned(&rt).is_empty());
+
+        // The service learned a location while a dialog was open on a stale copy.
+        rt.mutate_process_routing(|p| p.rules[0].learned = vec![r"C:\A\a.exe".into()]).await.unwrap();
+        let stale = ProcessRule { reset_on_change: true, learned: vec![r"C:\Old\a.exe".into()], ..rule };
+        ops::save_process_rule_seeded(&rt, stale, &[]).await.unwrap();
+        assert_eq!(learned(&rt), vec![r"C:\A\a.exe".to_string()]);
+        assert!(rt.model().process_routing.rules[0].reset_on_change);
     }
 
     #[tokio::test]
