@@ -17,7 +17,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useState, type ReactNode } from "react";
+import { useImperativeHandle, useState, type ReactNode, type Ref } from "react";
 import type { ProcessEntry, ProcessKind, ProcessRule, RunningProcess } from "../bindings";
 import {
   chipLabel,
@@ -46,8 +46,14 @@ function Help({ children }: { children: ReactNode }) {
   );
 }
 
+export interface ProcessEntriesHandle {
+  /** 把输入框里还没回车的文字当作一个条目加上：返回加上后的全部条目；不能添加时在字段里显示原因并返回 `null`。 */
+  commit(): ProcessEntry[] | null;
+}
+
 /** 进程：一个程序一个标签，点开多选「所有位置」和具体路径。 */
 export function ProcessEntriesField({
+  ref,
   entries,
   others,
   routingEnabled,
@@ -55,6 +61,7 @@ export function ProcessEntriesField({
   error,
   onChange,
 }: {
+  ref?: Ref<ProcessEntriesHandle>;
   entries: ProcessEntry[];
   others: ProcessRule[];
   routingEnabled: boolean;
@@ -81,19 +88,26 @@ export function ProcessEntriesField({
     return pe ? { why: pe } : { e: p };
   };
 
-  const add = (e: ProcessEntry) => {
+  /** 返回加上后的全部条目；不能添加时显示原因并返回 `null`。 */
+  const add = (e: ProcessEntry): ProcessEntry[] | null => {
     const msg = errOf(e);
-    if (msg) return setErr(`${fileName(e.value)}：${msg}`);
+    if (msg) {
+      setErr(`${fileName(e.value)}：${msg}`);
+      return null;
+    }
+    const next = [...entries, e];
     setErr(undefined);
     setInput("");
-    onChange([...entries, e]);
+    onChange(next);
+    return next;
   };
-  const addRaw = (raw: string) => {
+  const addRaw = (raw: string): ProcessEntry[] | null => {
     const v = cleanEntry(raw);
-    if (!v) return;
+    if (!v) return entries;
     const kind = defaultKind(v);
-    add(mk(kind, kind === "Name" ? fileName(v) : v));
+    return add(mk(kind, kind === "Name" ? fileName(v) : v));
   };
+  useImperativeHandle(ref, () => ({ commit: () => addRaw(input) }));
 
   const g = groups.find((x) => x.key === menu?.key);
   const candidates = g ? uniq([...g.paths, ...pathsOf(g.name)]) : [];
