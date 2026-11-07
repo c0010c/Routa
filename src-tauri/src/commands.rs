@@ -272,11 +272,9 @@ pub mod ops {
     pub async fn save_process_routing_settings(
         rt: &Runtime,
         enabled: bool,
-        on_routa_exit: ExitPolicy,
     ) -> Result<(), Vec<ValidationError>> {
         rt.mutate_process_routing(|p| {
             p.enabled = enabled;
-            p.on_routa_exit = on_routa_exit;
         })
         .await
         .map(|_| ())
@@ -616,9 +614,8 @@ pub async fn delete_process_rule(rt: Rt<'_>, id: ProcessRuleId) -> Result<Option
 pub async fn save_process_routing_settings(
     rt: Rt<'_>,
     enabled: bool,
-    on_routa_exit: ExitPolicy,
 ) -> Result<(), Vec<ValidationError>> {
-    ops::save_process_routing_settings(&rt, enabled, on_routa_exit).await
+    ops::save_process_routing_settings(&rt, enabled).await
 }
 
 #[tauri::command]
@@ -801,9 +798,9 @@ mod tests {
         assert!(ops::save_process_rule(&rt, bad).await.is_err());
         assert_eq!(rt.model().process_routing.rules.len(), 1, "nothing changed");
 
-        ops::save_process_routing_settings(&rt, true, ExitPolicy::Direct).await.unwrap();
+        ops::save_process_routing_settings(&rt, true).await.unwrap();
         let pr = rt.model().process_routing;
-        assert_eq!((pr.enabled, pr.on_routa_exit), (true, ExitPolicy::Direct));
+        assert!(pr.enabled);
 
         ops::delete_process_rule(&rt, rule.id).await.unwrap();
         assert!(rt.model().process_routing.rules.is_empty());
@@ -813,7 +810,7 @@ mod tests {
     async fn save_seeds_running_paths_and_remove_learned_forgets_one() {
         let td = tempfile::tempdir().unwrap();
         let rt = runtime(&td);
-        ops::save_process_routing_settings(&rt, true, ExitPolicy::Direct).await.unwrap();
+        ops::save_process_routing_settings(&rt, true).await.unwrap();
         let rule = ProcessRule {
             processes: vec![ProcessEntry::name("a.exe")],
             on_fault: FaultPolicy::Block,

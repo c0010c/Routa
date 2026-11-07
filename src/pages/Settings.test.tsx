@@ -42,7 +42,7 @@ const model: Model = {
   },
   manual_nodes: [],
   node_groups: [],
-  process_routing: { enabled: false, on_routa_exit: "Block", rules: [] },
+  process_routing: { enabled: false, rules: [] },
 };
 
 function renderPage(initial = model, simple = false, tab = "network") {
@@ -471,15 +471,11 @@ describe("Settings", () => {
   });
 
   it("holds the rarely changed process routing settings", async () => {
-    vi.mocked(commands.saveProcessRoutingSettings).mockResolvedValue({ status: "ok", data: null });
     vi.mocked(commands.procrouteCleanup).mockResolvedValue({ status: "error", error: "已取消" });
     renderPage(model, false, "procroute");
-    const behaviour = await screen.findByRole("region", { name: "行为" });
-    expect(within(behaviour).getByRole("radio", { name: "阻断" })).toBeChecked();
-    fireEvent.click(within(behaviour).getByRole("radio", { name: "直连" }));
-    await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(false, "Direct"));
-
-    const component = screen.getByRole("region", { name: "分流组件" });
+    const component = await screen.findByRole("region", { name: "分流组件" });
+    expect(screen.queryByRole("region", { name: "行为" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "直连" })).not.toBeInTheDocument();
     expect(within(component).getByRole("button", { name: "卸载组件" })).toBeEnabled();
     fireEvent.click(within(component).getByRole("button", { name: "清理残留阻断规则" }));
     fireEvent.click(await screen.findByRole("button", { name: "清理" }));

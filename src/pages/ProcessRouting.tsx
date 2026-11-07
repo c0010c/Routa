@@ -30,7 +30,6 @@ import {
 } from "../api/procroute";
 import type {
   ComponentState,
-  ExitPolicy,
   ProcessRule,
   ProcRouteStatus,
   RuleView,
@@ -45,9 +44,6 @@ import { ProcessNodeSelect } from "../components/ProcessNodeSelect";
 import { desktopApi, useDesktopMutation } from "../api/desktop";
 import { errorMessage } from "../api/client";
 
-export const EXIT_POLICY_LABEL = "Routa 不提供代理时";
-export const EXIT_POLICY_HINT =
-  "适用于退出 Routa、手动停止内核、开机后 Routa 启动前；Routa 或组件崩溃时按每条规则自己的设置";
 export const TRUNCATED_HINT = "仅显示最近 400 条";
 
 /** 列表里每条规则最多直接显示几个进程，其余折成「+N」。 */
@@ -113,11 +109,9 @@ function formatTime(unix: number): string {
 function ComponentStatus({
   status,
   enabled,
-  onExit,
 }: {
   status: ProcRouteStatus;
   enabled: boolean;
-  onExit: ExitPolicy;
 }) {
   const settings = useSaveProcessRoutingSettings();
   const c = status.component;
@@ -137,7 +131,7 @@ function ComponentStatus({
           <Switch
             checked={enabled}
             disabled={settings.isPending}
-            onChange={(e) => settings.mutate(e.target.checked, onExit)}
+            onChange={(e) => settings.mutate(e.target.checked)}
             slotProps={{ input: { "aria-label": "启用进程分流规则" } }}
           />
           <Typography variant="body2" color="text.secondary">
@@ -153,11 +147,9 @@ function ComponentStatus({
 function ComponentAlerts({
   status,
   enabled,
-  onExit,
 }: {
   status: ProcRouteStatus;
   enabled: boolean;
-  onExit: ExitPolicy;
 }) {
   const install = useProcRouteInstall();
   const retry = useProcRouteRetry();
@@ -198,7 +190,7 @@ function ComponentAlerts({
         <Alert
           severity="info"
           action={
-            <Button color="inherit" disabled={settings.isPending} onClick={() => settings.mutate(true, onExit)}>
+            <Button color="inherit" disabled={settings.isPending} onClick={() => settings.mutate(true)}>
               恢复
             </Button>
           }
@@ -418,13 +410,13 @@ export function ProcessRoutingPage() {
       <Stack direction="row" spacing={2} sx={{ justifyContent: "space-between", alignItems: "center" }}>
         <Stack direction="row" spacing={2} sx={{ alignItems: "center", minWidth: 0 }}>
           <Typography variant="h5">进程分流</Typography>
-          <ComponentStatus status={s} enabled={pr.enabled} onExit={pr.on_routa_exit} />
+          <ComponentStatus status={s} enabled={pr.enabled} />
         </Stack>
         <Button variant="contained" onClick={() => setEditing({})}>
           新建规则
         </Button>
       </Stack>
-      <ComponentAlerts status={s} enabled={pr.enabled} onExit={pr.on_routa_exit} />
+      <ComponentAlerts status={s} enabled={pr.enabled} />
       <TextField
         size="small"
         label="搜索规则名称或进程"
@@ -536,7 +528,7 @@ export function ProcessRoutingPage() {
           <br />
           节点可直接在行内更改，换节点后该程序的现有连接会断开重连。
           <br />
-          退出 Routa 后的行为、卸载组件和清理残留阻断规则在「设置 → 进程分流」中。
+          卸载组件和清理残留阻断规则在「设置 → 进程分流」中。
         </Typography>
       </Box>
       <ProcessRuleDialog

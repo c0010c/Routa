@@ -31,7 +31,7 @@ const model = {
     { id: "ts", name: "家里", groups: [], kind: { Tailscale: { hostname: "h", exit_node: "x", ephemeral: false, udp: true, auth_key: null, interface: "{NIC-TS}" } } },
   ],
   node_groups: [],
-  process_routing: { enabled: true, on_routa_exit: "Block", rules: [] },
+  process_routing: { enabled: true, rules: [] },
 } as unknown as Model;
 
 /** A rule migrated from the old one-exe shape: matched by full path, blocks on fault. */

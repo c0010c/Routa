@@ -148,7 +148,7 @@ pub async fn connect() -> Result<Box<dyn SvcConn>, ComponentState> {
 /// [`settle_graceful`] 的结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettleOutcome {
-    /// 服务确认了本次会话的 Attach 和 Goodbye：按 on_routa_exit 回落。
+    /// 服务确认了本次会话的 Attach 和 Goodbye：按各规则的 on_fault 回落。
     Settled,
     /// 没有可通知的服务（未安装、已停止、版本不一致、属于其他用户）：没有需要回落的东西。
     NoService,
@@ -178,7 +178,7 @@ fn should_retry_connect(state: &ComponentState, attempt: u32) -> bool {
 }
 
 /// 安装器启动前调用：让服务把本次 Routa 视为“正常退出”（Attach + Goodbye + 断开），
-/// 从而按 on_routa_exit 回落，即使上次 Routa 是崩溃退出。
+/// 从而按各规则的 on_fault 回落，即使上次 Routa 是崩溃退出。
 pub async fn settle_graceful(pid: u32) -> SettleOutcome {
     let mut attempt = 0;
     let outcome = loop {

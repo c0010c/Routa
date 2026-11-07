@@ -16,13 +16,6 @@ pub enum FaultPolicy {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "specta", derive(specta::Type))]
-pub enum ExitPolicy {
-    Direct,
-    Block,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum ProxyKind {
     Socks5,
     Http,

@@ -338,7 +338,7 @@ pub fn run() {
             let state = state.clone();
             tauri::async_runtime::spawn(async move {
                 // Before the core stops: tells the service this is a normal
-                // exit (on_routa_exit applies). Bounded at 1s inside.
+                // exit (rules fall back per on_fault). Bounded at 1s inside.
                 let bye = procroute::client::goodbye().await;
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     let rt = Arc::clone(&*rt);

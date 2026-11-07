@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use routa_procsvc_proto::{Action, DesiredState, ExitPolicy, FaultPolicy, ProcessKind, ProxyKind, ProxyTarget, RuleSpec};
+use routa_procsvc_proto::{Action, DesiredState, FaultPolicy, ProcessKind, ProxyKind, ProxyTarget, RuleSpec};
 
 use super::learn;
 
@@ -70,13 +70,12 @@ fn rule_action(model: &Model, status: &RuntimeStatus, rule: &ProcessRule) -> (Ac
     if status.core_stop_reason == Some(CoreStopReason::FailClosed) {
         return (Action::Block, Some("新配置无法生效，内核已停止"));
     }
-    let on_exit = &model.process_routing.on_routa_exit;
     match &status.core {
         CoreState::Crashed { .. } => (fault_action(&rule.on_fault), Some("内核崩溃")),
         CoreState::Starting if status.core_recovering => (fault_action(&rule.on_fault), Some("内核恢复中")),
-        CoreState::Starting => (exit_action(on_exit), Some("内核启动中")),
+        CoreState::Starting => (fault_action(&rule.on_fault), Some("内核启动中")),
         CoreState::Stopped => match status.core_stop_reason {
-            Some(CoreStopReason::User) => (exit_action(on_exit), Some("内核已手动停止")),
+            Some(CoreStopReason::User) => (fault_action(&rule.on_fault), Some("内核已手动停止")),
             _ => (Action::Block, Some("内核未运行")),
         },
         // 未选节点 / 节点失效（无隐藏监听器或未生效）：一律阻断，与 on_fault 无关。
@@ -118,13 +117,6 @@ fn fault_action(p: &FaultPolicy) -> Action {
     }
 }
 
-fn exit_action(p: &ExitPolicy) -> Action {
-    match p {
-        ExitPolicy::Direct => Action::Direct,
-        ExitPolicy::Block => Action::Block,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -158,7 +150,7 @@ mod tests {
     }
 
     /// 一条选了节点 n1 的规则；隐藏监听器由 reconcile 生成，id 改成 "l1" 以便与 `running()` 对应。
-    fn model(on_fault: FaultPolicy, on_exit: ExitPolicy) -> Model {
+    fn model(on_fault: FaultPolicy) -> Model {
         let mut m = Model::default();
         m.subscriptions.push(Subscription {
             id: SubscriptionId("s".into()),
@@ -172,7 +164,6 @@ mod tests {
             nodes: vec![Node { name: "n1".into(), proxy_type: "ss".into(), server: "x".into(), raw: serde_json::Value::Null }],
         });
         m.process_routing.enabled = true;
-        m.process_routing.on_routa_exit = on_exit;
         m.process_routing.rules.push(rule(on_fault));
         crate::model::hidden::reconcile_hidden_listeners(&mut m);
         let l = m.listeners.iter_mut().find(|l| l.hidden).unwrap();
@@ -229,7 +220,7 @@ mod tests {
 
     #[test]
     fn proxy_when_listener_effective() {
-        let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Direct), &running(), PID);
+        let d = decide(&model(FaultPolicy::Direct), &running(), PID);
         assert_eq!(only_action(&d), proxy("127.0.0.1"));
         let r = &d.rules[0];
         assert_eq!((rule_of_spec(&r.id), r.exe_path.as_str()), ("r1", EXE));
@@ -242,13 +233,13 @@ mod tests {
     fn block_when_listener_disabled_regardless_of_policy() {
         let mut s = running();
         s.health.listeners.insert(ListenerId("l1".into()), ListenerStatus::DisabledByUser);
-        let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Direct), &s, PID);
+        let d = decide(&model(FaultPolicy::Direct), &s, PID);
         assert_eq!(only_action(&d), Action::Block);
 
         // 不在 effective_listeners 里同样阻断。
         let mut s = running();
         s.effective_listeners.clear();
-        let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Direct), &s, PID);
+        let d = decide(&model(FaultPolicy::Direct), &s, PID);
         assert_eq!(only_action(&d), Action::Block);
     }
 
@@ -256,52 +247,46 @@ mod tests {
     fn block_when_listener_failed() {
         let mut s = running();
         s.failed_listeners.push(FailedListener { id: ListenerId("l1".into()), name: "L1".into(), port: 37800 });
-        let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Direct), &s, PID);
+        let d = decide(&model(FaultPolicy::Direct), &s, PID);
         assert_eq!(only_action(&d), Action::Block);
     }
 
     #[test]
     fn crash_uses_on_fault_direct() {
-        let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Block), &status(crashed(), None, true), PID);
+        let d = decide(&model(FaultPolicy::Direct), &status(crashed(), None, true), PID);
         assert_eq!(only_action(&d), Action::Direct);
     }
 
     #[test]
     fn crash_uses_on_fault_block() {
-        let d = decide(&model(FaultPolicy::Block, ExitPolicy::Direct), &status(crashed(), None, true), PID);
+        let d = decide(&model(FaultPolicy::Block), &status(crashed(), None, true), PID);
         assert_eq!(only_action(&d), Action::Block);
     }
 
     #[test]
     fn recovering_start_uses_on_fault() {
         let s = status(CoreState::Starting, None, true);
-        let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Block), &s, PID);
+        let d = decide(&model(FaultPolicy::Direct), &s, PID);
         assert_eq!(only_action(&d), Action::Direct);
-        let d = decide(&model(FaultPolicy::Block, ExitPolicy::Direct), &s, PID);
+        let d = decide(&model(FaultPolicy::Block), &s, PID);
         assert_eq!(only_action(&d), Action::Block);
     }
 
     #[test]
-    fn initial_start_uses_exit_policy() {
-        let s = status(CoreState::Starting, None, false);
-        let d = decide(&model(FaultPolicy::Block, ExitPolicy::Direct), &s, PID);
-        assert_eq!(only_action(&d), Action::Direct);
-        let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Block), &s, PID);
-        assert_eq!(only_action(&d), Action::Block);
-    }
-
-    #[test]
-    fn user_stop_uses_exit_policy() {
-        let s = status(CoreState::Stopped, Some(CoreStopReason::User), false);
-        let d = decide(&model(FaultPolicy::Block, ExitPolicy::Direct), &s, PID);
-        assert_eq!(only_action(&d), Action::Direct);
-        let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Block), &s, PID);
-        assert_eq!(only_action(&d), Action::Block);
+    fn user_stop_and_starting_follow_on_fault() {
+        let start = status(CoreState::Starting, None, false);
+        let stop = status(CoreState::Stopped, Some(CoreStopReason::User), false);
+        for s in [&start, &stop] {
+            let d = decide(&model(FaultPolicy::Direct), s, PID);
+            assert_eq!(only_action(&d), Action::Direct);
+            let d = decide(&model(FaultPolicy::Block), s, PID);
+            assert_eq!(only_action(&d), Action::Block);
+        }
     }
 
     #[test]
     fn fail_closed_stop_blocks() {
-        let m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let m = model(FaultPolicy::Direct);
         let d = decide(&m, &status(CoreState::Stopped, Some(CoreStopReason::FailClosed), false), PID);
         assert_eq!(only_action(&d), Action::Block);
         // 没有停止原因的 Stopped 也阻断。
@@ -312,13 +297,13 @@ mod tests {
     #[test]
     fn fail_closed_reason_blocks_even_when_crashed() {
         let s = status(crashed(), Some(CoreStopReason::FailClosed), true);
-        let d = decide(&model(FaultPolicy::Direct, ExitPolicy::Direct), &s, PID);
+        let d = decide(&model(FaultPolicy::Direct), &s, PID);
         assert_eq!(only_action(&d), Action::Block);
     }
 
     #[test]
     fn disabled_rule_omitted() {
-        let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let mut m = model(FaultPolicy::Direct);
         m.process_routing.rules[0].user_enabled = false;
         let mut kept = rule(FaultPolicy::Direct);
         kept.id = ProcessRuleId("r2".into());
@@ -326,7 +311,7 @@ mod tests {
         let d = decide(&m, &running(), PID);
         assert_eq!(d.rules.iter().map(|r| rule_of_spec(&r.id)).collect::<Vec<_>>(), ["r2"]);
 
-        let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let mut m = model(FaultPolicy::Direct);
         m.process_routing.enabled = false;
         let d = decide(&m, &running(), PID);
         assert!(d.rules.is_empty());
@@ -335,7 +320,7 @@ mod tests {
 
     #[test]
     fn rule_without_node_blocks_regardless_of_fault_policy() {
-        let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let mut m = model(FaultPolicy::Direct);
         m.process_routing.rules[0].node = None;
         let d = decide(&m, &running(), PID);
         assert_eq!(only_action(&d), Action::Block);
@@ -345,13 +330,13 @@ mod tests {
     #[test]
     fn rule_with_missing_or_inactive_node_listener_blocks() {
         // 选了节点但没有隐藏监听器。
-        let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let mut m = model(FaultPolicy::Direct);
         m.listeners.clear();
         assert_eq!(only_action(&decide(&m, &running(), PID)), Action::Block);
         assert_eq!(reasons(&m, &running())[&ProcessRuleId("r1".into())].as_deref(), Some("节点已失效，请更换节点"));
 
         // 有隐藏监听器但出口损坏。
-        let m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let m = model(FaultPolicy::Direct);
         let mut s = running();
         s.health.listeners.insert(ListenerId("l1".into()), ListenerStatus::ExitBroken { exit_status: crate::model::health::ExitStatus::NodeMissing });
         assert_eq!(only_action(&decide(&m, &s, PID)), Action::Block);
@@ -360,13 +345,13 @@ mod tests {
 
     #[test]
     fn rule_with_active_hidden_listener_proxies_to_loopback_socks() {
-        let d = decide(&model(FaultPolicy::Block, ExitPolicy::Block), &running(), PID);
+        let d = decide(&model(FaultPolicy::Block), &running(), PID);
         assert_eq!(only_action(&d), proxy("127.0.0.1"));
     }
 
     #[test]
     fn reasons_only_for_non_proxy() {
-        let m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let m = model(FaultPolicy::Direct);
         assert_eq!(reasons(&m, &running()), HashMap::from([(ProcessRuleId("r1".into()), None)]));
         let why = reasons(&m, &status(crashed(), None, true));
         assert_eq!(why[&ProcessRuleId("r1".into())].as_deref(), Some("内核崩溃"));
@@ -374,7 +359,7 @@ mod tests {
 
     #[test]
     fn each_process_becomes_one_spec() {
-        let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let mut m = model(FaultPolicy::Direct);
         m.process_routing.rules[0].processes = vec![ProcessEntry::name("ChatGPT.exe"), ProcessEntry::name("codex.exe")];
         let d = decide(&m, &running(), PID);
         let ids: Vec<&str> = d.rules.iter().map(|r| r.id.as_str()).collect();
@@ -388,7 +373,7 @@ mod tests {
 
     #[test]
     fn rule_order_preserved_and_no_auth_passes_none() {
-        let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
+        let mut m = model(FaultPolicy::Direct);
         let mut second = rule(FaultPolicy::Block);
         second.id = ProcessRuleId("r0".into());
         m.process_routing.rules.push(second);
@@ -399,7 +384,7 @@ mod tests {
     }
 
     fn name_block_model() -> Model {
-        let mut m = model(FaultPolicy::Block, ExitPolicy::Direct);
+        let mut m = model(FaultPolicy::Block);
         let r = &mut m.process_routing.rules[0];
         r.processes = vec![ProcessEntry::name("ChatGPT.exe")];
         r.learned = vec![r"C:\A\ChatGPT.exe".into(), r"C:\B\other.exe".into()];
