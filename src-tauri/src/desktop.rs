@@ -120,7 +120,7 @@ fn result_ok(outcome: &ApplyOutcome) -> Result<(), String> {
         | ApplyOutcome::NotRunning { error } => Err(format!("配置未能生效：{error}")),
     }
 }
-fn validation(e: Vec<ValidationError>) -> String {
+pub(crate) fn validation(e: Vec<ValidationError>) -> String {
     e.into_iter()
         .map(|e| match e {
             ValidationError::DuplicateName { name, .. } => format!("名称「{name}」已存在"),

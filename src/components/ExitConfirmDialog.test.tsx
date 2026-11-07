@@ -77,6 +77,27 @@ describe("ExitConfirmDialog", () => {
     expect(commands.quitApp).not.toHaveBeenCalled();
   });
 
+  it("keeps the dialog open with the reason when the disable did not take effect", async () => {
+    const reason = "进程分流还没有停用成功，暂不退出：分流服务没有确认新的规则";
+    vi.mocked(commands.disableRoutingAndQuit).mockResolvedValue({ status: "error", error: reason });
+    renderDialog();
+    await ask(["游戏"]);
+    fireEvent.click(screen.getByRole("button", { name: "停用进程分流并退出" }));
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    const anyway = screen.getByRole("button", { name: "仍然退出" });
+    await waitFor(() => expect(anyway).toBeEnabled());
+    fireEvent.click(anyway);
+    await waitFor(() => expect(commands.quitApp).toHaveBeenCalled());
+  });
+
+  it("shows the tray's disable-and-quit failure", async () => {
+    renderDialog();
+    await waitFor(() => expect(handlers.has("exit-error")).toBe(true));
+    act(() => handlers.get("exit-error")!({ payload: "进程分流还没有停用成功，暂不退出：服务启动失败" }));
+    expect(await screen.findByText("进程分流还没有停用成功，暂不退出：服务启动失败")).toBeInTheDocument();
+  });
+
   it("取消 only closes", async () => {
     renderDialog();
     await ask(["游戏"]);

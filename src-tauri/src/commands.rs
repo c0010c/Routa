@@ -634,10 +634,11 @@ pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
-/// Turns process routing off, waits briefly for the service to confirm, then exits.
+/// Turns process routing off and exits once the service confirmed it; otherwise
+/// returns why Routa did not exit.
 #[tauri::command]
 #[specta::specta]
-pub async fn disable_routing_and_quit(app: AppHandle, rt: Rt<'_>) -> Result<(), Vec<ValidationError>> {
+pub async fn disable_routing_and_quit(app: AppHandle, rt: Rt<'_>) -> Result<(), String> {
     crate::tray::disable_routing_and_quit(&app, &rt).await
 }
 

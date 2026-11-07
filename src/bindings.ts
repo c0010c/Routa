@@ -299,9 +299,10 @@ async quitApp() : Promise<void> {
     await TAURI_INVOKE("quit_app");
 },
 /**
- * Turns process routing off, waits briefly for the service to confirm, then exits.
+ * Turns process routing off and exits once the service confirmed it; otherwise
+ * returns why Routa did not exit.
  */
-async disableRoutingAndQuit() : Promise<Result<null, ValidationError[]>> {
+async disableRoutingAndQuit() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("disable_routing_and_quit") };
 } catch (e) {
