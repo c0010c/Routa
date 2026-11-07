@@ -824,11 +824,7 @@ export type ValidationError = { DuplicateName: { kind: string; name: string } } 
 /**
  * 已启用规则里的进程总数超过上限。
  */
-{ TooManyProcessRules: { max: number } } | { EmptyProcessRule: { rule: string } } | 
-/**
- * 按进程名匹配的规则不能在组件故障时阻断（WFP 只认完整路径）。
- */
-{ ProcessNameCannotBlock: { rule: string } }
+{ TooManyProcessRules: { max: number } } | { EmptyProcessRule: { rule: string } }
 
 /** tauri-specta globals **/
 

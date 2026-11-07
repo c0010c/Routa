@@ -13,17 +13,15 @@ pub enum ValidationError {
     InvalidProxy { name: String, reason: String },
     /// The generated config was rejected by `mihomo -t`.
     CoreRejected { message: String },
-    /// 同一个程序（按文件名）出现在多处：一个程序只能属于一条规则。
+    /// 同一个进程名或同一条路径出现在多处：同类条目只能属于一条规则。
     DuplicateProcessRule { exe_path: String },
     InvalidExePath { exe_path: String, reason: String },
-    /// 已启用规则里的进程总数超过上限。
+    /// 已启用规则里走代理的「节点 + 生效网卡」组合数超过上限。
     TooManyProcessRules { max: u32 },
     EmptyProcessRule { rule: String },
-    /// 按进程名匹配的规则不能在组件故障时阻断（WFP 只认完整路径）。
-    ProcessNameCannotBlock { rule: String },
 }
 
-/// 已启用规则里的进程总数上限（每个进程下发为服务端的一条规则，与服务端一致）。
+/// 已启用规则里不同「节点 + 生效网卡」组合的上限（每个组合对应一个代理配置，与服务端一致）。
 pub const MAX_PROCESS_RULES: u32 = 32;
 
 /// 规则的显示名：名称为空时用第一个进程的文件名。
@@ -57,9 +55,6 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
         if r.processes.is_empty() {
             errors.push(ValidationError::EmptyProcessRule { rule: process_rule_label(r) });
         }
-        if r.processes.iter().any(|p| p.kind == ProcessKind::Name) && r.on_fault == FaultPolicy::Block {
-            errors.push(ValidationError::ProcessNameCannotBlock { rule: process_rule_label(r) });
-        }
         for entry in &r.processes {
             let p = normalize_exe_path(&entry.value);
             let problem = if entry.kind == ProcessKind::Path {
@@ -73,14 +68,23 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
                 errors.push(ValidationError::InvalidExePath { exe_path: p, reason });
                 continue;
             }
-            // 按文件名判重：按名字的规则会命中所有同名程序，与按路径的规则也不能重叠。
-            let key = process_file_name(&p).to_lowercase();
+            // 进程名只与进程名比、路径只与路径比；按路径的规则优先，二者共存不算重复。
+            let key = (entry.kind, p.to_lowercase());
             if !seen.insert(key.clone()) && reported.insert(key) {
-                errors.push(ValidationError::DuplicateProcessRule { exe_path: process_file_name(&p).to_string() });
+                errors.push(ValidationError::DuplicateProcessRule { exe_path: p });
             }
         }
     }
-    if pr.rules.iter().filter(|r| r.user_enabled).map(|r| r.processes.len()).sum::<usize>() > MAX_PROCESS_RULES as usize {
+    // 与隐藏监听器同样按 (节点, 生效网卡) 分组；只数启用且选了节点的规则。
+    let mut pairs: Vec<(&NodeRef, Option<InterfaceGuid>)> = Vec::new();
+    for r in pr.rules.iter().filter(|r| r.user_enabled) {
+        let Some(node) = &r.node else { continue };
+        let iface = super::hidden::effective_interface(model, node, &r.interface);
+        if !pairs.iter().any(|(n, i)| *n == node && *i == iface) {
+            pairs.push((node, iface));
+        }
+    }
+    if pairs.len() > MAX_PROCESS_RULES as usize {
         errors.push(ValidationError::TooManyProcessRules { max: MAX_PROCESS_RULES });
     }
 }
@@ -446,30 +450,85 @@ mod tests {
         ProcessRule { processes: names.iter().map(|s| ProcessEntry::name(*s)).collect(), ..ProcessRule::default() }
     }
 
+    fn dups(m: &Model) -> usize {
+        errs(m).iter().filter(|x| matches!(x, ValidationError::DuplicateProcessRule { .. })).count()
+    }
+
     #[test]
-    fn process_name_rule() {
+    fn name_rule_can_block() {
+        let m = pmodel(|l| vec![ProcessRule { on_fault: FaultPolicy::Block, ..nrule(&["a.exe"], l) }]);
+        assert_eq!(validate(&m), Ok(()));
         assert_eq!(validate(&pmodel(|l| vec![nrule(&["ChatGPT.exe", "codex.exe"], l)])), Ok(()));
-        // 按名字匹配时不能写路径、不能为空、不能在故障时阻断
-        let e = errs(&pmodel(|l| vec![nrule(&[r"C:\a\b.exe"], l)]));
-        assert!(matches!(&e[..], [ValidationError::InvalidExePath { .. }]), "{e:?}");
         let e = errs(&pmodel(|l| vec![nrule(&[], l)]));
         assert!(matches!(&e[..], [ValidationError::EmptyProcessRule { .. }]), "{e:?}");
-        let e = errs(&pmodel(|l| vec![ProcessRule { on_fault: FaultPolicy::Block, ..nrule(&["a.exe"], l) }]));
-        assert!(matches!(&e[..], [ValidationError::ProcessNameCannotBlock { rule }] if rule == "a.exe"), "{e:?}");
-        // 同名程序在规则内、跨规则、与按路径的规则之间都不能重复
+    }
+
+    #[test]
+    fn kind_must_match_value() {
+        let e = errs(&pmodel(|l| vec![nrule(&[r"C:\a\b.exe"], l)]));
+        assert!(matches!(&e[..], [ValidationError::InvalidExePath { reason, .. }] if reason.contains("进程名")), "{e:?}");
+        let e = errs(&pmodel(|l| vec![prule("b.exe", l)]));
+        assert!(matches!(&e[..], [ValidationError::InvalidExePath { .. }]), "{e:?}");
+    }
+
+    #[test]
+    fn name_and_path_of_same_program_coexist() {
+        let m = pmodel(|l| vec![ProcessRule { processes: vec![ProcessEntry::name("a.exe"), ProcessEntry::path(r"C:\x\a.exe")], ..nrule(&[], l) }]);
+        assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn name_vs_other_rule_path_is_not_duplicate() {
+        assert_eq!(validate(&pmodel(|l| vec![nrule(&["a.exe"], l), prule(r"C:\x\A.exe", l)])), Ok(()));
+    }
+
+    #[test]
+    fn name_vs_name_and_same_path_are_duplicates() {
         for m in [
+            pmodel(|l| vec![nrule(&["a.exe"], l), nrule(&["b.exe", "A.EXE"], l)]),
+            pmodel(|l| vec![prule(r"C:\x\a.exe", l), prule("c:/X/A.exe", l)]),
             pmodel(|l| vec![nrule(&["a.exe", "A.EXE"], l)]),
-            pmodel(|l| vec![nrule(&["a.exe"], l), nrule(&["b.exe", "a.exe"], l)]),
-            pmodel(|l| vec![nrule(&["a.exe"], l), prule(r"C:\x\A.exe", l)]),
         ] {
-            let e = errs(&m);
-            assert!(matches!(&e[..], [ValidationError::DuplicateProcessRule { exe_path }] if exe_path.eq_ignore_ascii_case("a.exe")), "{e:?}");
+            assert_eq!(dups(&m), 1, "{:?}", errs(&m));
         }
-        // 进程总数上限按已启用规则里的进程计
-        let names: Vec<String> = (0..33).map(|i| format!("a{i}.exe")).collect();
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        assert!(errs(&pmodel(|l| vec![nrule(&names, l)])).contains(&ValidationError::TooManyProcessRules { max: 32 }));
-        assert_eq!(validate(&pmodel(|l| vec![ProcessRule { user_enabled: false, ..nrule(&names, l) }])), Ok(()));
+    }
+
+    #[test]
+    fn disabled_rules_still_count_for_duplicates() {
+        let m = pmodel(|l| vec![ProcessRule { user_enabled: false, ..nrule(&["a.exe"], l) }, nrule(&["a.exe"], l)]);
+        assert_eq!(dups(&m), 1);
+    }
+
+    #[test]
+    fn limit_counts_node_interface_pairs() {
+        let node = |i: usize| NodeRef::Manual { manual_id: ManualNodeId(format!("n{i}")) };
+        let rule = |n: NodeRef, iface: Option<&str>, tag: &str| ProcessRule {
+            node: Some(n),
+            interface: iface.map(|g| InterfaceGuid(g.into())),
+            processes: vec![ProcessEntry::name(format!("{tag}.exe")), ProcessEntry::path(format!(r"C:\p\{tag}.exe"))],
+            ..ProcessRule::default()
+        };
+        let over = ValidationError::TooManyProcessRules { max: 32 };
+        // 40 条规则只用到 3 个节点
+        let e = errs(&pmodel(|_| (0..40).map(|i| rule(node(i % 3), None, &format!("a{i}"))).collect()));
+        assert!(!e.contains(&over), "{e:?}");
+        let e = errs(&pmodel(|_| (0..33).map(|i| rule(node(i), None, &format!("a{i}"))).collect()));
+        assert!(e.contains(&over), "{e:?}");
+        // 同节点不同网卡算两个：16 x 2 = 32 刚好，再多一张网卡就超限
+        let two = |extra: bool| {
+            let mut v: Vec<ProcessRule> = (0..16)
+                .flat_map(|i| ["A", "B"].map(|g| rule(node(i), Some(g), &format!("a{i}{g}"))))
+                .collect();
+            if extra {
+                v.push(rule(node(0), Some("C"), "z"));
+            }
+            v
+        };
+        assert!(!errs(&pmodel(|_| two(false))).contains(&over));
+        assert!(errs(&pmodel(|_| two(true))).contains(&over));
+        // 停用的规则不计
+        let e = errs(&pmodel(|_| (0..33).map(|i| ProcessRule { user_enabled: false, ..rule(node(i), None, &format!("a{i}")) }).collect()));
+        assert!(!e.contains(&over));
     }
 
     #[test]
@@ -540,14 +599,6 @@ mod tests {
         let e = validate_forbidden_exes(&m.process_routing, &forbidden).unwrap_err();
         assert!(matches!(&e[0], ValidationError::InvalidExePath { .. }));
         assert_eq!(validate_forbidden_exes(&m.process_routing, &forbidden[..1]), Ok(()));
-    }
-
-    #[test]
-    fn process_rule_too_many_enabled() {
-        let m = pmodel(|l| (0..33).map(|i| prule(&format!("C:\\a{i}.exe"), l)).collect());
-        assert!(errs(&m).contains(&ValidationError::TooManyProcessRules { max: 32 }));
-        let m = pmodel(|l| (0..32).map(|i| prule(&format!("C:\\a{i}.exe"), l)).collect());
-        assert_eq!(validate(&m), Ok(()));
     }
 
     #[test]

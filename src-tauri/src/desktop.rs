@@ -135,11 +135,8 @@ fn validation(e: Vec<ValidationError>) -> String {
             }
             ValidationError::CoreRejected { message } => format!("内核未接受配置：{message}"),
             ValidationError::DuplicateProcessRule { exe_path } => format!("{exe_path} 已有分流规则"),
-            ValidationError::TooManyProcessRules { max } => format!("最多同时分流 {max} 个程序"),
+            ValidationError::TooManyProcessRules { max } => format!("走代理的「节点 + 网卡」组合最多 {max} 个"),
             ValidationError::EmptyProcessRule { rule } => format!("规则「{rule}」至少要有一个进程"),
-            ValidationError::ProcessNameCannotBlock { rule } => {
-                format!("规则「{rule}」按进程名匹配，组件故障时不能阻断；需要阻断请改为按完整路径匹配")
-            }
         })
         .collect::<Vec<_>>()
         .join("；")
