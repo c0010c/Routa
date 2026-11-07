@@ -31,15 +31,16 @@ const rule: ProcessRule = {
   user_enabled: true,
 };
 
-function mount(r: ProcessRule, reason?: string | null) {
+function mount(r: ProcessRule, reason?: string | null, m: Model = model, status?: unknown) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } },
   });
-  qc.setQueryData(["model"], model);
+  qc.setQueryData(["model"], m);
+  if (status) qc.setQueryData(["status"], status);
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <ProcessNodeSelect rule={r} model={model} reason={reason} />
+        <ProcessNodeSelect rule={r} model={m} reason={reason} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -104,4 +105,42 @@ it("shows the error and retries the failed target", async () => {
   await waitFor(() =>
     expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
   );
+});
+
+const withHidden = {
+  ...model,
+  exits: [
+    { id: "e1", name: "__proc_exit_l1", kind: { Node: { node: { manual_id: "m1" } } }, interface: null, hidden: true },
+  ],
+  listeners: [
+    { id: "l1", name: "__proc_l1", listener_type: "Socks", listen: "127.0.0.1", port: 37800, auth: null, exit: "e1", user_enabled: true, hidden: true },
+  ],
+  settings: { delay_test_url: "https://example.test/204" },
+} as unknown as Model;
+const running = {
+  core: "Running",
+  delays: { __proc_exit_l1: { ms: 123, error: null, tested_at: 1, stale: false } },
+  interfaces: [],
+};
+
+it("shows the rule's proxy delay and re-measures it through the hidden exit", async () => {
+  vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "get_status" ? running : []));
+  mount(rule, null, withHidden, running);
+  const measure = screen.getByRole("button", { name: "测量 chrome.exe 的代理延迟" });
+  expect(measure).toHaveTextContent("123");
+  expect(document.body.textContent).not.toContain("__proc");
+  fireEvent.click(measure);
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("test_delays", { proxyNames: ["__proc_exit_l1"] }),
+  );
+});
+
+it("hides the delay when the rule's node is broken or unset", () => {
+  mount(rule, "节点已失效，请更换节点", withHidden, running);
+  expect(screen.queryByRole("button", { name: /代理延迟/ })).not.toBeInTheDocument();
+});
+
+it("does not match a hidden exit with a different interface", () => {
+  mount({ ...rule, interface: "{NIC}" }, null, withHidden, running);
+  expect(screen.queryByRole("button", { name: /代理延迟/ })).not.toBeInTheDocument();
 });
