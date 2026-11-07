@@ -1,4 +1,5 @@
 import AppsOutlined from "@mui/icons-material/AppsOutlined";
+import FolderOutlined from "@mui/icons-material/FolderOutlined";
 import {
   Alert,
   Box,
@@ -26,28 +27,28 @@ import {
   useProcRouteInstall,
   useProcRouteStatus,
   useProcRouteRetry,
+  useRemoveLearnedPath,
+  useRunningProcesses,
   useSaveProcessRoutingSettings,
+  useDisableRoutingAndQuit,
 } from "../api/procroute";
 import type {
   ComponentState,
-  ExitPolicy,
   ProcessRule,
   ProcRouteStatus,
   RuleView,
 } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { EmptyState } from "../components/EmptyState";
+import { LearnedLocations } from "../components/LearnedLocations";
 import { RowActions } from "../components/RowActions";
 import { formatBytes, type Label } from "../lib/format";
-import { fileName, ruleLabel } from "../lib/processRule";
+import { chipLabel, fileName, groupsOf, learningNames, ruleLabel, type ProcessGroup } from "../lib/processRule";
 import { ProcessRuleDialog } from "./ProcessRuleDialog";
 import { ProcessNodeSelect } from "../components/ProcessNodeSelect";
 import { desktopApi, useDesktopMutation } from "../api/desktop";
 import { errorMessage } from "../api/client";
 
-export const EXIT_POLICY_LABEL = "Routa 不提供代理时";
-export const EXIT_POLICY_HINT =
-  "适用于退出 Routa、手动停止内核、开机后 Routa 启动前；Routa 或组件崩溃时按每条规则自己的设置";
 export const TRUNCATED_HINT = "仅显示最近 400 条";
 
 /** 列表里每条规则最多直接显示几个进程，其余折成「+N」。 */
@@ -113,13 +114,12 @@ function formatTime(unix: number): string {
 function ComponentStatus({
   status,
   enabled,
-  onExit,
 }: {
   status: ProcRouteStatus;
   enabled: boolean;
-  onExit: ExitPolicy;
 }) {
   const settings = useSaveProcessRoutingSettings();
+  const quit = useDisableRoutingAndQuit();
   const c = status.component;
   const label = componentLabel(c);
   return (
@@ -137,12 +137,22 @@ function ComponentStatus({
           <Switch
             checked={enabled}
             disabled={settings.isPending}
-            onChange={(e) => settings.mutate(e.target.checked, onExit)}
+            onChange={(e) => settings.mutate(e.target.checked)}
             slotProps={{ input: { "aria-label": "启用进程分流规则" } }}
           />
           <Typography variant="body2" color="text.secondary">
             {enabled ? "已启用" : "已暂停"}
           </Typography>
+          {enabled && (
+            <Button
+              size="small"
+              sx={{ ml: 1 }}
+              disabled={settings.isPending || quit.isPending}
+              onClick={() => quit.mutate(false)}
+            >
+              停用并退出
+            </Button>
+          )}
         </Stack>
       )}
     </Stack>
@@ -153,11 +163,9 @@ function ComponentStatus({
 function ComponentAlerts({
   status,
   enabled,
-  onExit,
 }: {
   status: ProcRouteStatus;
   enabled: boolean;
-  onExit: ExitPolicy;
 }) {
   const install = useProcRouteInstall();
   const retry = useProcRouteRetry();
@@ -198,7 +206,7 @@ function ComponentAlerts({
         <Alert
           severity="info"
           action={
-            <Button color="inherit" disabled={settings.isPending} onClick={() => settings.mutate(true, onExit)}>
+            <Button color="inherit" disabled={settings.isPending} onClick={() => settings.mutate(true)}>
               恢复
             </Button>
           }
@@ -270,18 +278,25 @@ function GuardChips({
   );
 }
 
-/** 规则里的进程：只显示文件名，悬停看完整写法；多出的折成「+N」。 */
+/** 规则里的进程：一个程序一个标签，悬停看匹配方式和位置；多出的折成「+N」。 */
 function ProcessChips({ rule }: { rule: ProcessRule }) {
-  const extra = rule.processes.slice(MAX_CHIPS);
+  const groups = groupsOf(rule.processes);
+  const extra = groups.slice(MAX_CHIPS);
+  const tip = (g: ProcessGroup) => [...(g.hasName ? ["所有位置（按进程名）"] : []), ...g.paths].join("\n");
   return (
     <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
-      {rule.processes.slice(0, MAX_CHIPS).map((p) => (
-        <Tooltip key={p} title={p}>
-          <Chip size="small" label={fileName(p)} sx={{ borderRadius: 1, height: 22 }} />
+      {groups.slice(0, MAX_CHIPS).map((g) => (
+        <Tooltip key={g.key} title={<Box sx={{ whiteSpace: "pre-line", wordBreak: "break-all" }}>{tip(g)}</Box>}>
+          <Chip
+            size="small"
+            icon={g.paths.length ? <FolderOutlined /> : undefined}
+            label={chipLabel(g)}
+            sx={{ borderRadius: 1, height: 22 }}
+          />
         </Tooltip>
       ))}
       {extra.length > 0 && (
-        <Tooltip title={extra.join("\n")}>
+        <Tooltip title={<Box sx={{ whiteSpace: "pre-line" }}>{extra.map(chipLabel).join("\n")}</Box>}>
           <Chip size="small" label={`+${extra.length}`} sx={{ borderRadius: 1, height: 22 }} />
         </Tooltip>
       )}
@@ -395,6 +410,8 @@ export function ProcessRoutingPage() {
     }
   };
   const delRule = useDeleteProcessRule();
+  const removeLearned = useRemoveLearnedPath();
+  const running = useRunningProcesses();
   const [editing, setEditing] = useState<{ rule?: ProcessRule } | null>(null);
   const [deleting, setDeleting] = useState<ProcessRule | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -410,7 +427,7 @@ export function ProcessRoutingPage() {
     (r) =>
       !q ||
       ruleLabel(r).toLowerCase().includes(q) ||
-      r.processes.some((p) => p.toLowerCase().includes(q)),
+      r.processes.some((p) => p.value.toLowerCase().includes(q)),
   );
 
   return (
@@ -418,13 +435,13 @@ export function ProcessRoutingPage() {
       <Stack direction="row" spacing={2} sx={{ justifyContent: "space-between", alignItems: "center" }}>
         <Stack direction="row" spacing={2} sx={{ alignItems: "center", minWidth: 0 }}>
           <Typography variant="h5">进程分流</Typography>
-          <ComponentStatus status={s} enabled={pr.enabled} onExit={pr.on_routa_exit} />
+          <ComponentStatus status={s} enabled={pr.enabled} />
         </Stack>
         <Button variant="contained" onClick={() => setEditing({})}>
           新建规则
         </Button>
       </Stack>
-      <ComponentAlerts status={s} enabled={pr.enabled} onExit={pr.on_routa_exit} />
+      <ComponentAlerts status={s} enabled={pr.enabled} />
       <TextField
         size="small"
         label="搜索规则名称或进程"
@@ -469,8 +486,24 @@ export function ProcessRoutingPage() {
                     <TableCell sx={{ width: "42%" }}>
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>
                         {name}
+                        {r.user_enabled && r.on_fault === "Block" && (
+                          <Typography component="span" variant="caption" sx={{ ml: 1, fontWeight: 400, color: "text.secondary" }}>
+                            不可用时阻断
+                          </Typography>
+                        )}
                       </Typography>
                       <ProcessChips rule={r} />
+                      {learningNames(r).length > 0 && (
+                        <Box sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>
+                          <LearnedLocations
+                            rule={r}
+                            others={pr.rules.filter((x) => x.id !== r.id)}
+                            routingEnabled={pr.enabled}
+                            running={running.data ?? []}
+                            onRemove={(p) => removeLearned.mutate(r.id, p)}
+                          />
+                        </Box>
+                      )}
                     </TableCell>
                     <TableCell>
                       <ProcessNodeSelect rule={r} model={m} reason={view?.reason} />
@@ -536,7 +569,7 @@ export function ProcessRoutingPage() {
           <br />
           节点可直接在行内更改，换节点后该程序的现有连接会断开重连。
           <br />
-          退出 Routa 后的行为、卸载组件和清理残留阻断规则在「设置 → 进程分流」中。
+          卸载组件和清理残留阻断规则在「设置 → 进程分流」中。
         </Typography>
       </Box>
       <ProcessRuleDialog

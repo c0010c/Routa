@@ -66,6 +66,25 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> io::Res
     result
 }
 
+/// 从原始状态 JSON 的 `process_routing.rules` 里删掉旧格式规则（`processes` 含字符串元素，
+/// 或带 `exe_path` / `match_full_path` 键），返回删掉的条数。旧规则不再兼容：直接丢弃，
+/// 以免整份状态文件反序列化失败而被隔离（订阅等其它配置要保留）。
+pub fn drop_old_process_rules(raw: &mut serde_json::Value) -> usize {
+    let Some(rules) = raw.pointer_mut("/process_routing/rules").and_then(|r| r.as_array_mut()) else {
+        return 0;
+    };
+    let before = rules.len();
+    rules.retain(|r| {
+        let old_keys = r.get("exe_path").is_some() || r.get("match_full_path").is_some();
+        let string_entries = r
+            .get("processes")
+            .and_then(|p| p.as_array())
+            .is_some_and(|ps| ps.iter().any(|p| p.is_string()));
+        !(old_keys || string_entries)
+    });
+    before - rules.len()
+}
+
 impl Store {
     pub fn open(dir: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(dir.join(CORE_DIR))?;
@@ -74,7 +93,11 @@ impl Store {
 
     pub fn load_model(&self) -> io::Result<Model> {
         let raw: Option<serde_json::Value> = read_json(&self.dir.join(STATE_FILE))?;
-        let Some(raw) = raw else { return Ok(Model::default()); };
+        let Some(mut raw) = raw else { return Ok(Model::default()); };
+        let dropped = drop_old_process_rules(&mut raw);
+        if dropped > 0 {
+            eprintln!("load_model: dropped {dropped} old-format process rule(s)");
+        }
         let old = raw.get("proxy_layout_version").and_then(|v| v.as_u64()).unwrap_or(0) < 1;
         let mut model: Model = serde_json::from_value(raw).map_err(|e| invalid_data(&self.state_path(), e))?;
         if old {
@@ -82,7 +105,6 @@ impl Store {
             if !backup.exists() { fs::copy(self.state_path(), backup)?; }
             crate::model::migrate::private_outbounds(&mut model);
         }
-        crate::model::normalize::migrate_legacy_process_rules(&mut model.process_routing);
         model.settings.core_path = None;
         Ok(model)
     }
@@ -145,6 +167,33 @@ mod tests {
         assert_eq!(store.load_model().unwrap(),migrated);
         assert_eq!(fs::read(store.dir.join("state.before-v43.json")).unwrap(),original);
     }
+    #[test]
+    fn old_format_rules_are_dropped_not_quarantined() {
+        let (_td, store) = open_tmp();
+        let raw = serde_json::json!({
+            "proxy_layout_version": 1,
+            "subscriptions": [{"id": "s1", "name": "订阅", "url": "https://x/sub"}],
+            "process_routing": {"enabled": true, "rules": [
+                {"id": "old1", "processes": ["a.exe"], "match_full_path": false},
+                {"id": "old2", "exe_path": r"C:\a.exe"},
+                {"id": "new1", "processes": [{"kind": "Path", "value": r"C:\b.exe"}]}
+            ]}
+        });
+        fs::write(store.state_path(), serde_json::to_vec(&raw).unwrap()).unwrap();
+        let m = store.load_model().unwrap();
+        assert_eq!(m.subscriptions.len(), 1);
+        assert_eq!(m.subscriptions[0].url, "https://x/sub");
+        assert!(m.process_routing.enabled);
+        let ids: Vec<_> = m.process_routing.rules.iter().map(|r| r.id.0.as_str()).collect();
+        assert_eq!(ids, ["new1"]);
+        assert_eq!(m.process_routing.rules[0].processes, vec![crate::model::ProcessEntry::path(r"C:\b.exe")]);
+
+        let mut raw = raw;
+        assert_eq!(drop_old_process_rules(&mut raw), 2);
+        assert_eq!(drop_old_process_rules(&mut raw), 0);
+        assert_eq!(drop_old_process_rules(&mut serde_json::json!({})), 0);
+    }
+
     #[test]
     fn open_creates_dirs_and_paths() {
         let (td, s) = open_tmp();

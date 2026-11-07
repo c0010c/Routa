@@ -3,7 +3,9 @@
 pub mod client;
 pub mod decide;
 pub mod elevate;
+pub mod learn;
 pub mod processes;
+pub mod store;
 
 pub use decide::decide;
 

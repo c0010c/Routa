@@ -120,7 +120,7 @@ fn result_ok(outcome: &ApplyOutcome) -> Result<(), String> {
         | ApplyOutcome::NotRunning { error } => Err(format!("配置未能生效：{error}")),
     }
 }
-fn validation(e: Vec<ValidationError>) -> String {
+pub(crate) fn validation(e: Vec<ValidationError>) -> String {
     e.into_iter()
         .map(|e| match e {
             ValidationError::DuplicateName { name, .. } => format!("名称「{name}」已存在"),
@@ -135,11 +135,8 @@ fn validation(e: Vec<ValidationError>) -> String {
             }
             ValidationError::CoreRejected { message } => format!("内核未接受配置：{message}"),
             ValidationError::DuplicateProcessRule { exe_path } => format!("{exe_path} 已有分流规则"),
-            ValidationError::TooManyProcessRules { max } => format!("最多同时分流 {max} 个程序"),
+            ValidationError::TooManyProcessRules { max } => format!("走代理的「节点 + 网卡」组合最多 {max} 个"),
             ValidationError::EmptyProcessRule { rule } => format!("规则「{rule}」至少要有一个进程"),
-            ValidationError::ProcessNameCannotBlock { rule } => {
-                format!("规则「{rule}」按进程名匹配，组件故障时不能阻断；需要阻断请改为按完整路径匹配")
-            }
         })
         .collect::<Vec<_>>()
         .join("；")
@@ -438,19 +435,19 @@ impl Desktop {
         let node = simple_node(&model, &p).ok_or("请先选择节点")?;
         let normalized = crate::model::normalize::normalize_exe_path(&path);
         let file_name = process_file_name(&normalized).to_lowercase();
-        // 同名程序只能属于一条规则（按名字的完整版规则会命中它）。
-        let existing = model
-            .process_routing
-            .rules
-            .iter()
-            .find(|r| r.processes.iter().any(|x| process_file_name(x).to_lowercase() == file_name));
+        let full_path = normalized.to_lowercase();
+        // 同一程序只能属于一条规则：同文件名的按名字条目或同路径的按路径条目都会命中它。
+        let same_program = |x: &ProcessEntry| match x.kind {
+            ProcessKind::Name => x.value.to_lowercase() == file_name,
+            ProcessKind::Path => crate::model::normalize::normalize_exe_path(&x.value).to_lowercase() == full_path,
+        };
+        let existing = model.process_routing.rules.iter().find(|r| r.processes.iter().any(same_program));
         if existing.is_some_and(|r| !p.managed_rules.contains(&r.id)) {
             return Err("该程序已有完整版规则，请在进程分流中修改".into());
         }
         // 简洁版的规则一条一个程序，按完整路径匹配，组件故障时阻断。
         let mut rule = existing.cloned().unwrap_or_else(|| ProcessRule {
-            processes: vec![path],
-            match_full_path: true,
+            processes: vec![ProcessEntry::path(path)],
             on_fault: crate::model::FaultPolicy::Block,
             ..Default::default()
         });

@@ -29,7 +29,7 @@ const model: Model = {
   },
   manual_nodes: [],
   node_groups: [],
-  process_routing: { enabled: false, on_routa_exit: "Block", rules: [] },
+  process_routing: { enabled: false, rules: [], exit_prompt: true },
 };
 
 const listener: Listener = {

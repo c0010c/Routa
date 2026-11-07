@@ -63,13 +63,15 @@ fn tmp_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use routa_procsvc_proto::{ExitPolicy, FaultPolicy, ProxyKind, ProxyTarget, RuleSpec};
+    use routa_procsvc_proto::{FaultPolicy, ProcessKind, ProxyKind, ProxyTarget, RuleSpec};
 
     fn state() -> DesiredState {
         DesiredState {
             rules: vec![RuleSpec {
                 id: "r1".into(),
-                exe_path: r"C:\测试\a.exe".into(),
+                exe_path: "a.exe".into(),
+                kind: ProcessKind::Name,
+                guard_paths: vec![r"C:\测试\a.exe".into()],
                 action: Action::Proxy(ProxyTarget {
                     kind: ProxyKind::Socks5,
                     host: "127.0.0.1".into(),
@@ -80,7 +82,6 @@ mod tests {
                 on_fault: FaultPolicy::Block,
                 reset_on_change: true,
             }],
-            on_routa_exit: ExitPolicy::Direct,
             routa_pid: 42,
         }
     }

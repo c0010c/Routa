@@ -15,15 +15,31 @@ pub fn normalize_exe_path(p: &str) -> String {
     p.trim().replace('/', "\\")
 }
 
-/// 旧版一条规则一个 exe（完整路径）：迁移成按完整路径匹配的单进程规则，行为不变。
-pub fn migrate_legacy_process_rules(pr: &mut ProcessRouting) {
-    for r in &mut pr.rules {
-        let legacy = std::mem::take(&mut r.exe_path);
-        if r.processes.is_empty() && !legacy.trim().is_empty() {
-            r.processes.push(normalize_exe_path(&legacy));
-            r.match_full_path = true;
-        }
+/// 修剪规则已知的程序位置：规则停用或 `on_fault≠Block` 时清空；否则只保留文件名对得上
+/// 某个 `Name` 条目、且不是本规则 `Path` 条目的路径，按不区分大小写去重。
+pub fn prune_learned(r: &mut ProcessRule) {
+    if !r.user_enabled || r.on_fault != FaultPolicy::Block {
+        r.learned.clear();
+        return;
     }
+    let key = |p: &str| normalize_exe_path(p).to_lowercase();
+    let names: Vec<&str> = r.processes.iter().filter(|p| p.kind == ProcessKind::Name).map(|p| p.value.as_str()).collect();
+    let paths: Vec<String> = r.processes.iter().filter(|p| p.kind == ProcessKind::Path).map(|p| key(&p.value)).collect();
+    let mut seen = std::collections::HashSet::new();
+    r.learned = std::mem::take(&mut r.learned)
+        .into_iter()
+        .map(|p| normalize_exe_path(&p))
+        .filter(|p| {
+            let k = key(p);
+            is_guard_path_for(&names, p) && !paths.contains(&k) && seen.insert(k)
+        })
+        .collect();
+}
+
+/// `path` 是 `names` 中某个进程名的合法守护路径（与服务端 Apply 校验同一判断，见
+/// [`routa_procsvc_proto::guard_path_problem`]）：本地完整路径、不含 `,` `;`、文件名相符。
+pub fn is_guard_path_for<S: AsRef<str>>(names: &[S], path: &str) -> bool {
+    names.iter().any(|n| routa_procsvc_proto::guard_path_problem(n.as_ref(), path).is_none())
 }
 
 pub fn normalize(model: &mut Model) {
@@ -33,12 +49,12 @@ pub fn normalize(model: &mut Model) {
             sub.fallback_exit = model.listeners.iter().find(|l| &l.id == id).and_then(|l| l.exit.clone());
         }
     }
-    migrate_legacy_process_rules(&mut model.process_routing);
     for r in &mut model.process_routing.rules {
         for p in &mut r.processes {
-            *p = normalize_exe_path(p);
+            p.value = normalize_exe_path(&p.value);
         }
         r.name = r.name.trim().to_string();
+        prune_learned(r);
     }
 
     // Compute against the immutable model first, then apply.
@@ -126,21 +142,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_process_rule_migrates_to_full_path_rule() {
-        let mut m: Model = serde_json::from_str(
-            r#"{"process_routing": {"rules": [{"id": "r1", "exe_path": " C:/App/a.exe ", "on_fault": "Block"}]}}"#,
-        )
-        .unwrap();
-        normalize(&mut m);
-        let r = &m.process_routing.rules[0];
-        assert_eq!(r.processes, vec![r"C:\App\a.exe".to_string()]);
-        assert!(r.match_full_path && r.exe_path.is_empty());
-        assert_eq!(r.on_fault, FaultPolicy::Block);
-        // 迁移后不再写出旧字段。
-        assert!(!serde_json::to_string(r).unwrap().contains("exe_path"));
-    }
-
-    #[test]
     fn tailscale_only_exit_follows_instance_interface() {
         let mut m = Model::default();
         m.manual_nodes.push(ts("t", guid("{B}")));
@@ -182,6 +183,61 @@ mod tests {
         ));
         normalize(&mut m);
         assert_eq!(m.exits[0].interface, guid("{A}"));
+    }
+
+    #[test]
+    fn prune_learned_clears_on_direct_disable_and_removed_name() {
+        let base = ProcessRule {
+            processes: vec![ProcessEntry::name("a.exe"), ProcessEntry::path(r"C:\P\a.exe")],
+            learned: vec![
+                r"C:\A\a.exe".into(),
+                r"c:/a/A.EXE".into(),
+                r"C:\P\a.exe".into(),
+                r"C:\B\b.exe".into(),
+            ],
+            on_fault: FaultPolicy::Block,
+            ..ProcessRule::default()
+        };
+        let mut r = base.clone();
+        prune_learned(&mut r);
+        assert_eq!(r.learned, vec![r"C:\A\a.exe".to_string()]);
+
+        let mut r = ProcessRule { on_fault: FaultPolicy::Direct, ..base.clone() };
+        prune_learned(&mut r);
+        assert!(r.learned.is_empty());
+
+        let mut r = ProcessRule { user_enabled: false, ..base.clone() };
+        prune_learned(&mut r);
+        assert!(r.learned.is_empty());
+
+        // 去掉进程名条目后，它的位置一并清掉。
+        let mut r = ProcessRule { processes: vec![ProcessEntry::path(r"C:\P\a.exe")], ..base.clone() };
+        prune_learned(&mut r);
+        assert!(r.learned.is_empty());
+
+        // normalize 对每条规则都修剪。
+        let mut m = Model::default();
+        m.process_routing.rules.push(ProcessRule { on_fault: FaultPolicy::Direct, ..base });
+        normalize(&mut m);
+        assert!(m.process_routing.rules[0].learned.is_empty());
+    }
+
+    #[test]
+    fn prune_learned_drops_paths_the_service_would_reject() {
+        let mut r = ProcessRule {
+            processes: vec![ProcessEntry::name("a.exe")],
+            learned: vec![
+                r"\\srv\share\a.exe".into(),
+                r"C:\x,y\a.exe".into(),
+                r"C:\x;y\a.exe".into(),
+                r"\\?\C:\A\a.exe".into(),
+                r"C:\A\a.exe".into(),
+            ],
+            on_fault: FaultPolicy::Block,
+            ..ProcessRule::default()
+        };
+        prune_learned(&mut r);
+        assert_eq!(r.learned, vec![r"C:\A\a.exe".to_string()]);
     }
 
     #[test]

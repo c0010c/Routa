@@ -45,10 +45,13 @@ pub fn rule_listener<'a>(model: &'a Model, rule: &ProcessRule) -> Option<&'a Lis
 }
 
 /// First port in `HIDDEN_PORT_RANGE` that is neither the controller port nor
-/// used by a listener other than `skip`.
-fn free_port(model: &Model, skip: Option<&ListenerId>) -> Option<u16> {
+/// used by a listener other than `skip`, nor in `avoid` (ports just released by
+/// dropped listeners: mihomo's reload starts new listeners before closing old ones).
+fn free_port(model: &Model, skip: Option<&ListenerId>, avoid: &HashSet<u16>) -> Option<u16> {
     HIDDEN_PORT_RANGE.clone().find(|p| {
-        *p != model.settings.controller_port && !model.listeners.iter().any(|l| Some(&l.id) != skip && l.port == *p)
+        *p != model.settings.controller_port
+            && !avoid.contains(p)
+            && !model.listeners.iter().any(|l| Some(&l.id) != skip && l.port == *p)
     })
 }
 
@@ -77,6 +80,8 @@ pub fn reconcile_hidden_listeners(model: &mut Model) {
         .filter(|l| l.hidden && !kept.contains(&l.id))
         .filter_map(|l| l.exit.clone())
         .collect();
+    let released_ports: HashSet<u16> =
+        model.listeners.iter().filter(|l| l.hidden && !kept.contains(&l.id)).map(|l| l.port).collect();
     model.listeners.retain(|l| !l.hidden || kept.contains(&l.id));
     model.exits.retain(|e| !removed_exits.contains(&e.id));
 
@@ -90,7 +95,7 @@ pub fn reconcile_hidden_listeners(model: &mut Model) {
         let clash = port == model.settings.controller_port
             || model.listeners.iter().any(|o| o.port == port && (!o.hidden || settled.contains(&o.id)));
         settled.insert(id.clone());
-        let new_port = if clash { free_port(model, Some(id)) } else { None };
+        let new_port = if clash { free_port(model, Some(id), &released_ports) } else { None };
         let l = &mut model.listeners[idx];
         l.user_enabled = *enabled;
         if let Some(p) = new_port {
@@ -103,7 +108,7 @@ pub fn reconcile_hidden_listeners(model: &mut Model) {
         if id.is_some() {
             continue;
         }
-        let Some(port) = free_port(model, None) else { continue };
+        let Some(port) = free_port(model, None, &released_ports) else { continue };
         let lid = ListenerId::new();
         let eid = ExitId::new();
         model.exits.push(Exit {
@@ -338,5 +343,24 @@ mod tests {
         reconcile_hidden_listeners(&mut m);
         assert_eq!(hidden_count(&m), 0);
         assert!(rule_listener(&m, &m.process_routing.rules[0]).is_none());
+    }
+
+    #[test]
+    fn node_change_does_not_reuse_released_port() {
+        let mut m = model();
+        m.process_routing.rules.push(rule(Some(n1()), None, true));
+        m.process_routing.rules.push(rule(Some(n("n2")), None, true));
+        reconcile_hidden_listeners(&mut m);
+        let (a, b) = (m.process_routing.rules[0].clone(), m.process_routing.rules[1].clone());
+        let old = rule_listener(&m, &a).unwrap().clone();
+        let kept_before = rule_listener(&m, &b).unwrap().clone();
+        m.process_routing.rules[0].node = Some(ts_ref());
+        reconcile_hidden_listeners(&mut m);
+        let a2 = m.process_routing.rules[0].clone();
+        let new = rule_listener(&m, &a2).unwrap();
+        assert_ne!(new.port, old.port);
+        assert!(m.listeners.iter().all(|l| l.id != old.id));
+        let kept_after = rule_listener(&m, &b).unwrap();
+        assert_eq!((&kept_after.id, kept_after.port), (&kept_before.id, kept_before.port));
     }
 }

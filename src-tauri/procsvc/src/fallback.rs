@@ -1,6 +1,6 @@
 //! Routa 不在时的回落策略（spec 5、6.3）。
 
-use routa_procsvc_proto::{Action, DesiredState, ExitPolicy, FaultPolicy, RuleSpec};
+use routa_procsvc_proto::{Action, DesiredState, FaultPolicy, RuleSpec};
 
 /// Routa 为什么不在。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,23 +13,19 @@ pub enum RoutaGone {
     NeverConnected,
 }
 
-/// Routa 不在时每条规则应回落成的规则集：正常退出 / 尚未连上按 `on_routa_exit`，
-/// 崩溃按每条规则的 `on_fault`。结果里不会出现 `Action::Proxy`。
-pub fn fallback(state: &DesiredState, why: RoutaGone) -> Vec<RuleSpec> {
+/// Routa 不在时每条规则应回落成的规则集：无论 `why`（正常退出、崩溃、尚未连上），
+/// 都按每条规则的 `on_fault`；`why` 只由调用方用来记录中断原因。
+/// 其余字段（含 `kind`、`guard_paths`）原样保留。结果里不会出现 `Action::Proxy`。
+pub fn fallback(state: &DesiredState, _why: RoutaGone) -> Vec<RuleSpec> {
     state
         .rules
         .iter()
-        .map(|r| {
-            let block = match why {
-                RoutaGone::Graceful | RoutaGone::NeverConnected => {
-                    state.on_routa_exit == ExitPolicy::Block
-                }
-                RoutaGone::Crashed => r.on_fault == FaultPolicy::Block,
-            };
-            RuleSpec {
-                action: if block { Action::Block } else { Action::Direct },
-                ..r.clone()
-            }
+        .map(|r| RuleSpec {
+            action: match r.on_fault {
+                FaultPolicy::Block => Action::Block,
+                FaultPolicy::Direct => Action::Direct,
+            },
+            ..r.clone()
         })
         .collect()
 }
@@ -37,12 +33,16 @@ pub fn fallback(state: &DesiredState, why: RoutaGone) -> Vec<RuleSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use routa_procsvc_proto::{ProxyKind, ProxyTarget};
+    use routa_procsvc_proto::{ProcessKind, ProxyKind, ProxyTarget};
+
+    const GUARD: &str = r"C:\x\a.exe";
 
     fn rule(id: &str, action: Action, on_fault: FaultPolicy) -> RuleSpec {
         RuleSpec {
             id: id.into(),
             exe_path: format!(r"C:\app\{id}.exe"),
+            kind: ProcessKind::Path,
+            guard_paths: vec![],
             action,
             on_fault,
             reset_on_change: true,
@@ -59,15 +59,21 @@ mod tests {
         })
     }
 
-    fn state(on_routa_exit: ExitPolicy) -> DesiredState {
+    /// a：按进程名、Proxy、on_fault=Block（带守护路径）；b：Proxy、on_fault=Direct；
+    /// c：Direct、on_fault=Block；d：Block、on_fault=Direct。
+    fn state() -> DesiredState {
         DesiredState {
             rules: vec![
-                rule("a", proxy(), FaultPolicy::Block),
+                RuleSpec {
+                    exe_path: "a.exe".into(),
+                    kind: ProcessKind::Name,
+                    guard_paths: vec![GUARD.into()],
+                    ..rule("a", proxy(), FaultPolicy::Block)
+                },
                 rule("b", proxy(), FaultPolicy::Direct),
                 rule("c", Action::Direct, FaultPolicy::Block),
                 rule("d", Action::Block, FaultPolicy::Direct),
             ],
-            on_routa_exit,
             routa_pid: 1,
         }
     }
@@ -77,40 +83,28 @@ mod tests {
     }
 
     #[test]
-    fn graceful_uses_exit_policy() {
-        let out = fallback(&state(ExitPolicy::Block), RoutaGone::Graceful);
-        assert_eq!(actions(&out), vec![Action::Block; 4]);
-        let out = fallback(&state(ExitPolicy::Direct), RoutaGone::Graceful);
-        assert_eq!(actions(&out), vec![Action::Direct; 4]);
-    }
-
-    #[test]
-    fn never_connected_uses_exit_policy() {
-        let out = fallback(&state(ExitPolicy::Block), RoutaGone::NeverConnected);
-        assert_eq!(actions(&out), vec![Action::Block; 4]);
-        let out = fallback(&state(ExitPolicy::Direct), RoutaGone::NeverConnected);
-        assert_eq!(actions(&out), vec![Action::Direct; 4]);
-    }
-
-    #[test]
-    fn crash_uses_on_fault() {
-        for exit in [ExitPolicy::Direct, ExitPolicy::Block] {
-            let out = fallback(&state(exit), RoutaGone::Crashed);
+    fn graceful_and_never_connected_follow_on_fault() {
+        for why in [RoutaGone::Graceful, RoutaGone::NeverConnected, RoutaGone::Crashed] {
+            let out = fallback(&state(), why);
             assert_eq!(
                 actions(&out),
-                vec![Action::Block, Action::Direct, Action::Block, Action::Direct]
+                vec![Action::Block, Action::Direct, Action::Block, Action::Direct],
+                "{why:?}"
             );
+            assert_eq!(out[0].guard_paths, vec![GUARD.to_string()], "{why:?}");
         }
     }
 
     #[test]
     fn other_fields_preserved() {
-        let st = state(ExitPolicy::Direct);
+        let st = state();
         let out = fallback(&st, RoutaGone::Crashed);
         assert_eq!(out.len(), st.rules.len());
         for (o, r) in out.iter().zip(&st.rules) {
             assert_eq!(o.id, r.id);
             assert_eq!(o.exe_path, r.exe_path);
+            assert_eq!(o.kind, r.kind);
+            assert_eq!(o.guard_paths, r.guard_paths);
             assert_eq!(o.on_fault, r.on_fault);
             assert_eq!(o.reset_on_change, r.reset_on_change);
         }

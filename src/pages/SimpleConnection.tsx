@@ -399,7 +399,7 @@ export function SimpleConnection() {
                   >
                     <AppsOutlined color="action" />
                     <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography noWrap title={r.processes.join("\n")}>
+                      <Typography noWrap title={r.processes.map((p) => p.value).join("\n")}>
                         {ruleLabel(r)}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
@@ -419,12 +419,12 @@ export function SimpleConnection() {
                       checked={p.selected_apps.includes(r.id)}
                       disabled={appSave.isPending}
                       slotProps={{
-                        input: { "aria-label": `${r.processes[0] ?? ""}走代理` },
+                        input: { "aria-label": `${r.processes[0]?.value ?? ""}走代理` },
                       }}
                       onChange={async (_, selected) => {
                         try {
                           await appSave.mutateAsync({
-                            path: r.processes[0] ?? "",
+                            path: r.processes[0]?.value ?? "",
                             selected,
                           });
                         } catch (e) {

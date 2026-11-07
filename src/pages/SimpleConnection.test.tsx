@@ -13,7 +13,7 @@ const model: Model = {
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: null, delay_test_url: "u" },
   manual_nodes: [{ id: "n1", name: "香港 01", groups: [], kind: { Proxy: { raw: {} } } }],
   node_groups: [],
-  process_routing: { enabled: false, on_routa_exit: "Direct", rules: [] },
+  process_routing: { enabled: false, rules: [], exit_prompt: true },
 };
 const status: RuntimeStatus = {
   core: "Running", last_apply: null, health: { exits: {}, listeners: { l1: "Active" } }, delays: {}, traffic: null,
@@ -118,7 +118,7 @@ it("lets the user get back from the nodes and subscriptions pages", async () => 
 
 it("hints when an app rule uses another node than the simple node", async () => {
   model.process_routing.rules = [
-    { id: "r1", name: "浏览器", processes: ["chrome.exe"], match_full_path: false, node: { manual_id: "other" }, on_fault: "Direct", reset_on_change: false, user_enabled: true } as never,
+    { id: "r1", name: "浏览器", processes: [{ kind: "Name", value: "chrome.exe" }], learned: [], node: { manual_id: "other" }, on_fault: "Direct", reset_on_change: false, user_enabled: true },
   ];
   desktop.preferences.capture_mode = "Apps";
   desktop.preferences.managed_rules = ["r1"];

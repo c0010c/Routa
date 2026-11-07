@@ -27,11 +27,16 @@ export function ApplyResultSnackbar({
   );
 }
 
+type Severity = "success" | "error" | "info";
+
+/** How long a message stays; errors stay until dismissed. */
+const AUTO_HIDE: Record<Severity, number | null> = { success: 4000, info: 10000, error: null };
+
 interface ApplyResultApi {
   show: (outcome: ApplyOutcome) => void;
   showError: (message: string) => void;
-  /** A plain result message; `error` styles it as a failure. */
-  showMessage: (message: string, severity: "success" | "error") => void;
+  /** A plain result message; `error` styles it as a failure, `info` is a longer-lived notice. */
+  showMessage: (message: string, severity: Severity) => void;
 }
 
 const ApplyResultContext = createContext<ApplyResultApi>({ show: () => {}, showError: () => {}, showMessage: () => {} });
@@ -43,13 +48,13 @@ export function useApplyResult(): ApplyResultApi {
 export function ApplyResultProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<
     | { kind: "apply"; outcome: ApplyOutcome }
-    | { kind: "message"; text: string; severity: "success" | "error" }
+    | { kind: "message"; text: string; severity: Severity }
     | null
   >(null);
   const show = useCallback((outcome: ApplyOutcome) => {
     setNotice(applyOutcomeMessages(outcome).length > 0 ? { kind: "apply", outcome } : null);
   }, []);
-  const showMessage = useCallback((text: string, severity: "success" | "error") => setNotice({ kind: "message", text, severity }), []);
+  const showMessage = useCallback((text: string, severity: Severity) => setNotice({ kind: "message", text, severity }), []);
   const showError = useCallback((text: string) => setNotice({ kind: "message", text, severity: "error" }), []);
   const api = useMemo(() => ({ show, showError, showMessage }), [show, showError, showMessage]);
   return (
@@ -60,8 +65,7 @@ export function ApplyResultProvider({ children }: { children: ReactNode }) {
       ) : (
         <Snackbar
           open={notice?.kind === "message"}
-          // Successes fade on their own; errors stay until dismissed.
-          autoHideDuration={notice?.severity === "success" ? 4000 : null}
+          autoHideDuration={notice?.kind === "message" ? AUTO_HIDE[notice.severity] : null}
           onClose={(_, reason) => reason !== "clickaway" && setNotice(null)}
           anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
         >
