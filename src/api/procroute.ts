@@ -17,6 +17,10 @@ export const useSaveProcessRuleConfirmed = make(() => commands.saveProcessRuleCo
 export const useRemoveLearnedPath = make(() => commands.removeLearnedProcessPath);
 export const useDeleteProcessRule = make(() => commands.deleteProcessRule);
 export const useSaveProcessRoutingSettings = make(() => commands.saveProcessRoutingSettings);
+/** Turns process routing off, waits briefly for the service, then exits Routa. */
+export const useDisableRoutingAndQuit = make(() => commands.disableRoutingAndQuit);
+/** Whether quitting asks first when block rules would cut programs off. */
+export const useSetExitPrompt = make(() => commands.setExitPrompt);
 // 这三个会弹 UAC；被拒绝时返回的错误文本（如"已取消"）由通用的错误提示显示。
 export const useProcRouteInstall = make(() => commands.procrouteInstall);
 export const useProcRouteUninstall = make(() => commands.procrouteUninstall);
