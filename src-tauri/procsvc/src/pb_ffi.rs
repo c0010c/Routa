@@ -1,8 +1,9 @@
 //! `Interceptor` 的真实实现：经 FFI 驱动 ProxyBridge 分支 DLL（ProxyBridgeCore.dll，C API 见
 //! third_party/proxybridge/src/ProxyBridge.h）。
 //!
-//! 每个 Routa 规则 id 对应一条 ProxyBridge 规则，代理规则另有一份 ProxyBridge 代理配置
-//! （首次 `set_proxy` 时创建、之后编辑、`remove_rule` 时删除）。
+//! 每个 Routa 规则 id 对应一条 ProxyBridge 规则。代理配置按 `ProxyTarget` 去重共用（[`ProxyPool`]，
+//! 引用归零时删除）；目标变化时换一份配置，不原地编辑，以免影响共用它的其他规则。
+//! ProxyBridge 按列表顺序匹配、先中先得，所以按完整路径的规则新增后挪到最前，压过按进程名的规则。
 //!
 //! [`load`] 只加载 DLL，不启动；启停由 [`crate::lazy::Lazy`] 按规则集是否为空决定（[`Bridge`]）。
 
@@ -22,6 +23,8 @@ use routa_procsvc_proto::{Flow, ProxyKind, ProxyTarget};
 use crate::engine::{Interceptor, PbAction};
 use crate::lazy::Bridge;
 use crate::paths::{exe_of_pid, matches_process, pattern_kind};
+use crate::proxypool::{Attach, ProxyPool};
+use routa_procsvc_proto::ProcessKind;
 
 pub const DLL_NAME: &str = "ProxyBridgeCore.dll";
 
@@ -63,15 +66,6 @@ struct PbFlow {
 
 type AddProxyConfigFn =
     unsafe extern "C" fn(c_int, *const c_char, u16, *const c_char, *const c_char, Bool) -> u32;
-type EditProxyConfigFn = unsafe extern "C" fn(
-    u32,
-    c_int,
-    *const c_char,
-    u16,
-    *const c_char,
-    *const c_char,
-    Bool,
-) -> Bool;
 type AddRuleFn = unsafe extern "C" fn(
     *const c_char,
     *const c_char,
@@ -94,6 +88,7 @@ type EditRuleFn = unsafe extern "C" fn(
     Bool,
 ) -> Bool;
 type IdFn = unsafe extern "C" fn(u32) -> Bool;
+type MoveRuleFn = unsafe extern "C" fn(u32, u32) -> Bool;
 type GetFlowsFn = unsafe extern "C" fn(*mut PbFlow, u32) -> u32;
 type SetRelayPortsFn = unsafe extern "C" fn(u16, u16) -> Bool;
 type VoidBoolFn = unsafe extern "C" fn() -> Bool;
@@ -101,11 +96,11 @@ type VoidBoolFn = unsafe extern "C" fn() -> Bool;
 /// 加载时一次性解析好的导出函数。
 struct Api {
     add_proxy_config: AddProxyConfigFn,
-    edit_proxy_config: EditProxyConfigFn,
     delete_proxy_config: IdFn,
     add_rule: AddRuleFn,
     edit_rule: EditRuleFn,
     delete_rule: IdFn,
+    move_rule_to_position: MoveRuleFn,
     get_flows: GetFlowsFn,
     set_relay_ports: SetRelayPortsFn,
     start: VoidBoolFn,
@@ -124,11 +119,11 @@ impl Api {
         }
         Ok(Api {
             add_proxy_config: sym!("ProxyBridge_AddProxyConfig"),
-            edit_proxy_config: sym!("ProxyBridge_EditProxyConfig"),
             delete_proxy_config: sym!("ProxyBridge_DeleteProxyConfig"),
             add_rule: sym!("ProxyBridge_AddRule"),
             edit_rule: sym!("ProxyBridge_EditRule"),
             delete_rule: sym!("ProxyBridge_DeleteRule"),
+            move_rule_to_position: sym!("ProxyBridge_MoveRuleToPosition"),
             get_flows: sym!("ProxyBridge_GetFlows"),
             set_relay_ports: sym!("ProxyBridge_SetRelayPorts"),
             start: sym!("ProxyBridge_Start"),
@@ -145,8 +140,8 @@ static LOADED: AtomicBool = AtomicBool::new(false);
 struct Entry {
     /// ProxyBridge 规则 id；只设过代理、还没 `set_rule` 时为 None。
     pb_rule: Option<u32>,
-    /// ProxyBridge 代理配置 id。
-    cfg: Option<u32>,
+    /// 已不被引用、等 ProxyBridge 规则改指别处（或删除）后再删的代理配置。
+    stale: Vec<u32>,
     /// 规则的 exe（`set_rule` 时的写法），用于把连接归到规则上。
     exe: String,
 }
@@ -156,6 +151,7 @@ pub struct ProxyBridge {
     /// 从不卸载：Stop 等待工作线程有超时，线程可能比 Stop 活得久，卸载后会执行已卸载的代码。
     _lib: ManuallyDrop<Library>,
     rules: HashMap<String, Entry>,
+    pool: ProxyPool,
     /// `ProxyBridge_Start` 成功、尚未 `ProxyBridge_Stop`。
     running: bool,
 }
@@ -208,6 +204,7 @@ fn open(path: &Path) -> Result<ProxyBridge, String> {
         api,
         _lib: lib,
         rules: HashMap::new(),
+        pool: ProxyPool::default(),
         running: false,
     })
 }
@@ -266,6 +263,14 @@ fn pb_exe(exe: &str) -> Result<CString, String> {
     cstring("exe 路径", &exe)
 }
 
+/// 删掉 `entry` 里不再被引用的代理配置；删除失败的留待下次。
+fn flush_stale(api: &Api, entry: &mut Entry) {
+    // SAFETY: 无指针参数。
+    entry
+        .stale
+        .retain(|&cfg| unsafe { (api.delete_proxy_config)(cfg) } == FALSE);
+}
+
 fn opt_ptr(s: &Option<CString>) -> *const c_char {
     s.as_ref().map_or(ptr::null(), |c| c.as_ptr())
 }
@@ -301,6 +306,10 @@ fn to_flow(raw: &PbFlow, exe: Option<String>, rules: &HashMap<String, Entry>) ->
 
 impl Interceptor for ProxyBridge {
     fn set_proxy(&mut self, rule: &str, target: &ProxyTarget) -> Result<(), String> {
+        // 目标没变：沿用现有配置（编辑它会影响共用者，也没有必要）。
+        if self.pool.target_of(rule) == Some(target) && self.pool.cfg_of(rule).is_some() {
+            return Ok(());
+        }
         let kind = match target.kind {
             ProxyKind::Socks5 => PROXY_TYPE_SOCKS5,
             ProxyKind::Http => PROXY_TYPE_HTTP,
@@ -317,51 +326,37 @@ impl Interceptor for ProxyBridge {
             .map(|p| cstring("代理密码", p))
             .transpose()?;
         let entry = self.rules.entry(rule.to_string()).or_default();
-        // SAFETY: 所有指针指向本函数内存活的 CString 或为 NULL。
-        match entry.cfg {
-            Some(cfg) => {
-                let ok = unsafe {
-                    (self.api.edit_proxy_config)(
-                        cfg,
-                        kind,
-                        host.as_ptr(),
-                        target.port,
-                        opt_ptr(&user),
-                        opt_ptr(&pass),
-                        TRUE,
-                    )
-                };
-                if ok == FALSE {
-                    return Err(format!("修改规则 {rule} 的 ProxyBridge 代理配置失败"));
+        // 旧配置可能还被这条 ProxyBridge 规则引用：归零时先记下，等规则改指新配置后再删。
+        if let Some(old) = self.pool.detach(rule) {
+            entry.stale.push(old);
+        }
+        if let Attach::Create = self.pool.attach(rule, target) {
+            // SAFETY: 所有指针指向本函数内存活的 CString 或为 NULL。
+            let cfg = unsafe {
+                (self.api.add_proxy_config)(
+                    kind,
+                    host.as_ptr(),
+                    target.port,
+                    opt_ptr(&user),
+                    opt_ptr(&pass),
+                    TRUE,
+                )
+            };
+            if cfg == 0 {
+                self.pool.detach(rule);
+                if entry.pb_rule.is_none() && entry.stale.is_empty() {
+                    self.rules.remove(rule);
                 }
+                return Err(format!("添加规则 {rule} 的 ProxyBridge 代理配置失败"));
             }
-            None => {
-                let cfg = unsafe {
-                    (self.api.add_proxy_config)(
-                        kind,
-                        host.as_ptr(),
-                        target.port,
-                        opt_ptr(&user),
-                        opt_ptr(&pass),
-                        TRUE,
-                    )
-                };
-                if cfg == 0 {
-                    if entry.pb_rule.is_none() {
-                        self.rules.remove(rule);
-                    }
-                    return Err(format!("添加规则 {rule} 的 ProxyBridge 代理配置失败"));
-                }
-                entry.cfg = Some(cfg);
-            }
+            self.pool.created(rule, target, cfg);
         }
         Ok(())
     }
 
     fn set_rule(&mut self, rule: &str, exe: &str, action: PbAction) -> Result<(), String> {
-        let existing = self.rules.get(rule);
         let (pb_action, cfg) = match action {
-            PbAction::Proxy => match existing.and_then(|e| e.cfg) {
+            PbAction::Proxy => match self.pool.cfg_of(rule) {
                 Some(cfg) => (RULE_ACTION_PROXY, cfg),
                 None => return Err(format!("规则 {rule} 还没有代理配置")),
             },
@@ -370,9 +365,9 @@ impl Interceptor for ProxyBridge {
         };
         let exe_c = pb_exe(exe)?;
         let (any, empty) = (c"*", c"");
-        let pb_rule = existing.and_then(|e| e.pb_rule);
+        let pb_rule = self.rules.get(rule).and_then(|e| e.pb_rule);
         // SAFETY: 所有指针指向本函数内存活的 C 字符串。
-        match pb_rule {
+        let id = match pb_rule {
             Some(id) => {
                 let ok = unsafe {
                     (self.api.edit_rule)(
@@ -390,6 +385,7 @@ impl Interceptor for ProxyBridge {
                 if ok == FALSE {
                     return Err(format!("修改规则 {rule} 的 ProxyBridge 规则失败"));
                 }
+                id
             }
             None => {
                 let id = unsafe {
@@ -408,21 +404,25 @@ impl Interceptor for ProxyBridge {
                     return Err(format!("添加规则 {rule} 的 ProxyBridge 规则失败"));
                 }
                 self.rules.entry(rule.to_string()).or_default().pb_rule = Some(id);
+                id
+            }
+        };
+        let e = self.rules.entry(rule.to_string()).or_default();
+        e.exe = exe.to_string();
+        // 非代理动作不再需要代理配置：放掉引用，归零的配置删除（DLL 最多 32 份）。
+        if action != PbAction::Proxy {
+            if let Some(old) = self.pool.detach(rule) {
+                e.stale.push(old);
             }
         }
-        let Some(e) = self.rules.get_mut(rule) else {
-            return Ok(());
-        };
-        e.exe = exe.to_string();
-        // 非代理动作不再需要代理配置：删掉（DLL 最多 32 份）；之后改回代理时 plan 会先 SetProxy 重建。
-        // 删除失败时保留记录，由 remove_rule 或下一次非代理 set_rule 重试；规则本身已生效，不报错。
-        if action != PbAction::Proxy {
-            if let Some(cfg) = e.cfg {
-                // SAFETY: 无指针参数。
-                if unsafe { (self.api.delete_proxy_config)(cfg) } != FALSE {
-                    e.cfg = None;
-                }
-            }
+        // 规则已改指别处：删掉不再被引用的配置。失败时留着，下次再试；规则本身已生效，不报错。
+        flush_stale(&self.api, e);
+        // 按完整路径的规则排到最前，先于按进程名的规则匹配（先中先得）。
+        if pattern_kind(exe) == ProcessKind::Path
+            // SAFETY: 无指针参数。
+            && unsafe { (self.api.move_rule_to_position)(id, 1) } == FALSE
+        {
+            return Err(format!("移动规则 {rule} 的 ProxyBridge 规则失败"));
         }
         Ok(())
     }
@@ -438,11 +438,12 @@ impl Interceptor for ProxyBridge {
             }
             entry.pb_rule = None;
         }
-        if let Some(cfg) = entry.cfg {
-            // SAFETY: 无指针参数。
-            if unsafe { (self.api.delete_proxy_config)(cfg) } == FALSE {
-                return Err(format!("删除规则 {rule} 的 ProxyBridge 代理配置失败"));
-            }
+        if let Some(old) = self.pool.detach(rule) {
+            entry.stale.push(old);
+        }
+        flush_stale(&self.api, entry);
+        if !entry.stale.is_empty() {
+            return Err(format!("删除规则 {rule} 的 ProxyBridge 代理配置失败"));
         }
         self.rules.remove(rule);
         Ok(())
@@ -535,7 +536,7 @@ mod tests {
             "r1".to_string(),
             Entry {
                 pb_rule: Some(7),
-                cfg: Some(3),
+                stale: vec![],
                 exe: r"C:\Apps\Foo.exe".into(),
             },
         );
@@ -543,7 +544,7 @@ mod tests {
             "r2".to_string(),
             Entry {
                 pb_rule: None,
-                cfg: Some(4),
+                stale: vec![],
                 exe: r"C:\Apps\Bar.exe".into(),
             },
         );
@@ -575,7 +576,7 @@ mod tests {
             "r3".to_string(),
             Entry {
                 pb_rule: Some(9),
-                cfg: Some(5),
+                stale: vec![],
                 exe: "Baz.exe".into(),
             },
         );
@@ -622,16 +623,8 @@ mod tests {
             log(format!("add_cfg {id}"));
             id
         }
-        unsafe extern "C" fn edit_cfg(
-            id: u32,
-            _: c_int,
-            _: *const c_char,
-            _: u16,
-            _: *const c_char,
-            _: *const c_char,
-            _: Bool,
-        ) -> Bool {
-            log(format!("edit_cfg {id}"));
+        unsafe extern "C" fn move_rule(id: u32, pos: u32) -> Bool {
+            log(format!("move_rule {id} {pos}"));
             TRUE
         }
         unsafe extern "C" fn del_cfg(id: u32) -> Bool {
@@ -688,11 +681,11 @@ mod tests {
             ProxyBridge {
                 api: Api {
                     add_proxy_config: add_cfg,
-                    edit_proxy_config: edit_cfg,
                     delete_proxy_config: del_cfg,
                     add_rule,
                     edit_rule,
                     delete_rule: del_rule,
+                    move_rule_to_position: move_rule,
                     get_flows,
                     set_relay_ports: set_ports,
                     start: noop,
@@ -700,6 +693,7 @@ mod tests {
                 },
                 _lib: ManuallyDrop::new(Library::this().unwrap()),
                 rules: HashMap::new(),
+                pool: ProxyPool::default(),
                 running: false,
             }
         }
@@ -707,13 +701,14 @@ mod tests {
 
     #[test]
     fn bookkeeping_with_fake_dll() {
-        let target = ProxyTarget {
+        let target = |port| ProxyTarget {
             kind: ProxyKind::Socks5,
             host: "127.0.0.1".into(),
-            port: 7890,
+            port,
             username: None,
             password: None,
         };
+        let (t1, t2) = (target(7890), target(7891));
         let take = || std::mem::take(&mut *fake::LOG.lock().unwrap());
         let mut pb = fake::bridge();
 
@@ -721,24 +716,31 @@ mod tests {
         assert!(pb.set_rule("r", "C:/a;b/x.exe", PbAction::Block).is_err());
         assert!(take().is_empty());
 
-        pb.set_proxy("r", &target).unwrap();
+        // 完整路径的规则新增后挪到最前；目标没变时不再动代理配置。
+        pb.set_proxy("r", &t1).unwrap();
         pb.set_rule("r", " C:/Apps/x.exe", PbAction::Proxy).unwrap();
-        pb.set_proxy("r", &target).unwrap();
+        pb.set_proxy("r", &t1).unwrap();
         assert_eq!(
             take(),
-            ["add_cfg 1", r"add_rule 2 C:\Apps\x.exe 0 1", "edit_cfg 1"]
+            ["add_cfg 1", r"add_rule 2 C:\Apps\x.exe 0 1", "move_rule 2 1"]
         );
 
         // 改成非代理动作：规则改写后删掉代理配置。
         pb.set_rule("r", r"C:\Apps\x.exe", PbAction::Direct)
             .unwrap();
-        assert_eq!(take(), [r"edit_rule 2 C:\Apps\x.exe 1 0", "del_cfg 1"]);
-        assert_eq!(pb.rules["r"].cfg, None);
+        assert_eq!(
+            take(),
+            [r"edit_rule 2 C:\Apps\x.exe 1 0", "del_cfg 1", "move_rule 2 1"]
+        );
+        assert_eq!(pb.pool.cfg_of("r"), None);
 
         // 改回代理：plan 先 SetProxy 重建配置。
-        pb.set_proxy("r", &target).unwrap();
+        pb.set_proxy("r", &t1).unwrap();
         pb.set_rule("r", r"C:\Apps\x.exe", PbAction::Proxy).unwrap();
-        assert_eq!(take(), ["add_cfg 3", r"edit_rule 2 C:\Apps\x.exe 0 3"]);
+        assert_eq!(
+            take(),
+            ["add_cfg 3", r"edit_rule 2 C:\Apps\x.exe 0 3", "move_rule 2 1"]
+        );
 
         pb.remove_rule("r").unwrap();
         assert_eq!(take(), ["del_rule 2", "del_cfg 3"]);
@@ -746,14 +748,42 @@ mod tests {
         pb.remove_rule("unknown").unwrap();
         assert!(take().is_empty());
 
+        // 同一目标共用一份配置；进程名规则不挪位置；最后一个引用走了才删配置。
+        pb.set_proxy("a", &t1).unwrap();
+        pb.set_proxy("b", &t1).unwrap();
+        pb.set_rule("a", "A.exe", PbAction::Proxy).unwrap();
+        pb.set_rule("b", r"C:\b.exe", PbAction::Proxy).unwrap();
+        assert_eq!(
+            take(),
+            [
+                "add_cfg 4",
+                "add_rule 5 A.exe 0 4",
+                r"add_rule 6 C:\b.exe 0 4",
+                "move_rule 6 1"
+            ]
+        );
+        pb.remove_rule("a").unwrap();
+        assert_eq!(take(), ["del_rule 5"]);
+
+        // 目标变化：换一份新配置，规则改指新配置后才删旧的。
+        pb.set_proxy("b", &t2).unwrap();
+        assert_eq!(take(), ["add_cfg 7"]);
+        pb.set_rule("b", r"C:\b.exe", PbAction::Proxy).unwrap();
+        assert_eq!(
+            take(),
+            [r"edit_rule 6 C:\b.exe 0 7", "del_cfg 4", "move_rule 6 1"]
+        );
+        pb.remove_rule("b").unwrap();
+        assert_eq!(take(), ["del_rule 6", "del_cfg 7"]);
+
         // clear：删掉全部规则与代理配置，簿记清空
-        pb.set_proxy("p", &target).unwrap();
+        pb.set_proxy("p", &t1).unwrap();
         pb.set_rule("q", r"C:\q.exe", PbAction::Block).unwrap();
         take();
         pb.clear().unwrap();
         let mut log = take();
         log.sort();
-        assert_eq!(log, ["del_cfg 4", "del_rule 5"]);
+        assert_eq!(log, ["del_cfg 8", "del_rule 9"]);
         assert!(pb.rules.is_empty());
         pb.clear().unwrap();
         assert!(take().is_empty());
