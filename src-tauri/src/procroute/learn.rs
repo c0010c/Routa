@@ -127,6 +127,39 @@ pub fn drop_missing(pr: &mut ProcessRouting, exists: &dyn Fn(&str) -> bool) -> b
     changed
 }
 
+/// 商店应用装好新版本（包全名 `full_name`，安装目录 `root`）后，各学习中规则在新目录下的
+/// 同一程序：只收文件存在、不是本规则 `Path` 条目、也不归其他启用规则管的。
+pub fn from_package(
+    model: &Model,
+    full_name: &str,
+    root: &str,
+    exists: &dyn Fn(&str) -> bool,
+) -> Vec<(ProcessRuleId, String)> {
+    model
+        .process_routing
+        .rules
+        .iter()
+        .filter(|r| is_learning(model, r))
+        .flat_map(|r| {
+            super::store::siblings(&r.learned, full_name, root)
+                .into_iter()
+                .filter(|p| exists(p) && !own_path(r, p) && !owned_by_others(model, &r.id, p))
+                .map(|p| (r.id.clone(), p))
+        })
+        .collect()
+}
+
+/// 把 [`from_package`] 找到的位置追加到对应规则的 `learned`（按 [`exe_key`] 去重）。
+pub fn add(pr: &mut ProcessRouting, found: &[(ProcessRuleId, String)]) {
+    for (id, path) in found {
+        let Some(r) = pr.rules.iter_mut().find(|r| &r.id == id) else { continue };
+        let key = exe_key(path);
+        if !r.learned.iter().any(|p| exe_key(p) == key) {
+            r.learned.push(path.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +236,39 @@ mod tests {
         assert!(drop_missing(&mut pr, &exists));
         assert_eq!(pr.rules[0].learned, vec![r"C:\A\a.exe".to_string()]);
         assert!(!drop_missing(&mut pr, &exists));
+    }
+
+    #[test]
+    fn from_package_requires_existing_file() {
+        let old = r"C:\Program Files\WindowsApps\OpenAI.Codex_26.1029.7803.0_x64__2p2nqsd0c76g0";
+        let new_name = "OpenAI.Codex_26.1105.8012.0_x64__2p2nqsd0c76g0";
+        let new_root = r"C:\Program Files\WindowsApps\OpenAI.Codex_26.1105.8012.0_x64__2p2nqsd0c76g0";
+        let mut r = block_rule("r1", vec![ProcessEntry::name("ChatGPT.exe"), ProcessEntry::name("helper.exe")]);
+        r.learned = vec![format!(r"{old}\app\ChatGPT.exe"), format!(r"{old}\app\helper.exe")];
+        let mut m = model(vec![r]);
+        let chatgpt = format!(r"{new_root}\app\ChatGPT.exe");
+        let exists = |p: &str| p == chatgpt;
+
+        let found = from_package(&m, new_name, new_root, &exists);
+        assert_eq!(found, vec![(ProcessRuleId("r1".into()), chatgpt.clone())]);
+        add(&mut m.process_routing, &found);
+        add(&mut m.process_routing, &found);
+        assert_eq!(m.process_routing.rules[0].learned.len(), 3);
+        assert_eq!(m.process_routing.rules[0].learned[2], chatgpt);
+        // 已记下后不再产出。
+        assert!(from_package(&m, new_name, new_root, &exists).is_empty());
+
+        // 归其他启用规则管的不收；全局开关关闭时不收。
+        let mut m2 = model(vec![block_rule("r1", vec![ProcessEntry::name("ChatGPT.exe")])]);
+        m2.process_routing.rules[0].learned = vec![format!(r"{old}\app\ChatGPT.exe")];
+        m2.process_routing.rules.push(ProcessRule {
+            id: ProcessRuleId("r2".into()),
+            processes: vec![ProcessEntry::path(&chatgpt)],
+            ..ProcessRule::default()
+        });
+        assert!(from_package(&m2, new_name, new_root, &exists).is_empty());
+        m.process_routing.enabled = false;
+        m.process_routing.rules[0].learned.truncate(2);
+        assert!(from_package(&m, new_name, new_root, &exists).is_empty());
     }
 }
