@@ -39,7 +39,7 @@ use crate::persist;
 use crate::paths::{matches_process, same_path};
 use crate::reconcile::{exe_key, guard_exes, Reconciler};
 
-/// ProxyBridge 最多 32 个代理配置（ruling R13）。
+/// ProxyBridge 最多 32 个代理配置（ruling R13）；相同的代理地址共用一份，所以按不同的 `ProxyTarget` 计数。
 const MAX_PROXY_RULES: usize = 32;
 /// `ProxyBridge_GetFlows` 一次最多返回的条数；达到即视为截断。
 const FLOW_LIMIT: usize = 400;
@@ -350,7 +350,7 @@ fn validate(state: &DesiredState) -> Result<(), String> {
     let own = own_exes();
     let mut ids = HashSet::new();
     let mut exes = HashSet::new();
-    let mut proxies = 0;
+    let mut targets: Vec<&routa_procsvc_proto::ProxyTarget> = Vec::new();
     for r in &state.rules {
         if !ids.insert(r.id.as_str()) {
             return Err(format!("规则 id 重复：{}", r.id));
@@ -395,7 +395,9 @@ fn validate(state: &DesiredState) -> Result<(), String> {
             return Err(format!("程序路径重复：{exe}"));
         }
         if let Action::Proxy(t) = &r.action {
-            proxies += 1;
+            if !targets.contains(&t) {
+                targets.push(t);
+            }
             if t.host.parse::<IpAddr>().is_err() {
                 return Err(format!("规则 {} 的代理地址必须是 IP：{}", r.id, t.host));
             }
@@ -404,9 +406,10 @@ fn validate(state: &DesiredState) -> Result<(), String> {
             }
         }
     }
-    if proxies > MAX_PROXY_RULES {
+    if targets.len() > MAX_PROXY_RULES {
         return Err(format!(
-            "代理规则最多 {MAX_PROXY_RULES} 条，收到 {proxies} 条"
+            "走代理的「节点 + 网卡」组合最多 {MAX_PROXY_RULES} 个，收到 {} 个",
+            targets.len()
         ));
     }
     Ok(())
@@ -1239,6 +1242,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn apply_accepts_many_rules_sharing_few_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut srv, _world) = boot(dir.path(), &[], true);
+        let mut s = hello(&mut srv);
+        let mut st = state();
+        st.rules = (0..33)
+            .map(|i| {
+                let mut r = rule(
+                    &format!("r{i}"),
+                    &format!(r"C:\app\{i}.exe"),
+                    FaultPolicy::Direct,
+                );
+                if let Action::Proxy(t) = &mut r.action {
+                    t.port = 7000 + (i % 2) as u16;
+                }
+                r
+            })
+            .collect();
+        applied(&mut srv, &mut s, st);
+    }
+
+    #[test]
     fn apply_accepts_process_name_rule() {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
@@ -1354,15 +1379,19 @@ pub(crate) mod tests {
             ),
             ("port 0", |s| set_target(s, |t| t.port = 0), "端口"),
             (
-                "33 proxy rules",
+                "33 distinct proxy targets",
                 |s| {
                     s.rules = (0..33)
                         .map(|i| {
-                            rule(
+                            let mut r = rule(
                                 &format!("r{i}"),
                                 &format!(r"C:\app\{i}.exe"),
                                 FaultPolicy::Direct,
-                            )
+                            );
+                            if let Action::Proxy(t) = &mut r.action {
+                                t.port = 7000 + i as u16;
+                            }
+                            r
                         })
                         .collect();
                 },

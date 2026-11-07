@@ -13,6 +13,7 @@ mod localfile;
 mod paths;
 mod pb_ffi;
 mod persist;
+mod proxypool;
 mod reconcile;
 mod server;
 mod service;
