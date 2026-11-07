@@ -20,7 +20,7 @@ const model = {
   listeners: [],
   exits: [],
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
-  process_routing: { enabled: false, on_routa_exit: "Block", rules: [] },
+  process_routing: { enabled: false, rules: [] },
 } as unknown as Model;
 const status = { core: "Running", delays: {} } as unknown as RuntimeStatus;
 

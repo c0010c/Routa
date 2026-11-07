@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
-import type { Model, ProcRouteStatus } from "../bindings";
+import type { Model, ProcessEntry, ProcessRule, ProcRouteStatus } from "../bindings";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -18,6 +18,8 @@ vi.mock("../bindings", () => ({
     saveProcessRule: vi.fn(),
     deleteProcessRule: vi.fn(),
     saveProcessRoutingSettings: vi.fn(),
+    disableRoutingAndQuit: vi.fn(),
+    removeLearnedProcessPath: vi.fn(),
     listRunningProcesses: vi.fn(),
   },
 }));
@@ -26,6 +28,9 @@ import { resetFlowsStore, setFlows } from "../api/procroute";
 import { commands } from "../bindings";
 import { ApplyResultProvider } from "../components/ApplyResultSnackbar";
 import { ProcessRoutingPage } from "./ProcessRouting";
+
+const N = (value: string): ProcessEntry => ({ kind: "Name", value });
+const P = (value: string): ProcessEntry => ({ kind: "Path", value });
 
 const model: Model = {
   subscriptions: [],
@@ -38,22 +43,24 @@ const model: Model = {
   node_groups: [],
   process_routing: {
     enabled: true,
-    on_routa_exit: "Block",
     rules: [
-      { id: "r1", name: "", processes: ["curl.exe"], match_full_path: false, node: { manual_id: "m1" }, on_fault: "Direct", reset_on_change: false, user_enabled: true },
+      { id: "r1", name: "", processes: [N("curl.exe")], learned: [], node: { manual_id: "m1" }, on_fault: "Direct", reset_on_change: false, user_enabled: true },
       {
         id: "r2",
         name: "AI 工具",
-        processes: ["ChatGPT.exe", "codex.exe", "Claude.exe", "node.exe", "C:\\Tools\\git.exe"],
-        match_full_path: false,
+        processes: [N("ChatGPT.exe"), N("codex.exe"), N("Claude.exe"), N("node.exe"), P("C:\\Tools\\git.exe")],
+        learned: [],
         node: { manual_id: "m1" },
         on_fault: "Direct",
         reset_on_change: false,
         user_enabled: true,
       },
     ],
+    exit_prompt: true,
   },
 };
+
+const withRules = (...rules: ProcessRule[]): Model => ({ ...model, process_routing: { ...model.process_routing, rules } });
 
 const base: ProcRouteStatus = {
   component: "Running",
@@ -233,6 +240,51 @@ describe("ProcessRoutingPage", () => {
     expect(within(row).queryByText("git.exe")).not.toBeInTheDocument();
   });
 
+  it("labels a program's entries with one chip", async () => {
+    const chrome: ProcessRule = {
+      ...model.process_routing.rules[0],
+      id: "r3",
+      name: "浏览器",
+      processes: [N("chrome.exe"), P("C:\\Chrome\\chrome.exe")],
+    };
+    renderPage(base, withRules(chrome));
+    const row = (await screen.findByText("浏览器")).closest("tr")!;
+    expect(within(row).getByText("chrome.exe + 1 个位置")).toBeInTheDocument();
+  });
+
+  it("tags blocking rules and lists learned locations with removal", async () => {
+    const A = "C:\\A\\curl.exe";
+    vi.mocked(commands.removeLearnedProcessPath).mockResolvedValue({ status: "ok", data: null });
+    const learning: ProcessRule = {
+      ...model.process_routing.rules[0],
+      on_fault: "Block",
+      learned: [A, "C:\\B\\curl.exe"],
+    };
+    renderPage(base, withRules(learning));
+    const row = (await screen.findAllByText("curl.exe"))[0].closest("tr")!;
+    expect(within(row).getByText("不可用时阻断")).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: /已记录 2 个位置/ }));
+    // Opening the list doesn't open the connections drawer.
+    expect(screen.queryByRole("presentation")).not.toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: `移除 ${A}` }));
+    await waitFor(() => expect(commands.removeLearnedProcessPath).toHaveBeenCalledWith("r1", A));
+  });
+
+  it("doesn't tag a disabled block rule", async () => {
+    const off: ProcessRule = { ...model.process_routing.rules[0], on_fault: "Block", user_enabled: false };
+    renderPage(base, withRules(off));
+    const row = (await screen.findAllByText("curl.exe"))[0].closest("tr")!;
+    expect(within(row).queryByText("不可用时阻断")).not.toBeInTheDocument();
+  });
+
+  it("searches entry values", async () => {
+    renderPage(base);
+    const search = await screen.findByLabelText("搜索规则名称或进程");
+    fireEvent.change(search, { target: { value: "c:\\tools" } });
+    expect(screen.getByText("AI 工具")).toBeInTheDocument();
+    expect(screen.queryByText("curl.exe")).not.toBeInTheDocument();
+  });
+
   it("searches rule names and processes", async () => {
     renderPage(base);
     const search = await screen.findByLabelText("搜索规则名称或进程");
@@ -249,10 +301,31 @@ describe("ProcessRoutingPage", () => {
     expect(await screen.findByText("进程分流已暂停，下面的规则都不生效。")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "启用进程分流规则" })).not.toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "恢复" }));
-    await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(true, "Block"));
+    await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(true));
     // Exit policy and component maintenance live in Settings now.
     expect(screen.queryByText("退出行为与故障策略")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "更多组件操作" })).not.toBeInTheDocument();
+  });
+
+  it("offers 停用并退出 next to the switch while routing is on", async () => {
+    vi.mocked(commands.disableRoutingAndQuit).mockResolvedValue({ status: "ok", data: null });
+    renderPage(base);
+    fireEvent.click(await screen.findByRole("button", { name: "停用并退出" }));
+    await waitFor(() => expect(commands.disableRoutingAndQuit).toHaveBeenCalled());
+  });
+
+  it("shows why 停用并退出 did not quit", async () => {
+    const reason = "进程分流还没有停用成功，暂不退出：服务启动失败";
+    vi.mocked(commands.disableRoutingAndQuit).mockResolvedValue({ status: "error", error: reason });
+    renderPage(base);
+    fireEvent.click(await screen.findByRole("button", { name: "停用并退出" }));
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+  });
+
+  it("hides 停用并退出 while routing is paused", async () => {
+    renderPage(base, { ...model, process_routing: { ...model.process_routing, enabled: false } });
+    await screen.findByRole("switch", { name: "启用进程分流规则" });
+    expect(screen.queryByRole("button", { name: "停用并退出" })).not.toBeInTheDocument();
   });
 
   it("hides the switch until the component is installed", async () => {

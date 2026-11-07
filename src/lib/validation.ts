@@ -25,15 +25,13 @@ export function fieldErrors(errors: ValidationError[]): FieldErrors {
     } else if ("InvalidProxy" in e) {
       out.form.push(`节点「${e.InvalidProxy.name}」：${e.InvalidProxy.reason}`);
     } else if ("DuplicateProcessRule" in e) {
-      out.form.push(`${e.DuplicateProcessRule.exe_path} 已在其他规则中，一个程序只能属于一条规则`);
+      out.form.push(`${e.DuplicateProcessRule.exe_path} 已在其他规则中，同一个进程名或路径只能属于一条规则`);
     } else if ("InvalidExePath" in e) {
       out.form.push(`「${e.InvalidExePath.exe_path}」无效：${e.InvalidExePath.reason}`);
     } else if ("EmptyProcessRule" in e) {
       out.form.push("至少添加一个进程");
-    } else if ("ProcessNameCannotBlock" in e) {
-      out.form.push("按进程名匹配时，组件故障时只能直连；需要阻断请在高级选项里打开「按完整路径匹配」");
     } else if ("TooManyProcessRules" in e) {
-      out.form.push(`启用的规则里最多一共 ${e.TooManyProcessRules.max} 个进程`);
+      out.form.push(`走代理的「节点 + 网卡」组合最多 ${e.TooManyProcessRules.max} 个`);
     } else {
       out.form.push(`${e.IntervalOutOfRange.field} 的值 ${e.IntervalOutOfRange.value} 超出允许范围`);
     }

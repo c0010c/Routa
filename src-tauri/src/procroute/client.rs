@@ -36,6 +36,7 @@ use windows_sys::Win32::System::Services::{
 };
 
 use super::decide::{self, decide, rule_of_spec};
+use super::{learn, store};
 use crate::model::ProcessRuleId;
 use crate::runtime::Runtime;
 
@@ -147,7 +148,7 @@ pub async fn connect() -> Result<Box<dyn SvcConn>, ComponentState> {
 /// [`settle_graceful`] 的结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettleOutcome {
-    /// 服务确认了本次会话的 Attach 和 Goodbye：按 on_routa_exit 回落。
+    /// 服务确认了本次会话的 Attach 和 Goodbye：按各规则的 on_fault 回落。
     Settled,
     /// 没有可通知的服务（未安装、已停止、版本不一致、属于其他用户）：没有需要回落的东西。
     NoService,
@@ -177,7 +178,7 @@ fn should_retry_connect(state: &ComponentState, attempt: u32) -> bool {
 }
 
 /// 安装器启动前调用：让服务把本次 Routa 视为“正常退出”（Attach + Goodbye + 断开），
-/// 从而按 on_routa_exit 回落，即使上次 Routa 是崩溃退出。
+/// 从而按各规则的 on_fault 回落，即使上次 Routa 是崩溃退出。
 pub async fn settle_graceful(pid: u32) -> SettleOutcome {
     let mut attempt = 0;
     let outcome = loop {
@@ -812,8 +813,61 @@ pub fn spawn(rt: Arc<Runtime>, app: AppHandle) -> JoinHandle<()> {
     tauri::async_runtime::spawn(run(rt, app, rx))
 }
 
+/// 启动时删掉文件已不存在的已知位置（有改动才保存）。
+async fn drop_missing_learned(rt: &Runtime) {
+    let exists = |p: &str| std::path::Path::new(p).is_file();
+    if !learn::drop_missing(&mut rt.model().process_routing, &exists) {
+        return;
+    }
+    if let Err(e) = rt.mutate_process_routing(|pr| { learn::drop_missing(pr, &exists); }).await {
+        eprintln!("procroute: dropping missing learned paths failed: {e:?}");
+    }
+}
+
+/// 把服务回报的位置并入模型；先在副本上比较，没有新内容时不保存（服务每轮都会回报，直到收到守护路径）。
+/// 不在任何锁内调用：`mutate_process_routing` 要拿运行时的引擎锁。
+async fn merge_learned(rt: &Runtime, reported: &[routa_procsvc_proto::LearnedPath]) {
+    if reported.is_empty() || !learn::merge_reported(&mut rt.model().process_routing, reported) {
+        return;
+    }
+    if let Err(e) = rt.mutate_process_routing(|pr| { learn::merge_reported(pr, reported); }).await {
+        eprintln!("procroute: saving learned paths failed: {e:?}");
+    }
+}
+
+/// 商店应用装好 / 更新完的包（包全名，安装目录）。订阅放在专用线程上（WinRT 对象不是 `Send`），
+/// 返回的 `stop` 被丢弃时线程醒来并注销订阅。订阅失败只记日志，通道随之关闭。
+fn watch_store() -> (mpsc::UnboundedReceiver<(String, String)>, std::sync::mpsc::Sender<()>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    let spawned = std::thread::Builder::new().name("procroute-store".into()).spawn(move || {
+        match store::watch(move |name, root| { let _ = tx.send((name, root)); }) {
+            Ok(_guard) => { let _ = stopped.recv(); }
+            Err(e) => eprintln!("procroute: watching store app updates failed: {e}"),
+        }
+    });
+    if let Err(e) = spawned {
+        eprintln!("procroute: starting store watcher failed: {e}");
+    }
+    (rx, stop)
+}
+
+/// 商店应用装好新版本后，把各学习中规则的已知位置映射到新目录（找到才保存）。
+async fn learn_package(rt: &Runtime, full_name: &str, root: &str) {
+    let exists = |p: &str| std::path::Path::new(p).is_file();
+    let found = learn::from_package(&rt.model(), full_name, root, &exists);
+    if found.is_empty() {
+        return;
+    }
+    if let Err(e) = rt.mutate_process_routing(|pr| learn::add(pr, &found)).await {
+        eprintln!("procroute: saving store app locations failed: {e:?}");
+    }
+}
+
 async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Command>) {
     let pid = std::process::id();
+    drop_missing_learned(&rt).await;
+    let (mut packages, _stop_store) = watch_store();
     let mut link = Link::default();
     let mut tick = interval(TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -853,6 +907,10 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
                     false
                 }
             },
+            Some((name, root)) = packages.recv() => {
+                learn_package(&rt, &name, &root).await;
+                false
+            }
             _ = RUNTIME_CHANGED.notified() => false,
             _ = tick.tick() => true,
         };
@@ -891,6 +949,9 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
         if was_connected && !link.connected() {
             reconnect.next = Instant::now() + RECONNECT;
         }
+        if let Some(reported) = link.svc.as_ref().map(|s| s.learned.clone()) {
+            merge_learned(&rt, &reported).await;
+        }
 
         let view = link.view(&desired, &decide::reasons(&model, &st));
         *CONFIRMED.lock().unwrap_or_else(|e|e.into_inner()) =
@@ -925,7 +986,7 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use routa_procsvc_proto::{Action, ExitPolicy, FaultPolicy, RuleSpec};
+    use routa_procsvc_proto::{Action, FaultPolicy, ProcessKind, RuleSpec};
 
     use super::*;
 
@@ -970,6 +1031,7 @@ mod tests {
                 return Ok(Response::Status(SvcStatus {
                     version: PROTO_VERSION, owner_sid: "test".into(),
                     last_interruption: None, truncated_flows: false, conflicts: vec![], rules: vec![],
+                    learned: vec![],
                 }));
             }
             if self.replies.is_empty() {
@@ -984,11 +1046,12 @@ mod tests {
             rules: vec![RuleSpec {
                 id: "r1".into(),
                 exe_path: exe.into(),
+                kind: ProcessKind::Path,
+                guard_paths: vec![],
                 action: Action::Block,
                 on_fault: FaultPolicy::Block,
                 reset_on_change: false,
             }],
-            on_routa_exit: ExitPolicy::Block,
             routa_pid: 1,
         }
     }
@@ -1331,6 +1394,7 @@ mod tests {
             version: PROTO_VERSION, owner_sid: "test".into(), last_interruption: None,
             truncated_flows: false, conflicts: vec![],
             rules: vec![routa_procsvc_proto::RuleStatus { id: "r1".into(), action: Some("Block".into()), reason: Some("应用失败，已阻断".into()) }],
+            learned: vec![],
         });
         assert_eq!(link.view(&desired, &HashMap::new()).actions[&key].action, "Block");
         assert_eq!(link.view(&state(r"C:\b.exe"), &HashMap::new()).actions[&key].action, "Pending");
@@ -1376,6 +1440,7 @@ mod tests {
             truncated_flows: true,
             conflicts: vec!["冲突".into()],
             rules: vec![routa_procsvc_proto::RuleStatus { id: "r1".into(), action: Some("Block".into()), reason: None }],
+            learned: vec![],
         });
         let why = HashMap::from([(ProcessRuleId("r1".into()), Some("内核崩溃".into()))]);
         let v = link.view(&state(r"C:\a.exe"), &why);
@@ -1409,6 +1474,7 @@ mod tests {
             version: PROTO_VERSION, owner_sid: "test".into(), last_interruption: None,
             truncated_flows: false, conflicts: vec![],
             rules: vec![status("r1|a.exe", "Proxy", None), status("r1|b.exe", "Block", Some("b 失败"))],
+            learned: vec![],
         });
         let v = link.view(&desired, &HashMap::new());
         assert_eq!(v.actions.len(), 1);

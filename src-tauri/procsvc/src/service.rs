@@ -192,20 +192,18 @@ mod tests {
         action, applied, current_user_sid, hello, log, rig, state, unique_pipe_name, Shared,
     };
     use crate::server::windows_session_of;
-    use routa_procsvc_proto::ExitPolicy;
     use std::future::Future;
     use std::pin::Pin;
     use tokio::sync::mpsc::UnboundedSender;
 
     type TestServer = Arc<Mutex<crate::server::tests::Srv>>;
 
-    /// 用假引擎启动服务，并以本进程为 Routa 下发 a(on_fault=Block)、b(on_fault=Direct)，
-    /// on_routa_exit=Block。
+    /// 用假引擎启动服务，并以本进程为 Routa 下发 a(on_fault=Block)、b(on_fault=Direct)。
     fn applied_server(dir: &Path, sid: String) -> (TestServer, Shared) {
         let (rec, world) = rig(&[]);
         let mut srv = Server::boot(rec, dir.join(persist::STATE_FILE), sid, true);
         let mut s = hello(&mut srv);
-        applied(&mut srv, &mut s, state(ExitPolicy::Block));
+        applied(&mut srv, &mut s, state());
         (Arc::new(Mutex::new(srv)), world)
     }
 
@@ -237,11 +235,11 @@ mod tests {
         settle(&mut fut).await;
         assert_eq!(log(&world), before);
 
-        // Routa 所在会话注销：按 on_routa_exit 回落，服务继续
+        // Routa 所在会话注销：按每条规则的 on_fault 回落，服务继续
         send(&tx, Event::Logoff(mine));
         settle(&mut fut).await;
         assert_eq!(action(&world, "a"), Some(PbAction::Block));
-        assert_eq!(action(&world, "b"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
         let after_logoff = log(&world);
         assert_ne!(after_logoff, before);
 
@@ -259,7 +257,8 @@ mod tests {
         send(&tx, Event::Stop);
         let before = log(&world).len();
         serve(&server, &unique_pipe_name(), rx).await.unwrap();
-        assert_eq!(action(&world, "b"), Some(PbAction::Block));
+        assert_eq!(action(&world, "a"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
         let after = log(&world);
         // 再要一次回落（例如随后的关机路径）：已无在场的 Routa，没有新操作
         lock(&server).system_ending();

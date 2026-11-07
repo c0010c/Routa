@@ -1,7 +1,7 @@
 //! 把期望规则集变成有序操作（spec 5、6.1、6.2、6.4）。
 //! 顺序是"不泄露"的保证：先收紧、后放开。`Reconciler` 把这些操作落到引擎上。
 
-use routa_procsvc_proto::{Action, FaultPolicy, ProxyTarget, RuleSpec, RuleStatus};
+use routa_procsvc_proto::{Action, FaultPolicy, ProcessKind, ProxyTarget, RuleSpec, RuleStatus};
 
 use std::collections::{HashMap, HashSet};
 
@@ -61,7 +61,9 @@ pub fn exe_key(path: &str) -> String {
 /// 8. 需要放行的 exe：`Permit`
 /// 9. 动作种类变化（含新增、换 exe）且 `reset_on_change`：`Reset`
 ///
-/// 只有 `on_fault=Block` 的规则会产生 WFP 操作（`EnsureBlock/RemoveBlock/Permit/Revoke`）。
+/// 只有 `on_fault=Block` 的规则会产生 WFP 操作（`EnsureBlock/RemoveBlock/Permit/Revoke`），
+/// 且只作用在它的 [`guard_exes`] 上：按进程名的规则只守护 `guard_paths`，从不对进程名本身
+/// 下 WFP 操作；只改 `guard_paths` 不会重下 ProxyBridge 规则，也不会 `Reset`。
 pub fn plan(old: &[RuleSpec], new: &[RuleSpec]) -> Vec<Op> {
     let key = |r: &RuleSpec| exe_key(&r.exe_path);
     let old_of = |id: &str| old.iter().find(|o| o.id == id);
@@ -77,22 +79,26 @@ pub fn plan(old: &[RuleSpec], new: &[RuleSpec]) -> Vec<Op> {
         Some(o) => kind(&o.action) != kind(&n.action) || o.exe_path != n.exe_path,
     };
 
-    // 涉及到的 exe，按首次出现的顺序；WFP 操作使用新规则里的写法。
+    // 涉及到的 exe（规则本身与守护路径），按首次出现的顺序；WFP 操作使用新规则里的写法。
     let mut exes: Vec<(String, &str)> = Vec::new();
     for r in new.iter().chain(old) {
-        let k = key(r);
-        if !exes.iter().any(|(e, _)| *e == k) {
-            exes.push((k, &r.exe_path));
+        for e in std::iter::once(r.exe_path.as_str()).chain(guard_exes(r)) {
+            let k = exe_key(e);
+            if !exes.iter().any(|(x, _)| *x == k) {
+                exes.push((k, e));
+            }
         }
     }
-    let any = |rules: &[RuleSpec], k: &str, f: fn(&RuleSpec) -> bool| {
-        rules.iter().any(|r| key(r) == k && f(r))
+    let any = |rules: &[RuleSpec], k: &str, f: fn(&RuleSpec, &str) -> bool| {
+        rules.iter().any(|r| f(r, k))
     };
-    // 第 5 步会删掉该 exe 的某条旧规则，而第 5 步之前没有别的规则覆盖它：
+    // 规则 r 的 ProxyBridge 规则管着 exe 键 k：k 就是它的 exe，或是它守护的路径。
+    let covers = |r: &RuleSpec, k: &str| key(r) == k || guarded(r, k);
+    // 第 5 步会删掉管着该 exe 的某条旧规则，而第 5 步之前没有别的规则管着它：
     // 这段时间要靠 WFP 阻断兜底，所以先撤放行、最后再放行。
     let disturbed = |k: &str| {
-        old.iter().any(|o| moved(&o.id) && key(o) == k)
-            && !new.iter().any(|n| !moved(&n.id) && key(n) == k)
+        old.iter().any(|o| moved(&o.id) && covers(o, k))
+            && !new.iter().any(|n| !moved(&n.id) && covers(n, k))
     };
 
     let mut ops = Vec::new();
@@ -279,8 +285,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
             .permits
             .iter()
             .filter(|(k, _)| {
-                !old.iter()
-                    .any(|r| permitted(r) && exe_key(&r.exe_path) == **k)
+                !old.iter().any(|r| permitted(r, k))
             })
             .map(|(k, e)| (k.clone(), e.clone()))
             .collect();
@@ -300,9 +305,11 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
         let mut ops = plan(&old, &desired);
         if retry_resets {
             for r in &desired {
-                if self.unknown_keys.contains(&exe_key(&r.exe_path))
-                    && !ops.iter().any(|op| matches!(op, Op::Revoke { exe } if exe_key(exe) == exe_key(&r.exe_path))) {
-                    ops.insert(0, Op::Revoke { exe: r.exe_path.clone() });
+                for e in rule_exes(r) {
+                    if self.unknown_keys.contains(&exe_key(e))
+                        && !ops.iter().any(|op| matches!(op, Op::Revoke { exe } if exe_key(exe) == exe_key(e))) {
+                        ops.insert(0, Op::Revoke { exe: e.to_string() });
+                    }
                 }
             }
             // 失败时 current 按 Block 保守记录，不能把它当作执行成功的证明。
@@ -333,10 +340,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
             .filter(|(k, _)| {
                 // 本次失败的 exe 保持原状（宁可多挡），下次 apply 再清理
                 !fail.keys.contains(*k)
-                    && !self
-                        .current
-                        .iter()
-                        .any(|r| guarded(r) && exe_key(&r.exe_path) == **k)
+                    && !self.current.iter().any(|r| guarded(r, k))
             })
             .map(|(k, e)| (k.clone(), e.clone()))
             .collect();
@@ -358,9 +362,12 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
         }
         self.status = desired.iter().map(|r| {
             let k = exe_key(&r.exe_path);
-            let failed = fail.ids.contains(&r.id) || fail.keys.contains(&k);
-            let unknown = self.unknown_ids.contains(&r.id) || self.unknown_keys.contains(&k)
-                || (!guarded(r) && self.installed.blocks.contains_key(&k));
+            let keys: Vec<String> = rule_exes(r).map(exe_key).collect();
+            let failed = fail.ids.contains(&r.id) || keys.iter().any(|k| fail.keys.contains(k));
+            // 不该被阻断的 exe（本身或守护路径）上还留着永久阻断，也无法确认
+            let unknown = self.unknown_ids.contains(&r.id)
+                || keys.iter().any(|k| self.unknown_keys.contains(k))
+                || keys.iter().any(|k| !guarded(r, k) && self.installed.blocks.contains_key(k));
             let (action, reason) = if unknown {
                 (None, Some("应用失败，无法确认防护状态".into()))
             } else if failed {
@@ -425,7 +432,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
                 inst.permits.remove(&exe_key(exe));
                 self.unknown_keys.remove(&exe_key(exe));
             }),
-            Op::Reset { exe } => self.killer.reset_ipv4_tcp(exe).map(|_| {
+            Op::Reset { exe } => self.killer.reset_ipv4_tcp(exe, &path_rule_exes(desired)).map(|_| {
                 self.pending_resets.remove(&exe_key(exe));
             }),
         };
@@ -451,10 +458,15 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
         id: Option<String>,
         key: Option<String>,
     ) {
+        // 规则 id 与它的 exe、守护路径相连
         let edges: Vec<(&str, String)> = old
             .iter()
             .chain(desired)
-            .map(|r| (r.id.as_str(), exe_key(&r.exe_path)))
+            .flat_map(|r| {
+                std::iter::once(r.exe_path.as_str())
+                    .chain(guard_exes(r))
+                    .map(|e| (r.id.as_str(), exe_key(e)))
+            })
             .chain(
                 self.installed
                     .rules
@@ -512,8 +524,9 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
                 desired
                     .iter()
                     .chain(old)
-                    .find(|r| exe_key(&r.exe_path) == k)
-                    .map(|r| r.exe_path.clone())
+                    .flat_map(rule_exes)
+                    .find(|e| exe_key(e) == k)
+                    .map(str::to_string)
             });
             let Some(exe) = exe else { continue };
             match self.guard.revoke(&exe) {
@@ -542,15 +555,25 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
                 continue;
             }
             if let Some((exe, _)) = self.installed.rules.get(&r.id) {
+                let blocked = |e: &str| self.installed.blocks.contains_key(&exe_key(e));
+                let (on_fault, guard_paths) = match r.kind {
+                    ProcessKind::Path => {
+                        let f = if blocked(exe) { FaultPolicy::Block } else { FaultPolicy::Direct };
+                        (f, Vec::new())
+                    }
+                    // 守护路径只记已装好阻断的那些
+                    ProcessKind::Name => (
+                        r.on_fault.clone(),
+                        r.guard_paths.iter().filter(|g| blocked(g)).cloned().collect(),
+                    ),
+                };
                 out.push(RuleSpec {
                     id: r.id.clone(),
                     exe_path: exe.clone(),
+                    kind: r.kind,
+                    guard_paths,
                     action: Action::Block,
-                    on_fault: if self.installed.blocks.contains_key(&exe_key(exe)) {
-                        FaultPolicy::Block
-                    } else {
-                        FaultPolicy::Direct
-                    },
+                    on_fault,
                     reset_on_change: r.reset_on_change,
                 });
             }
@@ -587,14 +610,37 @@ fn kind(a: &Action) -> PbAction {
     }
 }
 
-/// 该规则需要 WFP 永久阻断。
-fn guarded(r: &RuleSpec) -> bool {
-    r.on_fault == FaultPolicy::Block
+/// 该规则要由 WFP 守护（永久阻断 + 会话放行）的完整路径。
+/// 只有 `on_fault=Block` 的规则有：按路径的规则守护其 `exe_path`，按进程名的规则守护其
+/// `guard_paths`（WFP 只能按完整路径识别程序）；其余为空。
+pub fn guard_exes(r: &RuleSpec) -> Vec<&str> {
+    if r.on_fault != FaultPolicy::Block {
+        return Vec::new();
+    }
+    match r.kind {
+        ProcessKind::Path => vec![r.exe_path.as_str()],
+        ProcessKind::Name => r.guard_paths.iter().map(String::as_str).collect(),
+    }
 }
 
-/// 该规则需要 WFP 动态放行。
-fn permitted(r: &RuleSpec) -> bool {
-    guarded(r) && r.action != Action::Block
+/// 该规则需要 exe 键 `k` 上的 WFP 永久阻断。
+fn guarded(r: &RuleSpec, k: &str) -> bool {
+    guard_exes(r).into_iter().any(|e| exe_key(e) == k)
+}
+
+/// 该规则需要 exe 键 `k` 上的 WFP 动态放行。
+fn permitted(r: &RuleSpec, k: &str) -> bool {
+    r.action != Action::Block && guarded(r, k)
+}
+
+/// 规则涉及的所有 exe（进程本身与全部守护路径，不论 `on_fault`），按出现顺序。
+/// 当前按路径的规则的 exe：断开按进程名的规则的旧连接时跳过这些程序，它们归那些规则管。
+fn path_rule_exes(rules: &[RuleSpec]) -> Vec<String> {
+    rules.iter().filter(|r| r.kind == ProcessKind::Path).map(|r| r.exe_path.clone()).collect()
+}
+
+fn rule_exes(r: &RuleSpec) -> impl Iterator<Item = &str> {
+    std::iter::once(r.exe_path.as_str()).chain(r.guard_paths.iter().map(String::as_str))
 }
 
 #[cfg(test)]
@@ -621,9 +667,27 @@ mod tests {
         RuleSpec {
             id: id.into(),
             exe_path: exe.into(),
+            kind: ProcessKind::Path,
+            guard_paths: vec![],
             action,
             on_fault,
             reset_on_change: reset,
+        }
+    }
+
+    /// 按进程名的规则，`guards` 为守护路径。
+    fn name_spec(
+        id: &str,
+        name: &str,
+        action: Action,
+        on_fault: FaultPolicy,
+        reset: bool,
+        guards: &[&str],
+    ) -> RuleSpec {
+        RuleSpec {
+            kind: ProcessKind::Name,
+            guard_paths: guards.iter().map(|g| g.to_string()).collect(),
+            ..spec(id, name, action, on_fault, reset)
         }
     }
 
@@ -1051,6 +1115,118 @@ mod tests {
         assert_eq!(ops, vec![Op::EnsureBlock { exe: EXE.into() }]);
     }
 
+    const GUARD: &str = r"C:\x\a.exe";
+    const GUARD2: &str = r"D:\y\a.exe";
+
+    fn wfp_exe(op: &Op) -> Option<&str> {
+        match op {
+            Op::EnsureBlock { exe } | Op::RemoveBlock { exe } | Op::Permit { exe } | Op::Revoke { exe } => {
+                Some(exe)
+            }
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn name_block_guards_learned_paths_not_name() {
+        let ops = plan(
+            &[],
+            &[name_spec("r", "a.exe", Action::Proxy(target(1)), FaultPolicy::Block, true, &[GUARD])],
+        );
+        assert!(ops.contains(&Op::EnsureBlock { exe: GUARD.into() }), "{ops:?}");
+        assert!(ops.contains(&Op::Permit { exe: GUARD.into() }), "{ops:?}");
+        assert!(
+            ops.contains(&Op::SetRule {
+                rule: "r".into(),
+                exe: "a.exe".into(),
+                action: PbAction::Proxy
+            }),
+            "{ops:?}"
+        );
+        assert!(!ops.iter().any(|o| wfp_exe(o) == Some("a.exe")), "{ops:?}");
+        // 先收紧后放开
+        let block = pos(&ops, |o| matches!(o, Op::EnsureBlock { .. })).unwrap();
+        let permit = pos(&ops, |o| matches!(o, Op::Permit { .. })).unwrap();
+        assert!(block < permit, "{ops:?}");
+    }
+
+    #[test]
+    fn adding_guard_path_does_not_touch_pb_rule_or_reset() {
+        let a = Action::Proxy(target(1));
+        let ops = plan(
+            &[name_spec("r", "a.exe", a.clone(), FaultPolicy::Block, true, &[GUARD])],
+            &[name_spec("r", "a.exe", a, FaultPolicy::Block, true, &[GUARD, GUARD2])],
+        );
+        assert_eq!(
+            ops,
+            vec![
+                Op::EnsureBlock { exe: GUARD2.into() },
+                Op::Permit { exe: GUARD2.into() }
+            ]
+        );
+    }
+
+    #[test]
+    fn removing_guard_path_removes_block() {
+        let a = Action::Proxy(target(1));
+        let ops = plan(
+            &[name_spec("r", "a.exe", a.clone(), FaultPolicy::Block, true, &[GUARD, GUARD2])],
+            &[name_spec("r", "a.exe", a, FaultPolicy::Block, true, &[GUARD])],
+        );
+        assert_eq!(
+            ops,
+            vec![
+                Op::Revoke { exe: GUARD2.into() },
+                Op::RemoveBlock { exe: GUARD2.into() }
+            ]
+        );
+    }
+
+    #[test]
+    fn name_direct_has_no_wfp() {
+        for a in [Action::Proxy(target(1)), Action::Direct, Action::Block] {
+            let n = name_spec("r", "a.exe", a, FaultPolicy::Direct, true, &[GUARD]);
+            for (old, new) in [(vec![], vec![n.clone()]), (vec![n.clone()], vec![])] {
+                let ops = plan(&old, &new);
+                assert!(!ops.iter().any(is_wfp), "{ops:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn guard_exes_by_kind_and_fault() {
+        let p = spec("p", EXE, Action::Direct, FaultPolicy::Block, false);
+        assert_eq!(guard_exes(&p), vec![EXE]);
+        let n = name_spec("n", "a.exe", Action::Direct, FaultPolicy::Block, false, &[GUARD, GUARD2]);
+        assert_eq!(guard_exes(&n), vec![GUARD, GUARD2]);
+        for r in [
+            spec("p", EXE, Action::Direct, FaultPolicy::Direct, false),
+            name_spec("n", "a.exe", Action::Direct, FaultPolicy::Direct, false, &[GUARD]),
+        ] {
+            assert!(guard_exes(&r).is_empty());
+        }
+    }
+
+    #[test]
+    fn name_rule_transitions_keep_invariants() {
+        let p = Action::Proxy(target(1));
+        let rules = [
+            name_spec("r", "a.exe", p.clone(), FaultPolicy::Block, true, &[GUARD]),
+            name_spec("r", "a.exe", Action::Block, FaultPolicy::Block, true, &[GUARD, GUARD2]),
+            name_spec("r", "a.exe", Action::Direct, FaultPolicy::Direct, true, &[GUARD]),
+            name_spec("r", "b.exe", p.clone(), FaultPolicy::Block, true, &[r"D:\y\b.exe"]),
+            spec("r", GUARD, p, FaultPolicy::Block, true),
+        ];
+        for o in &rules {
+            let o = std::slice::from_ref(o);
+            check(o, &[]);
+            check(&[], o);
+            for n in &rules {
+                check(o, std::slice::from_ref(n));
+            }
+        }
+    }
+
     // ---------- 模拟执行：逐步检查安全不变量与终态 ----------
 
     #[derive(Debug, Default)]
@@ -1102,16 +1278,20 @@ mod tests {
             }
         }
 
+        /// 有 ProxyBridge 规则命中 exe 键 `k`（按进程名的规则按文件名命中）。
         fn has_pb_rule_for(&self, k: &str) -> bool {
-            self.rules.values().any(|(e, _)| exe_key(e) == k)
+            let file = k.rsplit('\\').next().unwrap_or(k);
+            self.rules.values().any(|(e, _)| {
+                exe_key(e) == k || (routa_procsvc_proto::is_process_name(e) && exe_key(e) == file)
+            })
         }
     }
 
     fn guarded_keys(rules: &[RuleSpec]) -> HashSet<String> {
         rules
             .iter()
-            .filter(|r| guarded(r))
-            .map(|r| exe_key(&r.exe_path))
+            .flat_map(guard_exes)
+            .map(exe_key)
             .collect()
     }
 
@@ -1140,8 +1320,7 @@ mod tests {
             // 撤放行时：同 exe、同 id 保留下来的 on_fault=Block 且目标为 BLOCK 的规则必须已是 Block
             if let Op::Revoke { exe } = op {
                 for n in new.iter().filter(|n| {
-                    exe_key(&n.exe_path) == exe_key(exe)
-                        && guarded(n)
+                    guarded(n, &exe_key(exe))
                         && n.action == Action::Block
                         && old.iter().all(|o| o.id != n.id || same_exe(o, n))
                 }) {
@@ -1288,6 +1467,8 @@ mod tests {
             permits: HashSet<String>,
             /// `suspend` 被调用的次数（不进日志，免得影响按日志断言的测试）。
             suspends: usize,
+            /// 每次断连收到的 (exe, 按路径的规则的 exe)。
+            resets: Vec<(String, Vec<String>)>,
         }
 
         impl World {
@@ -1400,8 +1581,9 @@ mod tests {
         }
 
         impl ConnKiller for FakeK {
-            fn reset_ipv4_tcp(&mut self, exe: &str) -> Result<u32, String> {
+            fn reset_ipv4_tcp(&mut self, exe: &str, path_rule_exes: &[String]) -> Result<u32, String> {
                 let mut w = self.0.borrow_mut();
+                w.resets.push((exe.to_string(), path_rule_exes.to_vec()));
                 w.call("reset", line(&Op::Reset { exe: exe.into() }))?;
                 Ok(0)
             }
@@ -1470,6 +1652,18 @@ mod tests {
             assert_eq!(take_log(&w), lines(&plan(&v1, &v2)));
             assert_eq!(rec.current(), &v2[..]);
             assert_world_is(&w, &v2, "v2");
+        }
+
+        #[test]
+        fn name_reset_is_told_which_exes_path_rules_own() {
+            let (mut rec, w) = rig();
+            let canary = r"C:\Canary\chrome.exe";
+            let v = vec![
+                name_spec("a", "chrome.exe", Action::Proxy(target(1)), FaultPolicy::Direct, true, &[]),
+                spec("b", canary, Action::Direct, FaultPolicy::Direct, false),
+            ];
+            assert!(rec.apply(v).is_empty());
+            assert_eq!(w.borrow().resets, vec![("chrome.exe".to_string(), vec![canary.to_string()])]);
         }
 
         #[test]
@@ -1764,7 +1958,12 @@ mod tests {
                     for k in guarded_keys(new) {
                         let mine: Vec<&RuleSpec> = current
                             .iter()
-                            .filter(|c| exe_key(&c.exe_path) == k)
+                            .filter(|c| {
+                                // 按进程名的 ProxyBridge 规则按文件名管着任何位置的该程序
+                                let file = k.rsplit('\\').next().unwrap_or(&k);
+                                rule_exes(c).any(|e| exe_key(e) == k)
+                                    || (c.kind == ProcessKind::Name && exe_key(&c.exe_path) == file)
+                            })
                             .collect();
                         let settled = mine.iter().all(|c| new.contains(c));
                         let pb_blocks = mine.iter().all(|c| c.action == Action::Block);
@@ -1784,6 +1983,29 @@ mod tests {
                 take_log(&w);
                 assert!(rec.apply(new.to_vec()).is_empty(), "{ctx}");
                 assert!(take_log(&w).is_empty(), "{ctx}");
+            }
+        }
+
+        #[test]
+        fn name_rule_single_failure_fails_closed_and_recovers() {
+            let p = Action::Proxy(target(1));
+            let (g1, g2) = (r"C:\x\a.exe", r"D:\y\a.exe");
+            let sets: Vec<Vec<RuleSpec>> = vec![
+                vec![],
+                vec![name_spec("a", "a.exe", p.clone(), FaultPolicy::Block, true, &[g1])],
+                vec![name_spec("a", "a.exe", p.clone(), FaultPolicy::Block, true, &[g1, g2])],
+                vec![name_spec("a", "a.exe", Action::Block, FaultPolicy::Block, true, &[g2])],
+                vec![name_spec("a", "a.exe", Action::Direct, FaultPolicy::Direct, true, &[g1])],
+                vec![spec("a", g1, p.clone(), FaultPolicy::Block, true)],
+                vec![
+                    name_spec("a", "a.exe", Action::Direct, FaultPolicy::Block, true, &[g1]),
+                    spec("b", OTHER_EXE, p.clone(), FaultPolicy::Block, true),
+                ],
+            ];
+            for old in &sets {
+                for new in &sets {
+                    check_single_failures(old, new);
+                }
             }
         }
 

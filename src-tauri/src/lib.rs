@@ -158,8 +158,12 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::open_project_link,
             commands::retry_tailscale_exit_nodes,
             commands::save_process_rule,
+            commands::remove_learned_process_path,
             commands::delete_process_rule,
             commands::save_process_routing_settings,
+            commands::set_exit_prompt,
+            commands::quit_app,
+            commands::disable_routing_and_quit,
             commands::procroute_status,
             commands::procroute_retry,
             commands::procroute_install,
@@ -337,7 +341,7 @@ pub fn run() {
             let state = state.clone();
             tauri::async_runtime::spawn(async move {
                 // Before the core stops: tells the service this is a normal
-                // exit (on_routa_exit applies). Bounded at 1s inside.
+                // exit (rules fall back per on_fault). Bounded at 1s inside.
                 let bye = procroute::client::goodbye().await;
                 if let Some(rt) = app.try_state::<Arc<Runtime>>() {
                     let rt = Arc::clone(&*rt);

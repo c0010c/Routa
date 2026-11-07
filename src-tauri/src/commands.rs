@@ -220,10 +220,50 @@ pub mod ops {
     }
 
     /// Upsert by id. Reloads mihomo only when the hidden listeners change.
+    /// The stored rule's `learned` is kept (the incoming one is ignored; a new
+    /// rule starts empty). Process names that newly enter learning (Name +
+    /// Block) get the paths of their currently running exes recorded first.
     pub async fn save_process_rule(rt: &Runtime, rule: ProcessRule) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
+        let model = rt.model();
+        let before = model.process_routing.rules.iter().find(|r| r.id == rule.id);
+        // 只在可能预记录时枚举进程（较慢，且在引擎锁外做）。
+        let running = if model.process_routing.enabled && !procroute::learn::newly_learning(before, &rule).is_empty() {
+            tauri::async_runtime::spawn_blocking(procroute::processes::running_processes).await.unwrap_or_default()
+        } else {
+            vec![]
+        };
+        save_process_rule_seeded(rt, rule, &running).await
+    }
+
+    /// [`save_process_rule`] with the running processes given (testable).
+    pub(crate) async fn save_process_rule_seeded(
+        rt: &Runtime,
+        mut rule: ProcessRule,
+        running: &[RunningProcess],
+    ) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
         rt.mutate_process_routing(|p| {
             let id = rule.id.clone();
+            let snapshot = Model { process_routing: p.clone(), ..Model::default() };
+            let before = p.rules.iter().find(|x| x.id == id);
+            // `learned` belongs to the service: a dialog may hold a stale copy.
+            rule.learned = before.map(|b| b.learned.clone()).unwrap_or_default();
+            procroute::learn::seed(&snapshot, before, &mut rule, running);
             upsert(&mut p.rules, rule, |x| x.id == id)
+        })
+        .await
+    }
+
+    /// Forgets one known location of rule `id` (case-insensitive).
+    pub async fn remove_learned_process_path(
+        rt: &Runtime,
+        id: ProcessRuleId,
+        path: String,
+    ) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
+        let key = procroute::learn::exe_key(&path);
+        rt.mutate_process_routing(|p| {
+            if let Some(r) = p.rules.iter_mut().find(|r| r.id == id) {
+                r.learned.retain(|l| procroute::learn::exe_key(l) != key);
+            }
         })
         .await
     }
@@ -235,11 +275,9 @@ pub mod ops {
     pub async fn save_process_routing_settings(
         rt: &Runtime,
         enabled: bool,
-        on_routa_exit: ExitPolicy,
     ) -> Result<(), Vec<ValidationError>> {
         rt.mutate_process_routing(|p| {
             p.enabled = enabled;
-            p.on_routa_exit = on_routa_exit;
         })
         .await
         .map(|_| ())
@@ -560,6 +598,16 @@ pub async fn save_process_rule(rt: Rt<'_>, rule: ProcessRule) -> Result<Option<A
 
 #[tauri::command]
 #[specta::specta]
+pub async fn remove_learned_process_path(
+    rt: Rt<'_>,
+    id: ProcessRuleId,
+    path: String,
+) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
+    ops::remove_learned_process_path(&rt, id, path).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn delete_process_rule(rt: Rt<'_>, id: ProcessRuleId) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
     ops::delete_process_rule(&rt, id).await
 }
@@ -569,9 +617,30 @@ pub async fn delete_process_rule(rt: Rt<'_>, id: ProcessRuleId) -> Result<Option
 pub async fn save_process_routing_settings(
     rt: Rt<'_>,
     enabled: bool,
-    on_routa_exit: ExitPolicy,
 ) -> Result<(), Vec<ValidationError>> {
-    ops::save_process_routing_settings(&rt, enabled, on_routa_exit).await
+    ops::save_process_routing_settings(&rt, enabled).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_exit_prompt(rt: Rt<'_>, enabled: bool) -> Result<(), Vec<ValidationError>> {
+    rt.mutate_process_routing(|p| p.exit_prompt = enabled).await.map(|_| ())
+}
+
+/// Exits right away (the shutdown runs in RunEvent::ExitRequested).
+#[tauri::command]
+#[specta::specta]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+/// Turns process routing off and exits once the service confirmed it; otherwise
+/// returns why Routa did not exit. `dont_ask_again` turns the exit prompt off
+/// only when Routa really exits.
+#[tauri::command]
+#[specta::specta]
+pub async fn disable_routing_and_quit(app: AppHandle, rt: Rt<'_>, dont_ask_again: bool) -> Result<(), String> {
+    crate::tray::disable_routing_and_quit(&app, &rt, dont_ask_again).await
 }
 
 #[tauri::command]
@@ -744,22 +813,68 @@ mod tests {
         let rt = runtime(&td);
         let l = Listener::new_default("L1".into(), 7891);
         ops::save_listener(&rt, l.clone()).await.unwrap();
-        let mut rule = ProcessRule { processes: vec!["a.exe".into()], ..ProcessRule::default() };
+        let mut rule = ProcessRule { processes: vec![ProcessEntry::name("a.exe")], ..ProcessRule::default() };
         ops::save_process_rule(&rt, rule.clone()).await.unwrap();
         rule.reset_on_change = true;
         ops::save_process_rule(&rt, rule.clone()).await.unwrap();
         assert_eq!(rt.model().process_routing.rules, vec![rule.clone()]);
 
-        let bad = ProcessRule { processes: vec![r"C:\app\a.exe".into()], ..ProcessRule::default() };
+        let bad = ProcessRule { processes: vec![ProcessEntry::name(r"C:\app\a.exe")], ..ProcessRule::default() };
         assert!(ops::save_process_rule(&rt, bad).await.is_err());
         assert_eq!(rt.model().process_routing.rules.len(), 1, "nothing changed");
 
-        ops::save_process_routing_settings(&rt, true, ExitPolicy::Direct).await.unwrap();
+        ops::save_process_routing_settings(&rt, true).await.unwrap();
         let pr = rt.model().process_routing;
-        assert_eq!((pr.enabled, pr.on_routa_exit), (true, ExitPolicy::Direct));
+        assert!(pr.enabled);
 
         ops::delete_process_rule(&rt, rule.id).await.unwrap();
         assert!(rt.model().process_routing.rules.is_empty());
+    }
+
+    #[tokio::test]
+    async fn save_seeds_running_paths_and_remove_learned_forgets_one() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = runtime(&td);
+        ops::save_process_routing_settings(&rt, true).await.unwrap();
+        let rule = ProcessRule {
+            processes: vec![ProcessEntry::name("a.exe")],
+            on_fault: FaultPolicy::Block,
+            ..ProcessRule::default()
+        };
+        let running = [
+            crate::procroute::processes::RunningProcess { pid: 1, name: "a.exe".into(), exe_path: r"C:\A\a.exe".into() },
+            crate::procroute::processes::RunningProcess { pid: 2, name: "A.EXE".into(), exe_path: r"C:\B\A.EXE".into() },
+        ];
+        ops::save_process_rule_seeded(&rt, rule.clone(), &running).await.unwrap();
+        let learned = |rt: &Runtime| rt.model().process_routing.rules[0].learned.clone();
+        assert_eq!(learned(&rt), vec![r"C:\A\a.exe".to_string(), r"C:\B\A.EXE".to_string()]);
+
+        ops::remove_learned_process_path(&rt, rule.id.clone(), r"c:/b/a.exe".into()).await.unwrap();
+        assert_eq!(learned(&rt), vec![r"C:\A\a.exe".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn save_keeps_stored_learned_and_ignores_incoming() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = runtime(&td);
+        ops::save_process_routing_settings(&rt, true).await.unwrap();
+        let rule = ProcessRule {
+            processes: vec![ProcessEntry::name("a.exe")],
+            on_fault: FaultPolicy::Block,
+            // A new rule starts with nothing recorded, whatever it carries.
+            learned: vec![r"C:\X\a.exe".into()],
+            ..ProcessRule::default()
+        };
+        ops::save_process_rule_seeded(&rt, rule.clone(), &[]).await.unwrap();
+        let learned = |rt: &Runtime| rt.model().process_routing.rules[0].learned.clone();
+        assert!(learned(&rt).is_empty());
+
+        // The service learned a location while a dialog was open on a stale copy.
+        rt.mutate_process_routing(|p| p.rules[0].learned = vec![r"C:\A\a.exe".into()]).await.unwrap();
+        let stale = ProcessRule { reset_on_change: true, learned: vec![r"C:\Old\a.exe".into()], ..rule };
+        ops::save_process_rule_seeded(&rt, stale, &[]).await.unwrap();
+        assert_eq!(learned(&rt), vec![r"C:\A\a.exe".to_string()]);
+        assert!(rt.model().process_routing.rules[0].reset_on_change);
     }
 
     #[tokio::test]

@@ -71,6 +71,10 @@ impl<B: Bridge> Interceptor for Lazy<B> {
         }
     }
 
+    fn take_new_processes(&mut self) -> Vec<u32> {
+        self.inner.take_new_processes()
+    }
+
     fn suspend(&mut self) -> Result<(), String> {
         // 先清干净再停：删不掉的规则若留在 DLL 里，下次启动会带着它生效。清不掉就继续运行。
         self.inner.clear()?;

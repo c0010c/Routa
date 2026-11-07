@@ -1,7 +1,7 @@
 //! Running a cached update. The installer is started only once the
 //! process-routing service has confirmed a Goodbye from this Routa (or there
-//! is no service to tell), so rules stay on `on_routa_exit` (Graceful /
-//! NeverConnected) for the whole upgrade, never `on_fault`.
+//! is no service to tell), so the service treats this as a normal exit (Graceful /
+//! NeverConnected) for the whole upgrade, not a crash.
 
 use std::fs;
 use std::io::{self, Write};

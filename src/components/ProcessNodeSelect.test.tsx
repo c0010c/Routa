@@ -17,14 +17,14 @@ const model = {
     { id: "m2", name: "大阪", kind: { Proxy: { raw: "ss://y" } } },
   ],
   node_groups: [],
-  process_routing: { enabled: true, on_routa_exit: "Block", rules: [] },
+  process_routing: { enabled: true, rules: [] },
 } as unknown as Model;
 
 const rule: ProcessRule = {
   id: "r1",
   name: "",
-  processes: ["chrome.exe"],
-  match_full_path: false,
+  processes: [{ kind: "Name", value: "chrome.exe" }],
+  learned: [],
   node: { manual_id: "m1" },
   on_fault: "Direct",
   reset_on_change: false,

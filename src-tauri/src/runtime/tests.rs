@@ -1603,7 +1603,7 @@ fn connection_from_hidden_listener_shows_process_routing_label() {
 }
 
 fn process_rule(exe: &str) -> ProcessRule {
-    ProcessRule { processes: vec![exe.into()], match_full_path: true, ..ProcessRule::default() }
+    ProcessRule { processes: vec![ProcessEntry::path(exe)], ..ProcessRule::default() }
 }
 
 #[tokio::test(start_paused = true)]
@@ -1628,7 +1628,7 @@ async fn process_routing_change_does_not_reload_core() {
     assert_eq!(h.launcher.count(), 1);
     let saved = Store::open(h.data.clone()).unwrap().load_model().unwrap();
     assert!(saved.process_routing.enabled);
-    assert_eq!(saved.process_routing.rules[0].processes, vec![r"C:\Apps\game.exe".to_string()]);
+    assert_eq!(saved.process_routing.rules[0].processes, vec![ProcessEntry::path(r"C:\Apps\game.exe")]);
     assert_eq!(h.rt.model(), saved);
     assert!(drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::Status(_))));
     // The engine's copy changed too: a later mutation keeps the rule.
@@ -1700,7 +1700,7 @@ fn model_with_node() -> Model {
 }
 
 fn node_rule(exe: &str) -> ProcessRule {
-    ProcessRule { processes: vec![exe.into()], match_full_path: true, node: Some(m1_ref()), ..ProcessRule::default() }
+    ProcessRule { processes: vec![ProcessEntry::path(exe)], node: Some(m1_ref()), ..ProcessRule::default() }
 }
 
 fn hidden(m: &Model) -> Vec<Listener> {
@@ -1818,9 +1818,13 @@ async fn change_process_node_switches_hidden_listener() {
     crate::commands::ops::save_process_rule(&h.rt, rule.clone()).await.unwrap();
     let m2 = NodeRef::Manual { manual_id: ManualNodeId("m2".into()) };
 
+    // The new listener gets a different port (the old one is not reused); mihomo
+    // releases the old hidden port when that listener goes away.
+    h.ports.0.lock().unwrap().remove(&37800);
     ui.change_process_node(&h.rt, rule.id.clone(), m2.clone()).await.unwrap();
     let m = h.rt.model();
     assert_eq!(m.process_routing.rules[0].node, Some(m2));
+    assert_eq!(hidden(&m)[0].port, 37801);
     let hid = hidden(&m);
     assert_eq!(hid.len(), 1);
     let exit = m.exits.iter().find(|e| Some(&e.id) == hid[0].exit.as_ref()).unwrap();
@@ -1881,7 +1885,7 @@ async fn simple_node_switch_moves_managed_rules() {
 
 #[tokio::test(start_paused = true)]
 async fn desktop_init_fills_node_for_managed_rules() {
-    let rule = ProcessRule { processes: vec![r"C:\a\a.exe".into()], match_full_path: true, ..ProcessRule::default() };
+    let rule = ProcessRule { processes: vec![ProcessEntry::path(r"C:\a\a.exe")], ..ProcessRule::default() };
     let mut m = simple_model_with_two_nodes();
     m.exits.push(Exit {
         id: ExitId("simple-exit".into()),
@@ -1912,7 +1916,7 @@ async fn desktop_init_fills_node_for_managed_rules() {
 #[tokio::test(start_paused = true)]
 async fn desktop_init_survives_failed_node_fill() {
     // A relative path matched by full path fails validation, so the fill cannot be saved.
-    let rule = ProcessRule { processes: vec!["a.exe".into()], match_full_path: true, ..ProcessRule::default() };
+    let rule = ProcessRule { processes: vec![ProcessEntry::path("a.exe")], ..ProcessRule::default() };
     let mut m = simple_model_with_two_nodes();
     m.exits.push(Exit {
         id: ExitId("simple-exit".into()),
@@ -2012,7 +2016,7 @@ async fn confirmed_rule_save_without_component_saves_and_returns_outcome() {
     assert_eq!(ui.save_process_rule_confirmed(&h.rt, rule.clone()).await.unwrap(), None);
     assert_eq!(h.rt.model().process_routing.rules[0].name, "游戏");
 
-    let bad = ProcessRule { processes: vec![r"C:\app\a.exe".into()], ..ProcessRule::default() };
+    let bad = ProcessRule { processes: vec![ProcessEntry::name(r"C:\app\a.exe")], ..ProcessRule::default() };
     let err = ui.save_process_rule_confirmed(&h.rt, bad).await.unwrap_err();
     assert!(matches!(err, crate::desktop::RuleSaveError::Validation(ref e) if !e.is_empty()), "{err:?}");
     assert_eq!(h.rt.model().process_routing.rules.len(), 1);

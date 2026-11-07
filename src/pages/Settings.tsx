@@ -5,9 +5,6 @@ import {
   Alert,
   Box,
   Button,
-  FormControlLabel,
-  Radio,
-  RadioGroup,
   Stack,
   Switch,
   Tab,
@@ -26,17 +23,14 @@ import {
   useProcRouteCleanup,
   useProcRouteStatus,
   useProcRouteUninstall,
-  useSaveProcessRoutingSettings,
+  useSetExitPrompt,
 } from "../api/procroute";
 import { settingsSaveMessage, useSettingsSave } from "../api/settings";
 import type {
-  ExitPolicy,
   Listener,
-  ProcessRouting,
   Settings as SettingsModel,
 } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
-import { EXIT_POLICY_HINT, EXIT_POLICY_LABEL } from "./ProcessRouting";
 import { SaveFeedback, useSaveFeedback } from "../components/SaveFeedback";
 import { IntervalInput } from "../components/IntervalInput";
 import { fieldErrors, type FieldErrors } from "../lib/validation";
@@ -72,11 +66,9 @@ function TabPanel({ value, current, children }: { value: TabValue; current: TabV
 function SettingsForm({
   initial,
   listeners,
-  routing,
 }: {
   initial: SettingsModel;
   listeners: Listener[];
-  routing: ProcessRouting;
 }) {
   const save = useSettingsSave();
   const openLogDir = useOpenLogDir();
@@ -272,7 +264,7 @@ function SettingsForm({
         </Section>
       </TabPanel>
       <TabPanel value="procroute" current={tab}>
-        <ProcessRoutingSection routing={routing} />
+        <ProcessRoutingSection />
       </TabPanel>
       <TabPanel value="about" current={tab}>
         <UpdatePanel />
@@ -292,28 +284,31 @@ function SettingsForm({
 }
 
 /** Process routing settings that are set once and rarely touched; the page itself keeps the switch and status. */
-function ProcessRoutingSection({ routing }: { routing: ProcessRouting }) {
+function ProcessRoutingSection() {
+  const model = useModel();
+  const setExitPrompt = useSetExitPrompt();
   const status = useProcRouteStatus();
-  const settings = useSaveProcessRoutingSettings();
   const uninstall = useProcRouteUninstall();
   const cleanup = useProcRouteCleanup();
   const [confirm, setConfirm] = useState<"uninstall" | "cleanup" | null>(null);
   const component = status.data?.component;
   const busy = uninstall.isPending || cleanup.isPending;
+  const exitPrompt = model.data?.process_routing.exit_prompt ?? true;
   return (
     <>
-      <Section title="行为">
+      <Section title="退出">
         {[
-          <Row key="exit" label={EXIT_POLICY_LABEL} description={EXIT_POLICY_HINT}>
-            <RadioGroup
-              row
-              aria-label={EXIT_POLICY_LABEL}
-              value={routing.on_routa_exit}
-              onChange={(e) => settings.mutate(routing.enabled, e.target.value as ExitPolicy)}
-            >
-              <FormControlLabel value="Direct" control={<Radio size="small" />} label="直连" disabled={settings.isPending} />
-              <FormControlLabel value="Block" control={<Radio size="small" />} label="阻断" disabled={settings.isPending} />
-            </RadioGroup>
+          <Row
+            key="exit-prompt"
+            label="退出时提示"
+            description="退出 Routa 会让选了阻断的程序断网时，先询问是否停用进程分流"
+          >
+            <Switch
+              checked={exitPrompt}
+              disabled={!model.data || setExitPrompt.isPending}
+              onChange={(_, value) => setExitPrompt.mutate(value)}
+              slotProps={{ input: { "aria-label": "退出时提示" } }}
+            />
           </Row>,
         ]}
       </Section>
@@ -379,7 +374,6 @@ export function Settings() {
     <SettingsForm
       initial={model.data.settings}
       listeners={visibleListeners(model.data)}
-      routing={model.data.process_routing}
     />
   );
 }

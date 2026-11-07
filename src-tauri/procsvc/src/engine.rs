@@ -26,6 +26,10 @@ pub trait Interceptor {
     fn suspend(&mut self) -> Result<(), String> {
         Ok(())
     }
+    /// 取出并清空自上次调用以来新出现连接的进程 PID（供服务端学习程序位置）。默认没有。
+    fn take_new_processes(&mut self) -> Vec<u32> {
+        Vec::new()
+    }
 }
 
 /// WFP 防护：低权重永久阻断 + 动态会话里的高权重放行。
@@ -46,6 +50,8 @@ pub trait Guard {
 
 /// 断开某 exe 的 IPv4 TCP 连接，返回断开的条数。
 /// 实现必须按 [`crate::reconcile::exe_key`] 不区分大小写地匹配 exe 路径。
+/// `exe` 是进程名时，完整路径在 `path_rule_exes`（当前按路径的规则的 exe）里的进程不断开，
+/// 见 [`crate::paths::reset_hits`]。
 pub trait ConnKiller {
-    fn reset_ipv4_tcp(&mut self, exe: &str) -> Result<u32, String>;
+    fn reset_ipv4_tcp(&mut self, exe: &str, path_rule_exes: &[String]) -> Result<u32, String>;
 }
