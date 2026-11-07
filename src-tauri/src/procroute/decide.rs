@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use routa_procsvc_proto::{Action, DesiredState, ExitPolicy, FaultPolicy, ProxyKind, ProxyTarget, RuleSpec};
+use routa_procsvc_proto::{Action, DesiredState, ExitPolicy, FaultPolicy, ProcessKind, ProxyKind, ProxyTarget, RuleSpec};
+
+use super::learn;
 
 use crate::core::process::CoreState;
 use crate::model::health::ListenerStatus;
@@ -23,7 +25,12 @@ pub fn decide(model: &Model, status: &RuntimeStatus, routa_pid: u32) -> DesiredS
                 id: spec_id(&r.id, &p.value),
                 exe_path: p.value.clone(),
                 kind: p.kind,
-                guard_paths: vec![],
+                // 只有按进程名阻断的条目需要守护已知位置。
+                guard_paths: if p.kind == ProcessKind::Name && r.on_fault == FaultPolicy::Block {
+                    learn::guard_paths(model, r, &p.value)
+                } else {
+                    vec![]
+                },
                 action: action.clone(),
                 on_fault: r.on_fault.clone(),
                 reset_on_change: r.reset_on_change,
@@ -389,5 +396,54 @@ mod tests {
         assert_eq!(d.rules.iter().map(|r| rule_of_spec(&r.id)).collect::<Vec<_>>(), ["r1", "r0"]);
         let Action::Proxy(t) = &d.rules[0].action else { panic!("expected proxy") };
         assert_eq!((t.username.clone(), t.password.clone()), (None, None));
+    }
+
+    fn name_block_model() -> Model {
+        let mut m = model(FaultPolicy::Block, ExitPolicy::Direct);
+        let r = &mut m.process_routing.rules[0];
+        r.processes = vec![ProcessEntry::name("ChatGPT.exe")];
+        r.learned = vec![r"C:\A\ChatGPT.exe".into(), r"C:\B\other.exe".into()];
+        m
+    }
+
+    #[test]
+    fn name_block_rule_sends_kind_and_guard_paths() {
+        let d = decide(&name_block_model(), &running(), PID);
+        assert_eq!(d.rules.len(), 1);
+        assert_eq!(d.rules[0].kind, ProcessKind::Name);
+        assert_eq!(d.rules[0].guard_paths, vec![r"C:\A\ChatGPT.exe".to_string()]);
+    }
+
+    #[test]
+    fn guard_paths_yield_to_enabled_path_rules() {
+        let mut m = name_block_model();
+        let mut other = rule(FaultPolicy::Direct);
+        other.id = ProcessRuleId("r2".into());
+        other.processes = vec![ProcessEntry::path(r"c:/a/chatgpt.exe")];
+        m.process_routing.rules.push(other);
+        let d = decide(&m, &running(), PID);
+        assert!(d.rules[0].guard_paths.is_empty());
+
+        m.process_routing.rules[1].user_enabled = false;
+        let d = decide(&m, &running(), PID);
+        assert_eq!(d.rules[0].guard_paths, vec![r"C:\A\ChatGPT.exe".to_string()]);
+    }
+
+    #[test]
+    fn direct_rule_sends_no_guard_paths() {
+        let mut m = name_block_model();
+        m.process_routing.rules[0].on_fault = FaultPolicy::Direct;
+        let d = decide(&m, &running(), PID);
+        assert_eq!(d.rules[0].kind, ProcessKind::Name);
+        assert!(d.rules[0].guard_paths.is_empty());
+    }
+
+    #[test]
+    fn path_entry_kind_is_path() {
+        let mut m = name_block_model();
+        m.process_routing.rules[0].processes = vec![ProcessEntry::path(r"C:\A\ChatGPT.exe")];
+        let d = decide(&m, &running(), PID);
+        assert_eq!(d.rules[0].kind, ProcessKind::Path);
+        assert!(d.rules[0].guard_paths.is_empty());
     }
 }

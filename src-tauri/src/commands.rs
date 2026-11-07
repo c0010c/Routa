@@ -220,10 +220,47 @@ pub mod ops {
     }
 
     /// Upsert by id. Reloads mihomo only when the hidden listeners change.
+    /// Process names that newly enter learning (Name + Block) get the paths of
+    /// their currently running exes recorded in `learned` first.
     pub async fn save_process_rule(rt: &Runtime, rule: ProcessRule) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
+        let model = rt.model();
+        let before = model.process_routing.rules.iter().find(|r| r.id == rule.id);
+        // 只在可能预记录时枚举进程（较慢，且在引擎锁外做）。
+        let running = if model.process_routing.enabled && !procroute::learn::newly_learning(before, &rule).is_empty() {
+            tauri::async_runtime::spawn_blocking(procroute::processes::running_processes).await.unwrap_or_default()
+        } else {
+            vec![]
+        };
+        save_process_rule_seeded(rt, rule, &running).await
+    }
+
+    /// [`save_process_rule`] with the running processes given (testable).
+    pub(crate) async fn save_process_rule_seeded(
+        rt: &Runtime,
+        mut rule: ProcessRule,
+        running: &[RunningProcess],
+    ) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
         rt.mutate_process_routing(|p| {
             let id = rule.id.clone();
+            let snapshot = Model { process_routing: p.clone(), ..Model::default() };
+            let before = p.rules.iter().find(|x| x.id == id);
+            procroute::learn::seed(&snapshot, before, &mut rule, running);
             upsert(&mut p.rules, rule, |x| x.id == id)
+        })
+        .await
+    }
+
+    /// Forgets one known location of rule `id` (case-insensitive).
+    pub async fn remove_learned_process_path(
+        rt: &Runtime,
+        id: ProcessRuleId,
+        path: String,
+    ) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
+        let key = procroute::learn::exe_key(&path);
+        rt.mutate_process_routing(|p| {
+            if let Some(r) = p.rules.iter_mut().find(|r| r.id == id) {
+                r.learned.retain(|l| procroute::learn::exe_key(l) != key);
+            }
         })
         .await
     }
@@ -560,6 +597,16 @@ pub async fn save_process_rule(rt: Rt<'_>, rule: ProcessRule) -> Result<Option<A
 
 #[tauri::command]
 #[specta::specta]
+pub async fn remove_learned_process_path(
+    rt: Rt<'_>,
+    id: ProcessRuleId,
+    path: String,
+) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
+    ops::remove_learned_process_path(&rt, id, path).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn delete_process_rule(rt: Rt<'_>, id: ProcessRuleId) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
     ops::delete_process_rule(&rt, id).await
 }
@@ -760,6 +807,28 @@ mod tests {
 
         ops::delete_process_rule(&rt, rule.id).await.unwrap();
         assert!(rt.model().process_routing.rules.is_empty());
+    }
+
+    #[tokio::test]
+    async fn save_seeds_running_paths_and_remove_learned_forgets_one() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = runtime(&td);
+        ops::save_process_routing_settings(&rt, true, ExitPolicy::Direct).await.unwrap();
+        let rule = ProcessRule {
+            processes: vec![ProcessEntry::name("a.exe")],
+            on_fault: FaultPolicy::Block,
+            ..ProcessRule::default()
+        };
+        let running = [
+            crate::procroute::processes::RunningProcess { pid: 1, name: "a.exe".into(), exe_path: r"C:\A\a.exe".into() },
+            crate::procroute::processes::RunningProcess { pid: 2, name: "A.EXE".into(), exe_path: r"C:\B\A.EXE".into() },
+        ];
+        ops::save_process_rule_seeded(&rt, rule.clone(), &running).await.unwrap();
+        let learned = |rt: &Runtime| rt.model().process_routing.rules[0].learned.clone();
+        assert_eq!(learned(&rt), vec![r"C:\A\a.exe".to_string(), r"C:\B\A.EXE".to_string()]);
+
+        ops::remove_learned_process_path(&rt, rule.id.clone(), r"c:/b/a.exe".into()).await.unwrap();
+        assert_eq!(learned(&rt), vec![r"C:\A\a.exe".to_string()]);
     }
 
     #[tokio::test]
