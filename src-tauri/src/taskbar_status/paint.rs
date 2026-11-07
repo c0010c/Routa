@@ -426,6 +426,13 @@ mod tests {
         Frame { screen, previous: None, slide_progress: 1.0, name_elapsed: Duration::ZERO, light: false }
     }
 
+    /// Whether `ICON_FONT` is installed. It ships with Windows 11 only; the CI
+    /// runners (Windows Server 2022) lack it, so icon glyphs draw nothing there.
+    fn icon_font_installed() -> bool {
+        let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
+        std::path::Path::new(&windir).join("Fonts").join("SegoeIcons.ttf").is_file()
+    }
+
     fn painted(frame: &Frame) -> (Vec<u32>, Painted) {
         painted_in(frame, Values)
     }
@@ -646,6 +653,10 @@ mod tests {
 
     #[test]
     fn capture_icon_sits_level_with_the_delay() {
+        if !icon_font_installed() {
+            eprintln!("skipped: {ICON_FONT} is not installed");
+            return;
+        }
         for dpi in [96, 144] {
             let l = layout(dpi, Values);
             for mode in [CaptureMode::System, CaptureMode::Tun] {
@@ -663,6 +674,10 @@ mod tests {
 
     #[test]
     fn system_proxy_and_tun_have_different_icons() {
+        if !icon_font_installed() {
+            eprintln!("skipped: {ICON_FONT} is not installed");
+            return;
+        }
         let system = painted(&frame(captured(Some(CaptureMode::System)))).0;
         let tun = painted(&frame(captured(Some(CaptureMode::Tun)))).0;
         let plain = painted(&frame(captured(None))).0;
