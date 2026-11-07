@@ -59,7 +59,8 @@ const overlaps = (a: ProcessEntry, b: ProcessEntry) =>
 /** 校验一个条目。`entries` 是本规则全部条目（可含 `e` 自身，按引用排除）；`others` 是其他规则（含停用）。 */
 export function entryError(e: ProcessEntry, entries: ProcessEntry[], others: ProcessRule[]): string | undefined {
   const v = e.value.trim();
-  if (e.kind === "Path" && !/^[a-zA-Z]:\\|^\\\\/.test(v)) return "不是完整路径（应以 C:\\ 之类的盘符开头）";
+  // 只收本地盘符路径：UNC（\\server\share）与 \\?\ 之类的设备路径服务端也会拒收。
+  if (e.kind === "Path" && !/^[a-zA-Z]:\\/.test(v)) return "不是完整路径（应以 C:\\ 之类的盘符开头）";
   if (!/\.exe$/i.test(v)) return `${fileName(v)} 不是 .exe 程序`;
   if (entries.some((x) => x !== e && overlaps(x, e))) return "已经在这条规则里";
   const owner = others.find((r) => r.processes.some((x) => overlaps(x, e)));

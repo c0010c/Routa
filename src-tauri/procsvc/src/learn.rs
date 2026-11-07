@@ -5,15 +5,16 @@
 
 use routa_procsvc_proto::{DesiredState, FaultPolicy, LearnedPath, ProcessKind, RuleSpec};
 
-use crate::paths::{matches_process, same_path};
+use crate::paths::same_path;
 use crate::reconcile::exe_key;
 
-/// 规则 `r` 可以把完整路径 `path` 学为守护路径：Name + Block、进程名相符，
+/// 规则 `r` 可以把完整路径 `path` 学为守护路径：Name + Block、`path` 是该进程名的合法守护路径
+/// （[`routa_procsvc_proto::guard_path_problem`]，与 Apply 校验同一判断），
 /// 且 `path` 不是任何按路径的规则的 exe（同一个 exe 的阻断 / 放行只能归一条规则管）。
 fn learnable(r: &RuleSpec, rules: &[RuleSpec], path: &str) -> bool {
     r.kind == ProcessKind::Name
         && r.on_fault == FaultPolicy::Block
-        && matches_process(ProcessKind::Name, &r.exe_path, path)
+        && routa_procsvc_proto::guard_path_problem(&r.exe_path, path).is_none()
         && !rules
             .iter()
             .any(|p| p.kind == ProcessKind::Path && same_path(&p.exe_path, path))
@@ -26,9 +27,6 @@ fn has_guard(r: &RuleSpec, path: &str) -> bool {
 /// `exe`（进程的完整路径）命中某条 Name + Block 规则、且还没被守护时，返回要学到的位置。
 /// `exe` 已在该规则的 `guard_paths` 里、与某条按路径的规则同键，或不是合法的本地完整路径时为 `None`。
 pub fn observe(rules: &[RuleSpec], exe: &str) -> Option<LearnedPath> {
-    if routa_procsvc_proto::exe_path_problem(exe).is_some() {
-        return None;
-    }
     let r = rules.iter().find(|r| learnable(r, rules, exe))?;
     (!has_guard(r, exe)).then(|| LearnedPath {
         rule_id: r.id.clone(),
@@ -118,8 +116,14 @@ mod tests {
         assert_eq!(observe(&[guarded], P), None);
         // 某条按路径的规则就是它
         assert_eq!(observe(&[block.clone(), path_rule("p", r"c:\n\chatgpt.exe")], P), None);
-        // 不是合法的本地完整路径
-        assert_eq!(observe(&[block], r"\\?\C:\N\ChatGPT.exe"), None);
+        // 不是合法的本地完整路径（设备前缀、UNC、文件夹名带 , 或 ;）
+        for bad in [r"\\?\C:\N\ChatGPT.exe", r"\\srv\share\ChatGPT.exe", r"C:\a,b\ChatGPT.exe", r"C:\a;b\ChatGPT.exe"] {
+            assert_eq!(observe(only, bad), None, "{bad}");
+        }
+        // 已学到的坏路径也会被忘掉，不会进入 guard_paths
+        let mut learned = vec![lp("c", r"C:\a,b\ChatGPT.exe"), lp("c", P)];
+        forget(&mut learned, &state(vec![block]), &|_: &str| true);
+        assert_eq!(learned, vec![lp("c", P)]);
     }
 
     #[test]

@@ -3,12 +3,11 @@
 
 use std::collections::HashSet;
 
-use routa_procsvc_proto::{FaultPolicy, LearnedPath, ProcessKind};
+use routa_procsvc_proto::{guard_path_problem, FaultPolicy, LearnedPath, ProcessKind};
 
 use super::decide::rule_of_spec;
 use super::processes::RunningProcess;
 use crate::model::normalize::normalize_exe_path;
-use crate::model::validate::process_file_name;
 use crate::model::{Model, ProcessRouting, ProcessRule, ProcessRuleId};
 
 /// 判同用的键：去首尾空白、`/` → `\`、小写（与服务端 `exe_key` 一致）。
@@ -32,10 +31,10 @@ fn own_path(r: &ProcessRule, path: &str) -> bool {
     r.processes.iter().any(|p| p.kind == ProcessKind::Path && exe_key(&p.value) == key)
 }
 
-/// 规则 `r` 有文件名与 `path` 相同的 `Name` 条目。
+/// `path` 是规则 `r` 某个 `Name` 条目的合法守护路径（文件名相符、本地完整路径、不含 `,` `;`；
+/// 与服务端 Apply 校验同一判断，见 [`routa_procsvc_proto::guard_path_problem`]）。
 fn names_file(r: &ProcessRule, path: &str) -> bool {
-    let file = exe_key(process_file_name(&normalize_exe_path(path)));
-    r.processes.iter().any(|p| p.kind == ProcessKind::Name && exe_key(&p.value) == file)
+    r.processes.iter().any(|p| p.kind == ProcessKind::Name && guard_path_problem(&p.value, path).is_none())
 }
 
 /// 其他**启用**规则有与 `path` 同键的 `Path` 条目：该程序归那条规则管。
@@ -44,12 +43,12 @@ pub fn owned_by_others(model: &Model, rule: &ProcessRuleId, path: &str) -> bool 
 }
 
 /// 下发给进程名 `name` 的守护路径：`r.learned` 中文件名等于 `name`、不是本规则 `Path` 条目、
-/// 也不归其他启用规则管的路径。文件是否存在由服务端过滤。
+/// 也不归其他启用规则管的路径；服务端会拒收的路径（[`guard_path_problem`]）不下发，
+/// 以免一条坏路径让整个 Apply 被拒。文件是否存在由服务端过滤。
 pub fn guard_paths(model: &Model, r: &ProcessRule, name: &str) -> Vec<String> {
-    let name = exe_key(name);
     r.learned
         .iter()
-        .filter(|p| exe_key(process_file_name(&normalize_exe_path(p))) == name)
+        .filter(|p| guard_path_problem(name, p).is_none())
         .filter(|p| !own_path(r, p) && !owned_by_others(model, &r.id, p))
         .cloned()
         .collect()
@@ -105,7 +104,8 @@ pub fn seed(model: &Model, before: Option<&ProcessRule>, rule: &mut ProcessRule,
         for p in running.iter().filter(|p| exe_key(&p.name) == name) {
             let path = normalize_exe_path(&p.exe_path);
             let key = exe_key(&path);
-            if own_path(rule, &path)
+            if guard_path_problem(&name, &path).is_some()
+                || own_path(rule, &path)
                 || owned_by_others(model, &rule.id, &path)
                 || rule.learned.iter().any(|l| exe_key(l) == key)
             {
@@ -143,7 +143,9 @@ pub fn from_package(
         .flat_map(|r| {
             super::store::siblings(&r.learned, full_name, root)
                 .into_iter()
-                .filter(|p| exists(p) && !own_path(r, p) && !owned_by_others(model, &r.id, p))
+                .filter(|p| {
+                    names_file(r, p) && exists(p) && !own_path(r, p) && !owned_by_others(model, &r.id, p)
+                })
                 .map(|p| (r.id.clone(), p))
         })
         .collect()
@@ -163,6 +165,7 @@ pub fn add(pr: &mut ProcessRouting, found: &[(ProcessRuleId, String)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::validate::process_file_name;
     use crate::model::ProcessEntry;
 
     fn block_rule(id: &str, entries: Vec<ProcessEntry>) -> ProcessRule {
@@ -225,6 +228,44 @@ mod tests {
         seed(&m, Some(&before), &mut rule, &procs);
         assert_eq!(rule.learned, vec![r"C:\A\chrome.exe".to_string()]);
         assert_eq!(newly_learning(Some(&before), &rule), vec!["chrome.exe".to_string()]);
+    }
+
+    #[test]
+    fn paths_the_service_rejects_are_never_seeded_merged_or_sent() {
+        const BAD: [&str; 3] = [r"\\srv\share\chrome.exe", r"C:\a,b\chrome.exe", r"C:\a;b\chrome.exe"];
+        const GOOD: &str = r"C:\A\chrome.exe";
+        let m = model(vec![]);
+
+        // seed
+        let mut procs: Vec<RunningProcess> = BAD.iter().map(|p| running(1, p)).collect();
+        procs.push(running(2, GOOD));
+        let mut rule = block_rule("r1", vec![ProcessEntry::name("chrome.exe")]);
+        seed(&m, None, &mut rule, &procs);
+        assert_eq!(rule.learned, vec![GOOD.to_string()]);
+
+        // merge_reported
+        let mut pr = model(vec![block_rule("r1", vec![ProcessEntry::name("chrome.exe")])]).process_routing;
+        let reported: Vec<LearnedPath> =
+            BAD.iter().map(|p| LearnedPath { rule_id: "r1|chrome.exe".into(), path: p.to_string() }).collect();
+        assert!(!merge_reported(&mut pr, &reported));
+        assert!(pr.rules[0].learned.is_empty());
+
+        // guard_paths: an already-stored bad path is not sent
+        let mut r = block_rule("r1", vec![ProcessEntry::name("chrome.exe")]);
+        r.learned = BAD.iter().map(|p| p.to_string()).chain([GOOD.to_string()]).collect();
+        let m = model(vec![r.clone()]);
+        assert_eq!(guard_paths(&m, &r, "chrome.exe"), vec![GOOD.to_string()]);
+
+        // from_package: the sibling in a bad new folder is not taken
+        let old = r"C:\Program Files\WindowsApps\Pkg_1.0.0.0_x64__abc";
+        let mut r = block_rule("r1", vec![ProcessEntry::name("chrome.exe")]);
+        r.learned = vec![format!(r"{old}\chrome.exe")];
+        let m = model(vec![r]);
+        let new_name = "Pkg_2.0.0.0_x64__abc";
+        let all = |_: &str| true;
+        assert_eq!(from_package(&m, new_name, &format!(r"C:\Program Files\WindowsApps\{new_name}"), &all).len(), 1);
+        assert!(from_package(&m, new_name, &format!(r"C:\Odd,Dir\{new_name}"), &all).is_empty());
+        assert!(from_package(&m, new_name, &format!(r"\\srv\share\{new_name}"), &all).is_empty());
     }
 
     #[test]

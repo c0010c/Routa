@@ -23,7 +23,7 @@ use routa_procsvc_proto::{Flow, ProxyKind, ProxyTarget};
 
 use crate::engine::{Interceptor, PbAction};
 use crate::lazy::Bridge;
-use crate::paths::{exe_of_pid, matches_process, pattern_kind};
+use crate::paths::{exe_of_pid, pattern_kind, rule_for_exe};
 use crate::proxypool::{Attach, ProxyPool};
 use routa_procsvc_proto::ProcessKind;
 
@@ -317,13 +317,14 @@ fn field_str(field: &[c_char]) -> String {
     String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
-/// 把一条原始连接转成 `Flow`：`exe` 为该 PID 的完整路径，按 exe 归到有 ProxyBridge 规则的 Routa 规则上。
+/// 把一条原始连接转成 `Flow`：`exe` 为该 PID 的完整路径，按 exe 归到有 ProxyBridge 规则的 Routa 规则上
+/// （按路径的规则优先于按进程名的，见 [`rule_for_exe`]）。
 fn to_flow(raw: &PbFlow, exe: Option<String>, rules: &HashMap<String, Entry>) -> Flow {
     let rule_id = exe.as_deref().and_then(|exe| {
-        rules
-            .iter()
-            .find(|(_, e)| e.pb_rule.is_some() && matches_process(pattern_kind(&e.exe), &e.exe, exe))
-            .map(|(id, _)| id.clone())
+        rule_for_exe(
+            rules.iter().filter(|(_, e)| e.pb_rule.is_some()).map(|(id, e)| (id.as_str(), e.exe.as_str())),
+            exe,
+        )
     });
     Flow {
         pid: raw.pid,

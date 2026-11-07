@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { Model, NodeRef, ProcessRule } from "../bindings";
 
@@ -158,6 +158,29 @@ describe("ProcessRuleDialog", () => {
     expect(toast.closest(".MuiAlert-root")).toHaveClass("MuiAlert-colorInfo");
     expect(toast).toHaveTextContent("chrome.exe 联网时会自动记录位置，分流服务停止后也能拦住；还没联网过的位置除外。");
     expect(toast).toHaveTextContent("「Chrome Canary」指定的 chrome.exe 不受影响。");
+  });
+
+  it("no info toast when the saved rule or process routing is off", async () => {
+    const routingOff: Model = { ...withRules(), process_routing: { ...withRules().process_routing, enabled: false } };
+    for (const [m, ruleOn] of [
+      [routingOff, true],
+      [withRules(), false],
+    ] as const) {
+      vi.mocked(commands.getModel).mockResolvedValue(m);
+      const onClose = renderDialog();
+      await loaded();
+      addProcess("chrome.exe");
+      await pickNode("n1 · 来源甲");
+      fireEvent.click(screen.getByRole("radio", { name: "阻断" }));
+      if (!ruleOn) fireEvent.click(screen.getByRole("switch", { name: "启用" }));
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      expect(saved()).toMatchObject({ on_fault: "Block", user_enabled: ruleOn });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText(/已开启按进程名阻断/)).not.toBeInTheDocument();
+      cleanup();
+      vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
+    }
   });
 
   it("no_info_toast_when_nothing_newly_learning", async () => {

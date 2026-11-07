@@ -23,6 +23,7 @@ import {
   useProcRouteCleanup,
   useProcRouteStatus,
   useProcRouteUninstall,
+  useSetExitPrompt,
 } from "../api/procroute";
 import { settingsSaveMessage, useSettingsSave } from "../api/settings";
 import type {
@@ -284,14 +285,33 @@ function SettingsForm({
 
 /** Process routing settings that are set once and rarely touched; the page itself keeps the switch and status. */
 function ProcessRoutingSection() {
+  const model = useModel();
+  const setExitPrompt = useSetExitPrompt();
   const status = useProcRouteStatus();
   const uninstall = useProcRouteUninstall();
   const cleanup = useProcRouteCleanup();
   const [confirm, setConfirm] = useState<"uninstall" | "cleanup" | null>(null);
   const component = status.data?.component;
   const busy = uninstall.isPending || cleanup.isPending;
+  const exitPrompt = model.data?.process_routing.exit_prompt ?? true;
   return (
     <>
+      <Section title="退出">
+        {[
+          <Row
+            key="exit-prompt"
+            label="退出时提示"
+            description="退出 Routa 会让选了阻断的程序断网时，先询问是否停用进程分流"
+          >
+            <Switch
+              checked={exitPrompt}
+              disabled={!model.data || setExitPrompt.isPending}
+              onChange={(_, value) => setExitPrompt.mutate(value)}
+              slotProps={{ input: { "aria-label": "退出时提示" } }}
+            />
+          </Row>,
+        ]}
+      </Section>
       <Section title="分流组件">
         {[
           <Row

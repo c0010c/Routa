@@ -300,11 +300,12 @@ async quitApp() : Promise<void> {
 },
 /**
  * Turns process routing off and exits once the service confirmed it; otherwise
- * returns why Routa did not exit.
+ * returns why Routa did not exit. `dont_ask_again` turns the exit prompt off
+ * only when Routa really exits.
  */
-async disableRoutingAndQuit() : Promise<Result<null, string>> {
+async disableRoutingAndQuit(dontAskAgain: boolean) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("disable_routing_and_quit") };
+    return { status: "ok", data: await TAURI_INVOKE("disable_routing_and_quit", { dontAskAgain }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

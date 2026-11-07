@@ -43,6 +43,18 @@ describe("LearnedLocations", () => {
     expect(screen.getByText(/不记录：这个位置属于规则「Canary」/)).toBeTruthy();
   });
 
+  it("doesn't count learned paths another enabled rule claims by path", () => {
+    const STABLE = "C:\\Stable\\chrome.exe";
+    const CLAIMED = "c:\\canary\\CHROME.exe";
+    const other = rule({ id: "r2", name: "Canary", processes: [{ kind: "Path", value: CANARY }], on_fault: "Direct" });
+    const r = rule({ processes: [{ kind: "Name", value: "chrome.exe" }], learned: [CLAIMED, STABLE] });
+    render(<LearnedLocations rule={r} others={[other]} routingEnabled running={[]} />);
+    fireEvent.click(screen.getByRole("button", { name: /已记录 1 个位置，1 个位置属于其他规则/ }));
+    expect(screen.getByText(STABLE)).toBeTruthy();
+    expect(screen.queryByText(CLAIMED)).toBeNull();
+    expect(screen.getByText(CANARY)).toBeTruthy();
+  });
+
   it("calls onRemove with the path", () => {
     const onRemove = vi.fn();
     render(<LearnedLocations rule={rule({ learned: [OLD] })} others={[]} routingEnabled running={[]} onRemove={onRemove} />);

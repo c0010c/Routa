@@ -635,11 +635,12 @@ pub fn quit_app(app: AppHandle) {
 }
 
 /// Turns process routing off and exits once the service confirmed it; otherwise
-/// returns why Routa did not exit.
+/// returns why Routa did not exit. `dont_ask_again` turns the exit prompt off
+/// only when Routa really exits.
 #[tauri::command]
 #[specta::specta]
-pub async fn disable_routing_and_quit(app: AppHandle, rt: Rt<'_>) -> Result<(), String> {
-    crate::tray::disable_routing_and_quit(&app, &rt).await
+pub async fn disable_routing_and_quit(app: AppHandle, rt: Rt<'_>, dont_ask_again: bool) -> Result<(), String> {
+    crate::tray::disable_routing_and_quit(&app, &rt, dont_ask_again).await
 }
 
 #[tauri::command]

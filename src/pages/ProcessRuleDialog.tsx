@@ -68,8 +68,12 @@ function Help({ children }: { children: ReactNode }) {
   );
 }
 
-/** Info toast after saving a rule that starts recording locations; `null` when nothing new is recorded. */
+/**
+ * Info toast after saving a rule that starts recording locations; `null` when nothing new is recorded
+ * (also when the rule or process routing is off: nothing is recorded then).
+ */
 function learningNotice(before: ProcessRule | undefined, saved: ProcessRule, others: ProcessRule[], routingEnabled: boolean) {
+  if (!saved.user_enabled || !routingEnabled) return null;
   const newly = newlyLearning(before, saved);
   if (newly.length === 0) return null;
   const skipped = skippedOf(saved, others, routingEnabled);

@@ -148,7 +148,7 @@ function ComponentStatus({
               size="small"
               sx={{ ml: 1 }}
               disabled={settings.isPending || quit.isPending}
-              onClick={() => quit.mutate()}
+              onClick={() => quit.mutate(false)}
             >
               停用并退出
             </Button>
@@ -486,7 +486,7 @@ export function ProcessRoutingPage() {
                     <TableCell sx={{ width: "42%" }}>
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>
                         {name}
-                        {r.on_fault === "Block" && (
+                        {r.user_enabled && r.on_fault === "Block" && (
                           <Typography component="span" variant="caption" sx={{ ml: 1, fontWeight: 400, color: "text.secondary" }}>
                             不可用时阻断
                           </Typography>

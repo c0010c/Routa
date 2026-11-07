@@ -72,9 +72,23 @@ describe("ExitConfirmDialog", () => {
     renderDialog();
     await ask(["游戏"]);
     fireEvent.click(screen.getByRole("button", { name: "停用进程分流并退出" }));
-    await waitFor(() => expect(commands.disableRoutingAndQuit).toHaveBeenCalled());
+    await waitFor(() => expect(commands.disableRoutingAndQuit).toHaveBeenCalledWith(false));
     expect(commands.setExitPrompt).not.toHaveBeenCalled();
     expect(commands.quitApp).not.toHaveBeenCalled();
+  });
+
+  it("不再提示 + 停用进程分流并退出 leaves saving the choice to the backend's successful exit", async () => {
+    const reason = "进程分流还没有停用成功，暂不退出：分流服务没有确认新的规则";
+    vi.mocked(commands.disableRoutingAndQuit).mockResolvedValue({ status: "error", error: reason });
+    renderDialog();
+    await ask(["游戏"]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "不再提示" }));
+    fireEvent.click(screen.getByRole("button", { name: "停用进程分流并退出" }));
+    await waitFor(() => expect(commands.disableRoutingAndQuit).toHaveBeenCalledWith(true));
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    // Failed: the dialog stays open and the prompt is still on.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(commands.setExitPrompt).not.toHaveBeenCalled();
   });
 
   it("keeps the dialog open with the reason when the disable did not take effect", async () => {

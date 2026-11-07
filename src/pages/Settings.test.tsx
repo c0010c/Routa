@@ -20,6 +20,7 @@ vi.mock("../bindings", () => ({
     procrouteCleanup: vi.fn(),
     procrouteUninstall: vi.fn(),
     saveProcessRoutingSettings: vi.fn(),
+    setExitPrompt: vi.fn(),
     openProjectLink: vi.fn(),
   },
 }));
@@ -481,6 +482,25 @@ describe("Settings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "清理" }));
     expect(await screen.findByText("已取消")).toBeInTheDocument();
   });
+
+  it("turns the exit prompt back on (and off) from 进程分流 → 退出时提示", async () => {
+    vi.mocked(commands.setExitPrompt).mockResolvedValue({ status: "ok", data: null });
+    renderPage({ ...model, process_routing: { ...model.process_routing, exit_prompt: false } }, false, "procroute");
+    const exit = await screen.findByRole("region", { name: "退出" });
+    const toggle = within(exit).getByRole("switch", { name: "退出时提示" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).not.toBeChecked();
+    // The saved model the page refetches after the switch.
+    vi.mocked(commands.getModel).mockResolvedValue(model);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(commands.setExitPrompt).toHaveBeenCalledWith(true));
+
+    vi.mocked(commands.setExitPrompt).mockClear();
+    await waitFor(() => expect(within(exit).getByRole("switch", { name: "退出时提示" })).toBeChecked());
+    fireEvent.click(within(exit).getByRole("switch", { name: "退出时提示" }));
+    await waitFor(() => expect(commands.setExitPrompt).toHaveBeenCalledWith(false));
+  });
+
   it("links the website and GitHub from 关于 → 支持", async () => {
     vi.mocked(commands.openProjectLink).mockResolvedValue({ status: "ok", data: null });
     renderPage(model, false, "about");
