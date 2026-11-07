@@ -27,7 +27,7 @@ id_type!(ManualNodeId);
 id_type!(NodeGroupId);
 id_type!(ProcessRuleId);
 
-pub use routa_procsvc_proto::{ExitPolicy, FaultPolicy};
+pub use routa_procsvc_proto::{ExitPolicy, FaultPolicy, ProcessKind};
 
 /// Windows 网卡标识（GUID）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
@@ -329,6 +329,23 @@ pub struct Model {
     pub process_routing: ProcessRouting,
 }
 
+/// 规则里的一个程序：按进程名（`a.exe`）或完整路径（`C:\…\a.exe`）匹配。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, specta::Type)]
+pub struct ProcessEntry {
+    pub kind: ProcessKind,
+    pub value: String,
+}
+
+impl ProcessEntry {
+    pub fn name(v: impl Into<String>) -> Self {
+        Self { kind: ProcessKind::Name, value: v.into() }
+    }
+
+    pub fn path(v: impl Into<String>) -> Self {
+        Self { kind: ProcessKind::Path, value: v.into() }
+    }
+}
+
 /// 按进程分流的一条规则：一组程序的流量走某个 Listener。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
 #[serde(default)]
@@ -336,10 +353,10 @@ pub struct ProcessRule {
     pub id: ProcessRuleId,
     /// 显示名称；为空时界面用第一个进程名代替。
     pub name: String,
-    /// 进程名（`a.exe`）；`match_full_path` 时为完整路径（`C:\…\a.exe`）。
-    pub processes: Vec<String>,
-    /// 按完整路径匹配。按进程名匹配的规则没法在组件故障时阻断（`on_fault` 只能是 `Direct`）。
-    pub match_full_path: bool,
+    /// 规则里的程序，每个条目自带匹配方式。
+    pub processes: Vec<ProcessEntry>,
+    /// 按进程名匹配的条目已知的完整路径（服务从连接里学到），用于 WFP 守护。
+    pub learned: Vec<String>,
     /// 旧字段，只读：旧版规则指向的 Listener，只用于读取旧数据。
     #[serde(skip_serializing)]
     #[specta(skip)]
@@ -353,10 +370,6 @@ pub struct ProcessRule {
     pub on_fault: FaultPolicy,
     pub reset_on_change: bool,
     pub user_enabled: bool,
-    /// 旧版（一条规则一个 exe）的字段，只用于读取旧数据；`normalize` 把它迁移到 `processes`。
-    #[serde(skip_serializing)]
-    #[specta(skip)]
-    pub exe_path: String,
 }
 
 #[cfg(test)]
@@ -377,14 +390,13 @@ impl Default for ProcessRule {
             id: ProcessRuleId::new(),
             name: String::new(),
             processes: vec![],
-            match_full_path: false,
+            learned: vec![],
             listener: ListenerId(String::new()),
             node: None,
             interface: None,
             on_fault: FaultPolicy::Direct,
             reset_on_change: false,
             user_enabled: true,
-            exe_path: String::new(),
         }
     }
 }
@@ -395,11 +407,13 @@ pub struct ProcessRouting {
     pub enabled: bool,
     pub on_routa_exit: ExitPolicy,
     pub rules: Vec<ProcessRule>,
+    /// 退出 Routa 时是否提示（默认提示）。
+    pub exit_prompt: bool,
 }
 
 impl Default for ProcessRouting {
     fn default() -> Self {
-        Self { enabled: false, on_routa_exit: ExitPolicy::Block, rules: vec![] }
+        Self { enabled: false, on_routa_exit: ExitPolicy::Block, rules: vec![], exit_prompt: true }
     }
 }
 
@@ -408,8 +422,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn entries_round_trip() {
+        let entries = vec![ProcessEntry::name("a.exe"), ProcessEntry::path(r"C:\x\a.exe")];
+        let v = serde_json::to_value(&entries).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!([{"kind": "Name", "value": "a.exe"}, {"kind": "Path", "value": r"C:\x\a.exe"}])
+        );
+        let back: Vec<ProcessEntry> = serde_json::from_value(v).unwrap();
+        assert_eq!(back, entries);
+    }
+
+    #[test]
+    fn learned_defaults_empty_and_exit_prompt_defaults_true() {
+        let r: ProcessRule = serde_json::from_str(r#"{"processes":[{"kind":"Name","value":"a.exe"}]}"#).unwrap();
+        assert!(r.learned.is_empty());
+        assert!(ProcessRule::default().learned.is_empty());
+        let pr: ProcessRouting = serde_json::from_str("{}").unwrap();
+        assert!(pr.exit_prompt);
+        assert!(ProcessRouting::default().exit_prompt);
+        let r = ProcessRule { learned: vec![r"C:\x\a.exe".into()], ..ProcessRule::default() };
+        let back: ProcessRule = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back.learned, r.learned);
+    }
+
+    #[test]
     fn legacy_rule_with_listener_loads_without_node() {
-        let r: ProcessRule = serde_json::from_str(r#"{"id":"r1","processes":["a.exe"],"listener":"l1"}"#).unwrap();
+        let r: ProcessRule =
+            serde_json::from_str(r#"{"id":"r1","processes":[{"kind":"Name","value":"a.exe"}],"listener":"l1"}"#).unwrap();
         assert_eq!(r.node, None);
         assert_eq!(r.interface, None);
     }
@@ -463,9 +503,9 @@ mod tests {
         assert_eq!(m.process_routing.on_routa_exit, ExitPolicy::Block);
         assert!(m.process_routing.rules.is_empty());
         // 规则缺字段取默认值
-        let r: ProcessRule = serde_json::from_str(r#"{"processes": ["a.exe"]}"#).unwrap();
+        let r: ProcessRule = serde_json::from_str(r#"{"processes": [{"kind": "Name", "value": "a.exe"}]}"#).unwrap();
         assert_eq!((r.on_fault, r.reset_on_change, r.user_enabled), (FaultPolicy::Direct, false, true));
-        assert!(!r.match_full_path && r.name.is_empty());
+        assert!(r.learned.is_empty() && r.name.is_empty());
     }
 
     #[test]
@@ -547,10 +587,11 @@ mod tests {
             process_routing: ProcessRouting {
                 enabled: true,
                 on_routa_exit: ExitPolicy::Direct,
+                exit_prompt: false,
                 rules: vec![ProcessRule {
                     name: "测试".into(),
-                    processes: vec![r"C:\测试\a.exe".into(), r"C:\测试\b.exe".into()],
-                    match_full_path: true,
+                    processes: vec![ProcessEntry::path(r"C:\测试\a.exe"), ProcessEntry::name("b.exe")],
+                    learned: vec![r"D:\测试\b.exe".into()],
                     on_fault: FaultPolicy::Block,
                     reset_on_change: true,
                     ..ProcessRule::default()
