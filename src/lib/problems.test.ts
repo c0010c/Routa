@@ -22,7 +22,7 @@ const model: Model = {
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
   manual_nodes: [],
   node_groups: [],
-  process_routing: { enabled: false, rules: [] },
+  process_routing: { enabled: false, rules: [], exit_prompt: true },
 };
 
 const status: RuntimeStatus = {

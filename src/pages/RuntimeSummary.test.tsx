@@ -67,7 +67,7 @@ const initialModel: Model = {
     { id: "n1", name: "新加坡01", groups: [], kind: { Proxy: { raw: {} } } },
   ],
   node_groups: [],
-  process_routing: { enabled: false, rules: [] },
+  process_routing: { enabled: false, rules: [], exit_prompt: true },
 };
 const initialStatus: RuntimeStatus = {
   core: "Running",
