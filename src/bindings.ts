@@ -260,6 +260,14 @@ async saveProcessRule(rule: ProcessRule) : Promise<Result<ApplyOutcome | null, V
     else return { status: "error", error: e  as any };
 }
 },
+async removeLearnedProcessPath(id: ProcessRuleId, path: string) : Promise<Result<ApplyOutcome | null, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_learned_process_path", { id, path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async deleteProcessRule(id: ProcessRuleId) : Promise<Result<ApplyOutcome | null, ValidationError[]>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_process_rule", { id }) };
@@ -268,9 +276,9 @@ async deleteProcessRule(id: ProcessRuleId) : Promise<Result<ApplyOutcome | null,
     else return { status: "error", error: e  as any };
 }
 },
-async saveProcessRoutingSettings(enabled: boolean, onRoutaExit: ExitPolicy) : Promise<Result<null, ValidationError[]>> {
+async saveProcessRoutingSettings(enabled: boolean) : Promise<Result<null, ValidationError[]>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("save_process_routing_settings", { enabled, onRoutaExit }) };
+    return { status: "ok", data: await TAURI_INVOKE("save_process_routing_settings", { enabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -568,7 +576,6 @@ export type ExitKind = { Node: { node: NodeRef } } | { Group: { strategy: GroupS
  * 出口组的成员：单个节点，或整组节点。
  */
 export type ExitMember = NodeRef | { group: GroupRef }
-export type ExitPolicy = "Direct" | "Block"
 export type ExitStatus = "Ok" | "NodeMissing" | "AllMembersMissing" | "InterfaceUnavailable"
 export type FailedListener = { id: ListenerId; name: string; port: number }
 export type FaultPolicy = "Direct" | "Block"
@@ -655,7 +662,19 @@ apply_errors: string[];
  * 连接列表达到服务的上限、被截断了（界面标明"仅显示最近 400 条"）。
  */
 truncated_flows: boolean }
-export type ProcessRouting = { enabled: boolean; on_routa_exit: ExitPolicy; rules: ProcessRule[] }
+/**
+ * 规则里的一个程序：按进程名（`a.exe`）或完整路径（`C:\…\a.exe`）匹配。
+ */
+export type ProcessEntry = { kind: ProcessKind; value: string }
+/**
+ * 规则里 `exe_path` 的含义。
+ */
+export type ProcessKind = "Name" | "Path"
+export type ProcessRouting = { enabled: boolean; rules: ProcessRule[]; 
+/**
+ * 退出 Routa 时是否提示（默认提示）。
+ */
+exit_prompt: boolean }
 /**
  * 按进程分流的一条规则：一组程序的流量走某个 Listener。
  */
@@ -665,13 +684,13 @@ export type ProcessRule = { id: ProcessRuleId;
  */
 name: string; 
 /**
- * 进程名（`a.exe`）；`match_full_path` 时为完整路径（`C:\…\a.exe`）。
+ * 规则里的程序，每个条目自带匹配方式。
  */
-processes: string[]; 
+processes: ProcessEntry[]; 
 /**
- * 按完整路径匹配。按进程名匹配的规则没法在组件故障时阻断（`on_fault` 只能是 `Direct`）。
+ * 按进程名匹配的条目已知的完整路径（服务从连接里学到），用于 WFP 守护。
  */
-match_full_path: boolean; 
+learned: string[]; 
 /**
  * 直接选择的节点；设置后由程序自动管理隐藏监听器。
  */
@@ -818,11 +837,11 @@ export type ValidationError = { DuplicateName: { kind: string; name: string } } 
  */
 { CoreRejected: { message: string } } | 
 /**
- * 同一个程序（按文件名）出现在多处：一个程序只能属于一条规则。
+ * 同一个进程名或同一条路径出现在多处：同类条目只能属于一条规则。
  */
 { DuplicateProcessRule: { exe_path: string } } | { InvalidExePath: { exe_path: string; reason: string } } | 
 /**
- * 已启用规则里的进程总数超过上限。
+ * 已启用规则里走代理的「节点 + 生效网卡」组合数超过上限。
  */
 { TooManyProcessRules: { max: number } } | { EmptyProcessRule: { rule: string } }
 

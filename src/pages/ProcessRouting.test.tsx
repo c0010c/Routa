@@ -38,7 +38,6 @@ const model: Model = {
   node_groups: [],
   process_routing: {
     enabled: true,
-    on_routa_exit: "Block",
     rules: [
       { id: "r1", name: "", processes: ["curl.exe"], match_full_path: false, node: { manual_id: "m1" }, on_fault: "Direct", reset_on_change: false, user_enabled: true },
       {
@@ -249,7 +248,7 @@ describe("ProcessRoutingPage", () => {
     expect(await screen.findByText("进程分流已暂停，下面的规则都不生效。")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "启用进程分流规则" })).not.toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "恢复" }));
-    await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(true, "Block"));
+    await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(true));
     // Exit policy and component maintenance live in Settings now.
     expect(screen.queryByText("退出行为与故障策略")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "更多组件操作" })).not.toBeInTheDocument();

@@ -80,7 +80,7 @@ const model: Model = {
     delay_test_interval_mins: 10,
     delay_test_url: "u",
   },
-  process_routing: { enabled: false, on_routa_exit: "Block", rules: [] },
+  process_routing: { enabled: false, rules: [] },
 };
 const status = {
   core: "Running",

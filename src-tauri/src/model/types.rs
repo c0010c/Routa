@@ -27,7 +27,7 @@ id_type!(ManualNodeId);
 id_type!(NodeGroupId);
 id_type!(ProcessRuleId);
 
-pub use routa_procsvc_proto::{ExitPolicy, FaultPolicy, ProcessKind};
+pub use routa_procsvc_proto::{FaultPolicy, ProcessKind};
 
 /// Windows 网卡标识（GUID）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, specta::Type)]
@@ -405,7 +405,6 @@ impl Default for ProcessRule {
 #[serde(default)]
 pub struct ProcessRouting {
     pub enabled: bool,
-    pub on_routa_exit: ExitPolicy,
     pub rules: Vec<ProcessRule>,
     /// 退出 Routa 时是否提示（默认提示）。
     pub exit_prompt: bool,
@@ -413,7 +412,7 @@ pub struct ProcessRouting {
 
 impl Default for ProcessRouting {
     fn default() -> Self {
-        Self { enabled: false, on_routa_exit: ExitPolicy::Block, rules: vec![], exit_prompt: true }
+        Self { enabled: false, rules: vec![], exit_prompt: true }
     }
 }
 
@@ -500,7 +499,6 @@ mod tests {
         let m: Model = serde_json::from_str(r#"{"subscriptions": [], "listeners": []}"#).unwrap();
         assert_eq!(m.process_routing, ProcessRouting::default());
         assert!(!m.process_routing.enabled);
-        assert_eq!(m.process_routing.on_routa_exit, ExitPolicy::Block);
         assert!(m.process_routing.rules.is_empty());
         // 规则缺字段取默认值
         let r: ProcessRule = serde_json::from_str(r#"{"processes": [{"kind": "Name", "value": "a.exe"}]}"#).unwrap();
@@ -586,7 +584,6 @@ mod tests {
             node_groups: vec![group],
             process_routing: ProcessRouting {
                 enabled: true,
-                on_routa_exit: ExitPolicy::Direct,
                 exit_prompt: false,
                 rules: vec![ProcessRule {
                     name: "测试".into(),
