@@ -79,6 +79,10 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
     let mut pairs: Vec<(&NodeRef, Option<InterfaceGuid>)> = Vec::new();
     for r in pr.rules.iter().filter(|r| r.user_enabled) {
         let Some(node) = &r.node else { continue };
+        // 与隐藏监听器一致：找不到的节点不会生成监听器，也不占名额。
+        if super::resolve::resolve(model, node).is_none() {
+            continue;
+        }
         let iface = super::hidden::effective_interface(model, node, &r.interface);
         if !pairs.iter().any(|(n, i)| *n == node && *i == iface) {
             pairs.push((node, iface));
@@ -501,6 +505,14 @@ mod tests {
 
     #[test]
     fn limit_counts_node_interface_pairs() {
+        // 真实可解析的手动节点
+        let pm = |rules: Vec<ProcessRule>, nodes: usize| {
+            let mut m = pmodel(|_| rules);
+            for i in 0..nodes {
+                m.manual_nodes.push(mnode(&format!("n{i}"), &format!("node{i}"), ss()));
+            }
+            m
+        };
         let node = |i: usize| NodeRef::Manual { manual_id: ManualNodeId(format!("n{i}")) };
         let rule = |n: NodeRef, iface: Option<&str>, tag: &str| ProcessRule {
             node: Some(n),
@@ -510,9 +522,9 @@ mod tests {
         };
         let over = ValidationError::TooManyProcessRules { max: 32 };
         // 40 条规则只用到 3 个节点
-        let e = errs(&pmodel(|_| (0..40).map(|i| rule(node(i % 3), None, &format!("a{i}"))).collect()));
+        let e = errs(&pm((0..40).map(|i| rule(node(i % 3), None, &format!("a{i}"))).collect(), 3));
         assert!(!e.contains(&over), "{e:?}");
-        let e = errs(&pmodel(|_| (0..33).map(|i| rule(node(i), None, &format!("a{i}"))).collect()));
+        let e = errs(&pm((0..33).map(|i| rule(node(i), None, &format!("a{i}"))).collect(), 33));
         assert!(e.contains(&over), "{e:?}");
         // 同节点不同网卡算两个：16 x 2 = 32 刚好，再多一张网卡就超限
         let two = |extra: bool| {
@@ -524,11 +536,14 @@ mod tests {
             }
             v
         };
-        assert!(!errs(&pmodel(|_| two(false))).contains(&over));
-        assert!(errs(&pmodel(|_| two(true))).contains(&over));
+        assert!(!errs(&pm(two(false), 16)).contains(&over));
+        assert!(errs(&pm(two(true), 16)).contains(&over));
         // 停用的规则不计
-        let e = errs(&pmodel(|_| (0..33).map(|i| ProcessRule { user_enabled: false, ..rule(node(i), None, &format!("a{i}")) }).collect()));
+        let e = errs(&pm((0..33).map(|i| ProcessRule { user_enabled: false, ..rule(node(i), None, &format!("a{i}")) }).collect(), 33));
         assert!(!e.contains(&over));
+        // 找不到的节点不计：33 条规则只有 3 个节点存在
+        let e = errs(&pm((0..33).map(|i| rule(node(i), None, &format!("a{i}"))).collect(), 3));
+        assert!(!e.contains(&over), "{e:?}");
     }
 
     #[test]
