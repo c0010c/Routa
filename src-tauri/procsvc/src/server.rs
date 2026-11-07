@@ -447,11 +447,11 @@ fn validate(state: &DesiredState) -> Result<(), String> {
         // 也不能与某条按路径的规则重叠、不能出现在两条规则上（同一个 exe 的阻断 / 放行只能归一条规则管），
         // 文件名必须就是该规则的进程名。
         for g in &r.guard_paths {
-            if let Some(reason) = routa_procsvc_proto::exe_path_problem(g) {
-                return Err(format!("守护路径无效（{reason}）：{g}"));
-            }
             if own.iter().any(|o| same_path(g, o)) {
                 return Err(format!("不能对进程分流组件自身设置规则：{g}"));
+            }
+            if let Some(reason) = routa_procsvc_proto::guard_path_problem(exe, g) {
+                return Err(format!("守护路径无效（{reason}）：{g}"));
             }
             if let Some(p) = state
                 .rules
@@ -459,9 +459,6 @@ fn validate(state: &DesiredState) -> Result<(), String> {
                 .find(|p| p.kind == ProcessKind::Path && exe_key(&p.exe_path) == exe_key(g))
             {
                 return Err(format!("守护路径与规则 {} 重叠：{g}", p.id));
-            }
-            if !matches_process(ProcessKind::Name, exe, g) {
-                return Err(format!("守护路径 {g} 与规则 {} 的进程名不符", r.id));
             }
             if *guards.entry(exe_key(g)).or_insert(r.id.as_str()) != r.id {
                 return Err(format!("守护路径重复：{g}"));
@@ -870,7 +867,7 @@ pub(crate) mod tests {
     }
 
     impl ConnKiller for FakeK {
-        fn reset_ipv4_tcp(&mut self, exe: &str) -> Result<u32, String> {
+        fn reset_ipv4_tcp(&mut self, exe: &str, _path_rule_exes: &[String]) -> Result<u32, String> {
             w(&self.0).log.push(format!("reset {exe}"));
             Ok(0)
         }
@@ -1588,7 +1585,7 @@ pub(crate) mod tests {
                     s.rules[1] = rule("b", "b.exe", FaultPolicy::Block);
                     s.rules[1].guard_paths = vec![r"C:\x\c.exe".into()];
                 },
-                r"守护路径 C:\x\c.exe 与规则 b 的进程名不符",
+                r"守护路径无效（文件名与进程名 b.exe 不符）：C:\x\c.exe",
             ),
             (
                 "guard path on two rules",

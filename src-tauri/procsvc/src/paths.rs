@@ -37,6 +37,25 @@ pub fn pattern_kind(pattern: &str) -> ProcessKind {
     }
 }
 
+/// 完整映像路径 `exe` 归哪条规则（`rules` 为 (规则 id, 进程写法)）：按完整路径命中的规则优先于
+/// 按进程名命中的（与 ProxyBridge 的匹配一致：路径规则更具体），同类里取 id 最小的，结果确定。
+pub fn rule_for_exe<'a>(rules: impl IntoIterator<Item = (&'a str, &'a str)>, exe: &str) -> Option<String> {
+    rules
+        .into_iter()
+        .map(|(id, pattern)| (id, pattern_kind(pattern), pattern))
+        .filter(|(_, kind, pattern)| matches_process(*kind, pattern, exe))
+        .min_by_key(|(id, kind, _)| (*kind != ProcessKind::Path, *id))
+        .map(|(id, _, _)| id.to_string())
+}
+
+/// 断开 `pattern` 的旧连接时，完整映像路径为 `exe` 的进程是否在内。`pattern` 是进程名时，
+/// 完整路径就是 `path_rule_exes`（当前按路径的规则的 exe）之一的进程不在内：它们归那些规则管。
+pub fn reset_hits(pattern: &str, path_rule_exes: &[String], exe: &str) -> bool {
+    let kind = pattern_kind(pattern);
+    matches_process(kind, pattern, exe)
+        && (kind == ProcessKind::Path || !path_rule_exes.iter().any(|p| same_path(p, exe)))
+}
+
 /// 进程的完整映像路径（Win32 形式）；进程已退出或无权访问时为 None。
 pub fn exe_of_pid(pid: u32) -> Option<String> {
     // 长路径上限：最多 32767 个 UTF-16 单元。
@@ -63,6 +82,36 @@ mod tests {
     fn same_path_variants() {
         assert!(same_path(r"C:\测试\Ä.exe", "c:/测试/ä.EXE "));
         assert!(!same_path(r"C:\a\b.exe", r"C:\a\b.exe.bak"));
+    }
+
+    #[test]
+    fn path_rule_wins_flow_attribution() {
+        let canary = r"C:\Canary\chrome.exe";
+        let stable = r"C:\Stable\chrome.exe";
+        // 不论顺序，Canary 的连接都归按路径的规则 b；其他 chrome.exe 归按进程名的规则 a。
+        for rules in [
+            vec![("a", "chrome.exe"), ("b", r"c:\canary\CHROME.exe")],
+            vec![("b", r"c:\canary\CHROME.exe"), ("a", "chrome.exe")],
+        ] {
+            assert_eq!(rule_for_exe(rules.clone(), canary).as_deref(), Some("b"));
+            assert_eq!(rule_for_exe(rules.clone(), stable).as_deref(), Some("a"));
+            assert_eq!(rule_for_exe(rules, r"C:\x\other.exe"), None);
+        }
+        // 同类多条命中时取 id 最小的。
+        assert_eq!(rule_for_exe([("z", "chrome.exe"), ("m", "CHROME.EXE")], stable).as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn name_reset_skips_programs_owned_by_path_rules() {
+        let canary = r"C:\Canary\chrome.exe";
+        let stable = r"C:\Stable\chrome.exe";
+        let paths = vec![r"c:/canary/CHROME.EXE".to_string()];
+        assert!(reset_hits("chrome.exe", &paths, stable));
+        assert!(!reset_hits("chrome.exe", &paths, canary));
+        assert!(reset_hits("chrome.exe", &[], canary));
+        // 按路径的规则自己的断连不受影响。
+        assert!(reset_hits(r"C:\Canary\chrome.exe", &paths, canary));
+        assert!(!reset_hits(r"C:\Canary\chrome.exe", &paths, stable));
     }
 
     #[test]

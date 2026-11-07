@@ -201,6 +201,20 @@ pub fn process_name_problem(p: &str) -> Option<String> {
     Some(reason.to_string())
 }
 
+/// 守护路径（按进程名 `name` 阻断的规则交给 WFP 按完整路径阻断的位置）的共享校验，
+/// Routa 记录 / 下发前与服务端收下前同用：`path` 须是 [`exe_path_problem`] 认可的本地完整路径，
+/// 且文件名就是 `name`。两者都先规范化（去首尾空白、`/` → `\`），文件名不区分大小写。
+/// 合法返回 None，否则返回中文原因。
+pub fn guard_path_problem(name: &str, path: &str) -> Option<String> {
+    let path = path.trim().replace('/', "\\");
+    if let Some(reason) = exe_path_problem(&path) {
+        return Some(reason);
+    }
+    let file = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
+    let name = name.trim();
+    (file != name.to_lowercase()).then(|| format!("文件名与进程名 {name} 不符"))
+}
+
 /// 规则里一个进程的校验：进程名按 [`process_name_problem`]，完整路径按 [`exe_path_problem`]。
 pub fn process_problem(p: &str) -> Option<String> {
     if is_process_name(p) {
@@ -336,6 +350,23 @@ mod tests {
         for p in [r"C:\a.exe", r"c:\A\B.EXE", r"D:\Program Files\x\y.exe"] {
             assert_eq!(exe_path_problem(p), None, "{p:?}");
         }
+    }
+
+    #[test]
+    fn guard_path_problem_table() {
+        assert_eq!(guard_path_problem("ChatGPT.exe", r"C:\N\chatgpt.EXE"), None);
+        assert_eq!(guard_path_problem(" chatgpt.exe ", " c:/n/ChatGPT.exe "), None);
+        for bad in [
+            r"\\srv\share\chatgpt.exe",
+            r"C:\a,b\chatgpt.exe",
+            r"C:\a;b\chatgpt.exe",
+            r"\\?\C:\N\chatgpt.exe",
+            "chatgpt.exe",
+            r"C:\N\other.exe",
+        ] {
+            assert!(guard_path_problem("chatgpt.exe", bad).is_some(), "{bad:?}");
+        }
+        assert_eq!(guard_path_problem("b.exe", r"C:\x\c.exe").as_deref(), Some("文件名与进程名 b.exe 不符"));
     }
 
     #[test]

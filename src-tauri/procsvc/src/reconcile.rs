@@ -432,7 +432,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Reconciler<I, G, K> {
                 inst.permits.remove(&exe_key(exe));
                 self.unknown_keys.remove(&exe_key(exe));
             }),
-            Op::Reset { exe } => self.killer.reset_ipv4_tcp(exe).map(|_| {
+            Op::Reset { exe } => self.killer.reset_ipv4_tcp(exe, &path_rule_exes(desired)).map(|_| {
                 self.pending_resets.remove(&exe_key(exe));
             }),
         };
@@ -634,6 +634,11 @@ fn permitted(r: &RuleSpec, k: &str) -> bool {
 }
 
 /// 规则涉及的所有 exe（进程本身与全部守护路径，不论 `on_fault`），按出现顺序。
+/// 当前按路径的规则的 exe：断开按进程名的规则的旧连接时跳过这些程序，它们归那些规则管。
+fn path_rule_exes(rules: &[RuleSpec]) -> Vec<String> {
+    rules.iter().filter(|r| r.kind == ProcessKind::Path).map(|r| r.exe_path.clone()).collect()
+}
+
 fn rule_exes(r: &RuleSpec) -> impl Iterator<Item = &str> {
     std::iter::once(r.exe_path.as_str()).chain(r.guard_paths.iter().map(String::as_str))
 }
@@ -1462,6 +1467,8 @@ mod tests {
             permits: HashSet<String>,
             /// `suspend` 被调用的次数（不进日志，免得影响按日志断言的测试）。
             suspends: usize,
+            /// 每次断连收到的 (exe, 按路径的规则的 exe)。
+            resets: Vec<(String, Vec<String>)>,
         }
 
         impl World {
@@ -1574,8 +1581,9 @@ mod tests {
         }
 
         impl ConnKiller for FakeK {
-            fn reset_ipv4_tcp(&mut self, exe: &str) -> Result<u32, String> {
+            fn reset_ipv4_tcp(&mut self, exe: &str, path_rule_exes: &[String]) -> Result<u32, String> {
                 let mut w = self.0.borrow_mut();
+                w.resets.push((exe.to_string(), path_rule_exes.to_vec()));
                 w.call("reset", line(&Op::Reset { exe: exe.into() }))?;
                 Ok(0)
             }
@@ -1644,6 +1652,18 @@ mod tests {
             assert_eq!(take_log(&w), lines(&plan(&v1, &v2)));
             assert_eq!(rec.current(), &v2[..]);
             assert_world_is(&w, &v2, "v2");
+        }
+
+        #[test]
+        fn name_reset_is_told_which_exes_path_rules_own() {
+            let (mut rec, w) = rig();
+            let canary = r"C:\Canary\chrome.exe";
+            let v = vec![
+                name_spec("a", "chrome.exe", Action::Proxy(target(1)), FaultPolicy::Direct, true, &[]),
+                spec("b", canary, Action::Direct, FaultPolicy::Direct, false),
+            ];
+            assert!(rec.apply(v).is_empty());
+            assert_eq!(w.borrow().resets, vec![("chrome.exe".to_string(), vec![canary.to_string()])]);
         }
 
         #[test]

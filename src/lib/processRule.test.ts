@@ -68,6 +68,8 @@ describe("entryError", () => {
   const other = rule({ name: "Other", processes: [n("a.exe"), p("C:\\g\\g.exe")], user_enabled: false });
   it("rejects incomplete paths", () => {
     expect(entryError(p("a.exe"), [], [])).toBe("不是完整路径（应以 C:\\ 之类的盘符开头）");
+    for (const unc of ["\\\\srv\\share\\a.exe", "\\\\?\\C:\\a\\a.exe"])
+      expect(entryError(p(unc), [], [])).toBe("不是完整路径（应以 C:\\ 之类的盘符开头）");
   });
   it("rejects non-exe", () => {
     expect(entryError(n("a.dll"), [], [])).toBe("a.dll 不是 .exe 程序");

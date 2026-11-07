@@ -17,7 +17,8 @@ import { useApplyResult } from "./ApplyResultSnackbar";
 /**
  * Shown when the tray's 退出 finds enabled block rules (Rust emits
  * "confirm-exit" with their names): quitting would cut those programs off.
- * Also reports why the tray's 停用进程分流并退出 did not quit ("exit-error").
+ * Also reports why a tray action failed ("exit-error"): 停用进程分流并退出 did
+ * not quit, or 启用 / 停用进程分流 could not be saved.
  */
 export function ExitConfirmDialog() {
   const [names, setNames] = useState<string[] | null>(null);
@@ -48,6 +49,7 @@ export function ExitConfirmDialog() {
     };
   }, [showError]);
 
+  // 仍然退出 always quits, so 不再提示 is saved right before it.
   const rememberChoice = async () => {
     if (!dontAsk) return;
     try {
@@ -66,9 +68,9 @@ export function ExitConfirmDialog() {
 
   const disableThenQuit = async () => {
     setBusy(true);
-    await rememberChoice();
     try {
-      await disableAndQuit.mutateAsync();
+      // 不再提示 is saved by the backend only once Routa really exits.
+      await disableAndQuit.mutateAsync(dontAsk);
     } catch {
       // Routa did not quit (programs may still be blocked); the mutation shows
       // why. The dialog stays open so 仍然退出 is still available.

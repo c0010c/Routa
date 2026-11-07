@@ -24,7 +24,10 @@ export function LearnedLocations({
   const [open, setOpen] = useState(false);
   if (learningNames(rule).length === 0) return null;
   const skipped = skippedOf(rule, others, routingEnabled);
-  const n = rule.learned.length;
+  // A learned path another enabled rule claims by path is not guarded by this rule (the backend
+  // doesn't send it): it shows up only as skipped and isn't counted.
+  const learned = rule.learned.filter((p) => !skipped.some((s) => s.path.toLowerCase() === p.toLowerCase()));
+  const n = learned.length;
   const isRunning = (p: string) => running.some((r) => r.exe_path.toLowerCase() === p.toLowerCase());
   return (
     <Box sx={{ fontSize: 12 }}>
@@ -45,7 +48,7 @@ export function LearnedLocations({
               程序联网后自动记录。在此之前，分流服务停止时拦不住。
             </Typography>
           )}
-          {rule.learned.map((p) => (
+          {learned.map((p) => (
             <Stack key={p} direction="row" sx={{ alignItems: "center", gap: 0.5, flexDirection: "row !important" }}>
               <Typography sx={{ ...mono, flex: 1 }}>{p}</Typography>
               {!isRunning(p) && (

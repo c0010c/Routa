@@ -23,7 +23,7 @@ pub fn prune_learned(r: &mut ProcessRule) {
         return;
     }
     let key = |p: &str| normalize_exe_path(p).to_lowercase();
-    let names: Vec<String> = r.processes.iter().filter(|p| p.kind == ProcessKind::Name).map(|p| key(&p.value)).collect();
+    let names: Vec<&str> = r.processes.iter().filter(|p| p.kind == ProcessKind::Name).map(|p| p.value.as_str()).collect();
     let paths: Vec<String> = r.processes.iter().filter(|p| p.kind == ProcessKind::Path).map(|p| key(&p.value)).collect();
     let mut seen = std::collections::HashSet::new();
     r.learned = std::mem::take(&mut r.learned)
@@ -31,9 +31,15 @@ pub fn prune_learned(r: &mut ProcessRule) {
         .map(|p| normalize_exe_path(&p))
         .filter(|p| {
             let k = key(p);
-            names.iter().any(|n| *n == super::validate::process_file_name(&k)) && !paths.contains(&k) && seen.insert(k)
+            is_guard_path_for(&names, p) && !paths.contains(&k) && seen.insert(k)
         })
         .collect();
+}
+
+/// `path` 是 `names` 中某个进程名的合法守护路径（与服务端 Apply 校验同一判断，见
+/// [`routa_procsvc_proto::guard_path_problem`]）：本地完整路径、不含 `,` `;`、文件名相符。
+pub fn is_guard_path_for<S: AsRef<str>>(names: &[S], path: &str) -> bool {
+    names.iter().any(|n| routa_procsvc_proto::guard_path_problem(n.as_ref(), path).is_none())
 }
 
 pub fn normalize(model: &mut Model) {
@@ -214,6 +220,24 @@ mod tests {
         m.process_routing.rules.push(ProcessRule { on_fault: FaultPolicy::Direct, ..base });
         normalize(&mut m);
         assert!(m.process_routing.rules[0].learned.is_empty());
+    }
+
+    #[test]
+    fn prune_learned_drops_paths_the_service_would_reject() {
+        let mut r = ProcessRule {
+            processes: vec![ProcessEntry::name("a.exe")],
+            learned: vec![
+                r"\\srv\share\a.exe".into(),
+                r"C:\x,y\a.exe".into(),
+                r"C:\x;y\a.exe".into(),
+                r"\\?\C:\A\a.exe".into(),
+                r"C:\A\a.exe".into(),
+            ],
+            on_fault: FaultPolicy::Block,
+            ..ProcessRule::default()
+        };
+        prune_learned(&mut r);
+        assert_eq!(r.learned, vec![r"C:\A\a.exe".to_string()]);
     }
 
     #[test]

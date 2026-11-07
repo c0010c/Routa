@@ -13,7 +13,7 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 
 use crate::engine::ConnKiller;
-use crate::paths::{exe_of_pid, matches_process, pattern_kind};
+use crate::paths::{exe_of_pid, reset_hits};
 
 /// `SetTcpEntry` 使用的 `MIB_TCPROW`：与 `MIB_TCPROW_OWNER_PID` 前五个字段布局一致。
 #[repr(C)]
@@ -25,9 +25,9 @@ struct TcpRow {
     remote_port: u32,
 }
 
-/// 命中 `exe`（完整路径，或只写进程名，见 [`matches_process`]）的所有进程 PID。
-pub fn pids_for_exe(exe: &str) -> Vec<u32> {
-    let kind = pattern_kind(exe);
+/// 命中 `exe`（完整路径，或只写进程名）的所有进程 PID；进程名时跳过归按路径的规则管的进程
+/// （见 [`reset_hits`]）。
+pub fn pids_for_exe(exe: &str, path_rule_exes: &[String]) -> Vec<u32> {
     let mut pids = Vec::new();
     // SAFETY: 快照句柄只在本函数内使用并关闭；entry 的 dwSize 已按要求初始化。
     unsafe {
@@ -40,7 +40,7 @@ pub fn pids_for_exe(exe: &str) -> Vec<u32> {
         let mut ok = Process32FirstW(snap, &mut entry);
         while ok != 0 {
             let pid = entry.th32ProcessID;
-            if pid != 0 && exe_of_pid(pid).is_some_and(|p| matches_process(kind, exe, &p)) {
+            if pid != 0 && exe_of_pid(pid).is_some_and(|p| reset_hits(exe, path_rule_exes, &p)) {
                 pids.push(pid);
             }
             ok = Process32NextW(snap, &mut entry);
@@ -88,8 +88,8 @@ fn tcp_rows() -> Result<Vec<MIB_TCPROW_OWNER_PID>, String> {
 pub struct TcpKiller;
 
 impl ConnKiller for TcpKiller {
-    fn reset_ipv4_tcp(&mut self, exe: &str) -> Result<u32, String> {
-        let pids = pids_for_exe(exe);
+    fn reset_ipv4_tcp(&mut self, exe: &str, path_rule_exes: &[String]) -> Result<u32, String> {
+        let pids = pids_for_exe(exe, path_rule_exes);
         if pids.is_empty() {
             return Ok(0);
         }
@@ -129,14 +129,23 @@ mod tests {
     #[test]
     fn finds_own_pid() {
         let me = std::env::current_exe().unwrap();
-        let pids = pids_for_exe(&me.to_string_lossy());
+        let pids = pids_for_exe(&me.to_string_lossy(), &[]);
         assert!(pids.contains(&std::process::id()), "{pids:?}");
+    }
+
+    #[test]
+    fn name_pattern_skips_exes_owned_by_path_rules() {
+        let me = std::env::current_exe().unwrap();
+        let name = me.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(pids_for_exe(&name, &[]).contains(&std::process::id()));
+        let path_rules = vec![me.to_string_lossy().to_uppercase()];
+        assert!(!pids_for_exe(&name, &path_rules).contains(&std::process::id()));
     }
 
     #[test]
     fn unknown_exe_resets_nothing() {
         let n = TcpKiller
-            .reset_ipv4_tcp(r"C:\definitely\not\here.exe")
+            .reset_ipv4_tcp(r"C:\definitely\not\here.exe", &[])
             .unwrap();
         assert_eq!(n, 0);
     }
@@ -151,7 +160,7 @@ mod tests {
         client.write_all(b"x").unwrap();
 
         let me = std::env::current_exe().unwrap();
-        let n = TcpKiller.reset_ipv4_tcp(&me.to_string_lossy()).unwrap();
+        let n = TcpKiller.reset_ipv4_tcp(&me.to_string_lossy(), &[]).unwrap();
         assert!(n >= 1, "reset {n}");
 
         std::thread::sleep(std::time::Duration::from_millis(300));

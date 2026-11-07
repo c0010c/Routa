@@ -270,6 +270,13 @@ describe("ProcessRoutingPage", () => {
     await waitFor(() => expect(commands.removeLearnedProcessPath).toHaveBeenCalledWith("r1", A));
   });
 
+  it("doesn't tag a disabled block rule", async () => {
+    const off: ProcessRule = { ...model.process_routing.rules[0], on_fault: "Block", user_enabled: false };
+    renderPage(base, withRules(off));
+    const row = (await screen.findAllByText("curl.exe"))[0].closest("tr")!;
+    expect(within(row).queryByText("不可用时阻断")).not.toBeInTheDocument();
+  });
+
   it("searches entry values", async () => {
     renderPage(base);
     const search = await screen.findByLabelText("搜索规则名称或进程");

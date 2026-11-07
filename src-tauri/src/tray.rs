@@ -166,9 +166,10 @@ pub fn exit_needs_confirm(m: &Model) -> bool {
 /// What "停用进程分流并退出" does after the disable was saved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DisableExit {
-    /// Nothing is blocking any more (or no service could be blocking): exit.
+    /// Nothing is blocking any more (or no service is installed): exit.
     ExitNow,
-    /// The service runs but has not confirmed the new rules yet.
+    /// The service has not confirmed the new rules yet (it may still be
+    /// starting: the client starts a stopped service by itself).
     Wait,
     /// Programs may still be blocked: do not exit. The reason, for the user.
     Fail(String),
@@ -178,10 +179,16 @@ pub enum DisableExit {
 /// current (disabled) rules, and whether the wait ran out.
 pub fn disable_exit_decision(component: &ComponentState, confirmed: bool, timed_out: bool) -> DisableExit {
     match component {
-        ComponentState::NotInstalled | ComponentState::Stopped => DisableExit::ExitNow,
-        ComponentState::Running if confirmed => DisableExit::ExitNow,
-        ComponentState::Running if !timed_out => DisableExit::Wait,
+        ComponentState::NotInstalled => DisableExit::ExitNow,
+        // Stopped is also the state before the first connection and during a
+        // maintenance pause, and a really stopped service leaves its WFP blocks
+        // in place: only the service's confirmation makes exiting safe.
+        ComponentState::Running | ComponentState::Stopped if confirmed => DisableExit::ExitNow,
+        ComponentState::Running | ComponentState::Stopped if !timed_out => DisableExit::Wait,
         ComponentState::Running => DisableExit::Fail("分流服务没有确认新的规则".into()),
+        ComponentState::Stopped => DisableExit::Fail(
+            "分流服务没有运行，之前的阻断规则可能还在生效。可以在「设置 → 进程分流 → 清理残留阻断规则」中清理".into(),
+        ),
         ComponentState::NeedsUpdate => DisableExit::Fail("分流服务需要更新".into()),
         ComponentState::OwnedByOtherUser => DisableExit::Fail("分流服务属于其他 Windows 用户".into()),
         ComponentState::Error { message } => DisableExit::Fail(message.clone()),
@@ -193,10 +200,11 @@ fn not_disabled(reason: &str) -> String {
 }
 
 /// Turns process routing off and exits once no program can stay blocked: right
-/// away without a service (NotInstalled / Stopped), otherwise after the running
-/// service confirmed the new rules (at most `DISABLE_CONFIRM_WAIT`). Any other
-/// outcome returns the reason and does not exit.
-pub async fn disable_routing_and_quit(app: &AppHandle, rt: &Runtime) -> Result<(), String> {
+/// away without a service (NotInstalled), otherwise after the service confirmed
+/// the new rules (at most `DISABLE_CONFIRM_WAIT`). Any other
+/// outcome returns the reason and does not exit. `dont_ask_again` (the confirm
+/// dialog's 不再提示) turns the exit prompt off, but only once Routa really exits.
+pub async fn disable_routing_and_quit(app: &AppHandle, rt: &Runtime, dont_ask_again: bool) -> Result<(), String> {
     use crate::procroute::client::{current_rules_confirmed, runtime_changed, status};
     rt.mutate_process_routing(|p| p.enabled = false)
         .await
@@ -209,6 +217,12 @@ pub async fn disable_routing_and_quit(app: &AppHandle, rt: &Runtime) -> Result<(
             DisableExit::ExitNow => break,
             DisableExit::Wait => tokio::time::sleep(Duration::from_millis(100)).await,
             DisableExit::Fail(reason) => return Err(not_disabled(&reason)),
+        }
+    }
+    if dont_ask_again {
+        // Not asking next time is secondary; the user still wants to quit.
+        if let Err(e) = rt.mutate_process_routing(|p| p.exit_prompt = false).await {
+            eprintln!("set exit_prompt failed: {}", crate::desktop::validation(e));
         }
     }
     // Goes through RunEvent::ExitRequested, which runs the shutdown.
@@ -278,6 +292,21 @@ fn refresh_menu(app: &AppHandle) {
     }
 }
 
+/// Message for a failed tray 启用 / 停用进程分流.
+pub fn toggle_failed(enable: bool, reason: &str) -> String {
+    format!("{}进程分流失败：{reason}", if enable { "启用" } else { "停用" })
+}
+
+/// A tray action failed: open the window and show why there (the frontend's
+/// result snackbar listens for "exit-error").
+fn report_error(app: &AppHandle, message: String) {
+    eprintln!("tray: {message}");
+    show_main_window(app);
+    if let Err(e) = app.emit("exit-error", message) {
+        eprintln!("emit exit-error failed: {e}");
+    }
+}
+
 pub fn show_main_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -305,9 +334,11 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             }
             "routing-toggle" => {
                 let rt = Arc::clone(&*app.state::<Arc<Runtime>>());
+                let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = rt.mutate_process_routing(|p| p.enabled = !p.enabled).await {
-                        eprintln!("tray: toggle process routing failed: {e:?}");
+                    let enable = !rt.model().process_routing.enabled;
+                    if let Err(e) = rt.mutate_process_routing(|p| p.enabled = enable).await {
+                        report_error(&app, toggle_failed(enable, &crate::desktop::validation(e)));
                     }
                 });
             }
@@ -315,13 +346,8 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                 let rt = Arc::clone(&*app.state::<Arc<Runtime>>());
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = disable_routing_and_quit(&app, &rt).await {
-                        eprintln!("tray: {e}");
-                        show_main_window(&app);
-                        // Shown by the frontend's result snackbar.
-                        if let Err(e) = app.emit("exit-error", e) {
-                            eprintln!("emit exit-error failed: {e}");
-                        }
+                    if let Err(e) = disable_routing_and_quit(&app, &rt, false).await {
+                        report_error(&app, e);
                     }
                 });
             }
@@ -485,16 +511,25 @@ mod tests {
     }
 
     #[test]
+    fn toggle_failure_names_the_direction() {
+        assert_eq!(toggle_failed(true, "规则无效"), "启用进程分流失败：规则无效");
+        assert_eq!(toggle_failed(false, "保存失败"), "停用进程分流失败：保存失败");
+    }
+
+    #[test]
     fn disable_exit_waits_for_confirmation_and_never_exits_blocked() {
         use DisableExit::*;
-        for c in [ComponentState::NotInstalled, ComponentState::Stopped] {
-            assert_eq!(disable_exit_decision(&c, false, false), ExitNow, "{c:?}");
+        assert_eq!(disable_exit_decision(&ComponentState::NotInstalled, false, false), ExitNow);
+        for c in [ComponentState::Running, ComponentState::Stopped] {
+            assert_eq!(disable_exit_decision(&c, true, false), ExitNow, "{c:?}");
+            assert_eq!(disable_exit_decision(&c, true, true), ExitNow, "{c:?}");
+            assert_eq!(disable_exit_decision(&c, false, false), Wait, "{c:?}");
+            assert!(matches!(disable_exit_decision(&c, false, true), Fail(_)), "{c:?}");
         }
-        let running = ComponentState::Running;
-        assert_eq!(disable_exit_decision(&running, true, false), ExitNow);
-        assert_eq!(disable_exit_decision(&running, true, true), ExitNow);
-        assert_eq!(disable_exit_decision(&running, false, false), Wait);
-        assert!(matches!(disable_exit_decision(&running, false, true), Fail(_)));
+        match disable_exit_decision(&ComponentState::Stopped, false, true) {
+            Fail(reason) => assert!(reason.contains("清理残留阻断规则"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
         let err = ComponentState::Error { message: "服务启动失败".into() };
         assert_eq!(disable_exit_decision(&err, true, false), Fail("服务启动失败".into()));
         for c in [ComponentState::NeedsUpdate, ComponentState::OwnedByOtherUser] {
