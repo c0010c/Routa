@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use routa_procsvc_proto::{
-    decode, decode_len, encode, Action, DesiredState, FaultPolicy, Interruption, Request, Response,
+    decode, decode_len, encode, Action, DesiredState, Interruption, ProcessKind, Request, Response,
     RuleSpec, SvcStatus, PROTO_VERSION,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -36,8 +36,8 @@ use windows_sys::Win32::System::Threading::{
 use crate::engine::{ConnKiller, Guard, Interceptor};
 use crate::fallback::{fallback, RoutaGone};
 use crate::persist;
-use crate::paths::matches_process;
-use crate::reconcile::{exe_key, Reconciler};
+use crate::paths::{matches_process, same_path};
+use crate::reconcile::{exe_key, guard_exes, Reconciler};
 
 /// ProxyBridge 最多 32 个代理配置（ruling R13）。
 const MAX_PROXY_RULES: usize = 32;
@@ -86,8 +86,7 @@ struct Routa {
 impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
     /// 服务启动：读回上次的状态并按"Routa 不在"回落。
     ///
-    /// - 读到状态、上次正常停止：按 `on_routa_exit`（`NeverConnected`）；
-    /// - 读到状态、上次非正常停止（崩溃、被杀）：按每条规则的 `on_fault`（`Crashed`），并记一次中断；
+    /// - 读到状态：按每条规则的 `on_fault` 回落；上次非正常停止（崩溃、被杀）时另记一次中断；
     /// - 读到状态时，删掉不在该状态里受保护的残留永久阻断（ruling R11）；
     /// - 状态缺失或损坏：什么都不动，已有的永久阻断全部保留（宁可多挡）。
     ///
@@ -191,6 +190,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
                 truncated_flows: self.truncated_flows,
                 conflicts: conflicts(),
                 rules: self.reconciler.status(),
+                learned: Vec::new(),
             }),
             Request::CleanupFilters => {
                 let keep = guarded_keys(self.reconciler.current());
@@ -329,13 +329,9 @@ fn applied(errors: Vec<String>) -> Response {
     }
 }
 
-/// 需要 WFP 永久阻断的 exe（on_fault=Block）。
+/// 需要 WFP 永久阻断的 exe：所有规则 [`guard_exes`] 的并集（按 [`exe_key`]）。
 fn guarded_keys(rules: &[RuleSpec]) -> HashSet<String> {
-    rules
-        .iter()
-        .filter(|r| r.on_fault == FaultPolicy::Block)
-        .map(|r| exe_key(&r.exe_path))
-        .collect()
+    rules.iter().flat_map(guard_exes).map(exe_key).collect()
 }
 
 /// 不能作为规则目标的 exe（spec 4）：服务自身（安装后的路径与正在运行的路径）。
@@ -360,15 +356,40 @@ fn validate(state: &DesiredState) -> Result<(), String> {
             return Err(format!("规则 id 重复：{}", r.id));
         }
         let exe = &r.exe_path;
-        if let Some(reason) = routa_procsvc_proto::process_problem(exe) {
-            return Err(format!("程序路径无效（{reason}）：{exe}"));
+        match r.kind {
+            ProcessKind::Path => {
+                if let Some(reason) = routa_procsvc_proto::exe_path_problem(exe) {
+                    return Err(format!("程序路径无效（{reason}）：{exe}"));
+                }
+                if !r.guard_paths.is_empty() {
+                    return Err(format!("只有按进程名的规则可以带守护路径：{exe}"));
+                }
+            }
+            ProcessKind::Name => {
+                if let Some(reason) = routa_procsvc_proto::process_name_problem(exe) {
+                    return Err(format!("进程名无效（{reason}）：{exe}"));
+                }
+            }
         }
-        if own.iter().any(|o| matches_process(exe, o)) {
+        if own.iter().any(|o| matches_process(r.kind, exe, o)) {
             return Err(format!("不能对进程分流组件自身设置规则：{exe}"));
         }
-        // WFP 只能按完整路径识别程序，按进程名的规则没法在故障时阻断。
-        if routa_procsvc_proto::is_process_name(exe) && r.on_fault == FaultPolicy::Block {
-            return Err(format!("按进程名匹配的规则不能在故障时阻断：{exe}"));
+        // 守护路径交给 WFP 按完整路径阻断：必须是完整路径，不能是服务自身，
+        // 也不能与某条按路径的规则重叠（同一个 exe 的阻断 / 放行只能归一条规则管）。
+        for g in &r.guard_paths {
+            if let Some(reason) = routa_procsvc_proto::exe_path_problem(g) {
+                return Err(format!("守护路径无效（{reason}）：{g}"));
+            }
+            if own.iter().any(|o| same_path(g, o)) {
+                return Err(format!("不能对进程分流组件自身设置规则：{g}"));
+            }
+            if let Some(p) = state
+                .rules
+                .iter()
+                .find(|p| p.kind == ProcessKind::Path && exe_key(&p.exe_path) == exe_key(g))
+            {
+                return Err(format!("守护路径与规则 {} 重叠：{g}", p.id));
+            }
         }
         if !exes.insert(exe_key(exe)) {
             return Err(format!("程序路径重复：{exe}"));
@@ -653,7 +674,7 @@ pub(crate) mod tests {
     use crate::persist;
     use crate::reconcile::exe_key;
     use routa_procsvc_proto::{
-        Action, ExitPolicy, FaultPolicy, Flow, ProxyKind, ProxyTarget, RuleSpec, PROTO_VERSION,
+        Action, FaultPolicy, Flow, ProcessKind, ProxyKind, ProxyTarget, RuleSpec, PROTO_VERSION,
     };
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
@@ -803,10 +824,17 @@ pub(crate) mod tests {
         })
     }
 
+    /// `exe` 含 `\` 时按完整路径，否则按进程名。
     pub(crate) fn rule(id: &str, exe: &str, on_fault: FaultPolicy) -> RuleSpec {
         RuleSpec {
             id: id.into(),
             exe_path: exe.into(),
+            kind: if exe.contains('\\') {
+                ProcessKind::Path
+            } else {
+                ProcessKind::Name
+            },
+            guard_paths: vec![],
             action: proxy(),
             on_fault,
             reset_on_change: false,
@@ -814,13 +842,12 @@ pub(crate) mod tests {
     }
 
     /// a：on_fault=Block；b：on_fault=Direct；两条都是 Proxy。
-    pub(crate) fn state(exit: ExitPolicy) -> DesiredState {
+    pub(crate) fn state() -> DesiredState {
         DesiredState {
             rules: vec![
                 rule("a", A, FaultPolicy::Block),
                 rule("b", B, FaultPolicy::Direct),
             ],
-            on_routa_exit: exit,
             routa_pid: std::process::id(),
         }
     }
@@ -918,7 +945,7 @@ pub(crate) mod tests {
 
         // 未握手
         assert!(matches!(
-            srv.handle(Request::Apply(state(ExitPolicy::Direct)), &mut s),
+            srv.handle(Request::Apply(state()), &mut s),
             Response::Error(_)
         ));
 
@@ -937,7 +964,7 @@ pub(crate) mod tests {
         );
         assert!(!s.hello_ok);
         assert_eq!(
-            srv.handle(Request::Apply(state(ExitPolicy::Direct)), &mut s),
+            srv.handle(Request::Apply(state()), &mut s),
             Response::Error("版本不一致".into())
         );
         assert!(log(&world).is_empty(), "{:?}", log(&world));
@@ -958,24 +985,19 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn boot_with_saved_state_applies_exit_policy() {
+    fn boot_with_saved_state_follows_on_fault() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(persist::STATE_FILE);
 
-        persist::save(&path, &state(ExitPolicy::Direct)).unwrap();
+        persist::save(&path, &state()).unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
-        assert_eq!(action(&world, "a"), Some(PbAction::Direct));
-        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
-        assert!(permitted(&world, A));
-        let mut s = hello(&mut srv);
-        assert_eq!(status(&mut srv, &mut s).last_interruption, None);
-
-        persist::save(&path, &state(ExitPolicy::Block)).unwrap();
-        let (_srv, world) = boot(dir.path(), &[], true);
         assert_eq!(action(&world, "a"), Some(PbAction::Block));
-        assert_eq!(action(&world, "b"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
         assert!(!permitted(&world, A));
         assert!(w(&world).blocks.contains_key(&exe_key(A)));
+        let mut s = hello(&mut srv);
+        // 正常停止后的启动不算中断
+        assert_eq!(status(&mut srv, &mut s).last_interruption, None);
     }
 
     #[test]
@@ -983,7 +1005,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         persist::save(
             &dir.path().join(persist::STATE_FILE),
-            &state(ExitPolicy::Direct),
+            &state(),
         )
         .unwrap();
         let (mut srv, world) = boot(dir.path(), &[], false);
@@ -1004,7 +1026,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         persist::save(
             &dir.path().join(persist::STATE_FILE),
-            &state(ExitPolicy::Block),
+            &state(),
         )
         .unwrap();
         // a 受保护（保留，写法不同也算同一个）；b 是 on_fault=Direct、x 已不在状态里：都是残留
@@ -1024,12 +1046,12 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
         let mut s = hello(&mut srv);
-        applied(&mut srv, &mut s, state(ExitPolicy::Block));
+        applied(&mut srv, &mut s, state());
         assert_eq!(action(&world, "a"), Some(PbAction::Proxy));
         assert!(permitted(&world, A));
         assert_eq!(
             persist::load(&dir.path().join(persist::STATE_FILE)),
-            Some(state(ExitPolicy::Block))
+            Some(state())
         );
 
         srv.end_session(&s);
@@ -1046,7 +1068,7 @@ pub(crate) mod tests {
         let (mut srv, world) = boot(dir.path(), &[], true);
         let mut s = hello(&mut srv);
         w(&world).fail_rules.insert("a".into());
-        assert!(matches!(srv.handle(Request::Apply(state(ExitPolicy::Block)), &mut s), Response::Applied { .. }));
+        assert!(matches!(srv.handle(Request::Apply(state()), &mut s), Response::Applied { .. }));
         w(&world).fail_rules.clear();
         srv.end_session(&s);
         assert_eq!(action(&world, "b"), Some(PbAction::Direct));
@@ -1062,7 +1084,9 @@ pub(crate) mod tests {
             assert_eq!(persist::load(&dir.path().join(persist::STATE_FILE)), saved);
             assert_eq!(srv.handle(Request::Goodbye, &mut reconnected), Response::Ok);
             srv.end_session(&reconnected);
-            assert!(srv.reconciler.current().iter().all(|r| r.action == Action::Block));
+            let actions: Vec<(&str, &Action)> =
+                srv.reconciler.current().iter().map(|r| (r.id.as_str(), &r.action)).collect();
+            assert_eq!(actions, vec![("a", &Action::Block), ("b", &Action::Direct)]);
         }
     }
 
@@ -1071,7 +1095,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
         let mut s = hello(&mut srv);
-        applied(&mut srv, &mut s, state(ExitPolicy::Block));
+        applied(&mut srv, &mut s, state());
         srv.end_session(&s);
         let mut s = hello(&mut srv);
         assert!(matches!(srv.handle(Request::Attach { routa_pid: 0 }, &mut s), Response::Error(_)));
@@ -1082,16 +1106,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn disconnect_after_goodbye_applies_exit_policy() {
+    fn disconnect_after_goodbye_follows_on_fault() {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
         let mut s = hello(&mut srv);
-        applied(&mut srv, &mut s, state(ExitPolicy::Block));
+        applied(&mut srv, &mut s, state());
         assert_eq!(srv.handle(Request::Goodbye, &mut s), Response::Ok);
         assert!(s.said_goodbye);
         srv.end_session(&s);
         assert_eq!(action(&world, "a"), Some(PbAction::Block));
-        assert_eq!(action(&world, "b"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
+        assert!(!permitted(&world, A));
         let mut s2 = hello(&mut srv);
         assert_eq!(status(&mut srv, &mut s2).last_interruption, None);
     }
@@ -1101,9 +1126,10 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
         let mut s = hello(&mut srv);
-        applied(&mut srv, &mut s, state(ExitPolicy::Block));
+        applied(&mut srv, &mut s, state());
         srv.system_ending();
-        assert_eq!(action(&world, "b"), Some(PbAction::Block));
+        assert_eq!(action(&world, "a"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
         // 关机时 Routa 随后被杀、管道断开：不再按崩溃处理
         let before = log(&world);
         srv.end_session(&s);
@@ -1120,15 +1146,15 @@ pub(crate) mod tests {
         // 没有在场的 Routa：什么都不做
         srv.session_logoff(mine);
         let mut s = hello(&mut srv);
-        applied(&mut srv, &mut s, state(ExitPolicy::Block));
+        applied(&mut srv, &mut s, state());
         let before = log(&world);
         srv.session_logoff(mine + 1);
         assert_eq!(log(&world), before);
         assert_eq!(action(&world, "b"), Some(PbAction::Proxy));
-        // Routa 所在会话注销：按正常退出
+        // Routa 所在会话注销：按正常退出（按每条规则的 on_fault）
         srv.session_logoff(mine);
         assert_eq!(action(&world, "a"), Some(PbAction::Block));
-        assert_eq!(action(&world, "b"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
         assert_eq!(status(&mut srv, &mut s).last_interruption, None);
     }
 
@@ -1137,7 +1163,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
         let mut s = hello(&mut srv);
-        applied(&mut srv, &mut s, state(ExitPolicy::Direct));
+        applied(&mut srv, &mut s, state());
         srv.end_session(&s);
         assert_eq!(action(&world, "a"), Some(PbAction::Block));
         let before = log(&world);
@@ -1148,7 +1174,7 @@ pub(crate) mod tests {
 
         // 新会话的 Hello + Apply 接管；旧会话的迟到事件不影响它
         let mut s2 = hello(&mut srv);
-        applied(&mut srv, &mut s2, state(ExitPolicy::Direct));
+        applied(&mut srv, &mut s2, state());
         assert_eq!(action(&world, "a"), Some(PbAction::Proxy));
         srv.end_session(&s);
         assert_eq!(action(&world, "a"), Some(PbAction::Proxy));
@@ -1159,7 +1185,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         persist::save(
             &dir.path().join(persist::STATE_FILE),
-            &state(ExitPolicy::Direct),
+            &state(),
         )
         .unwrap();
         // 上次非正常停止：按 Crashed 回落，规则 a 为 Block
@@ -1173,7 +1199,8 @@ pub(crate) mod tests {
         );
         assert_eq!(srv.handle(Request::Goodbye, &mut s), Response::Ok);
         srv.end_session(&s);
-        assert_eq!(action(&world, "a"), Some(PbAction::Direct));
+        assert_eq!(action(&world, "a"), Some(PbAction::Block));
+        assert_eq!(action(&world, "b"), Some(PbAction::Direct));
 
         let mut s2 = hello(&mut srv);
         let reason = status(&mut srv, &mut s2).last_interruption.map(|i| i.reason);
@@ -1194,7 +1221,7 @@ pub(crate) mod tests {
         let (mut srv, world) = boot(dir.path(), &[], true);
         let mut child = spawn_routa();
         let mut s = hello(&mut srv);
-        let mut st = state(ExitPolicy::Block);
+        let mut st = state();
         st.routa_pid = child.id();
         applied(&mut srv, &mut s, st);
         srv.check_routa();
@@ -1216,10 +1243,58 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[], true);
         let mut s = hello(&mut srv);
-        let mut st = state(ExitPolicy::Direct);
-        st.rules[1].exe_path = "Chat.exe".into();
+        let mut st = state();
+        st.rules[1] = rule("b", "Chat.exe", FaultPolicy::Direct);
         applied(&mut srv, &mut s, st);
         assert_eq!(action(&world, "b"), Some(PbAction::Proxy));
+    }
+
+    #[test]
+    fn apply_accepts_name_rule_blocking_on_fault() {
+        let guard = r"C:\x\a.exe";
+        let dir = tempfile::tempdir().unwrap();
+        let (mut srv, world) = boot(dir.path(), &[], true);
+        let mut s = hello(&mut srv);
+        let mut st = state();
+        st.rules[0] = RuleSpec {
+            guard_paths: vec![guard.into()],
+            ..rule("a", "a.exe", FaultPolicy::Block)
+        };
+        applied(&mut srv, &mut s, st.clone());
+        assert_eq!(w(&world).rules.get("a"), Some(&("a.exe".to_string(), PbAction::Proxy)));
+        let keys: HashSet<String> = w(&world).blocks.keys().cloned().collect();
+        assert_eq!(keys, HashSet::from([exe_key(guard)]));
+        assert!(permitted(&world, guard));
+        // 守护路径受 CleanupFilters 保护
+        assert_eq!(srv.handle(Request::CleanupFilters, &mut s), Response::Ok);
+        assert!(w(&world).blocks.contains_key(&exe_key(guard)));
+        // Routa 正常退出：按 on_fault 阻断，撤掉守护路径的放行
+        assert_eq!(srv.handle(Request::Goodbye, &mut s), Response::Ok);
+        srv.end_session(&s);
+        assert_eq!(action(&world, "a"), Some(PbAction::Block));
+        assert!(!permitted(&world, guard));
+        assert!(w(&world).blocks.contains_key(&exe_key(guard)));
+    }
+
+    #[test]
+    fn guarded_keys_include_guard_paths() {
+        let guard = r"C:\x\a.exe";
+        let rules = vec![
+            RuleSpec {
+                guard_paths: vec![guard.into()],
+                ..rule("a", "a.exe", FaultPolicy::Block)
+            },
+            rule("p", A, FaultPolicy::Block),
+            rule("d", B, FaultPolicy::Direct),
+            RuleSpec {
+                guard_paths: vec![r"C:\y\c.exe".into()],
+                ..rule("c", "c.exe", FaultPolicy::Direct)
+            },
+        ];
+        assert_eq!(
+            guarded_keys(&rules),
+            HashSet::from([exe_key(guard), exe_key(A)])
+        );
     }
 
     #[test]
@@ -1295,16 +1370,56 @@ pub(crate) mod tests {
             ),
             ("dead routa", |s| s.routa_pid = 0, "Routa 进程"),
             (
-                "name with fault block",
+                "path kind with name",
                 |s| s.rules[0].exe_path = "a.exe".into(),
-                "不能在故障时阻断",
+                "程序路径无效",
             ),
-            ("bad name", |s| s.rules[1].exe_path = "*.exe".into(), "不能包含"),
+            (
+                "name kind with dir",
+                |s| s.rules[0].kind = ProcessKind::Name,
+                "进程名无效",
+            ),
+            (
+                "bad name",
+                |s| s.rules[1] = rule("b", "*.exe", FaultPolicy::Direct),
+                "不能包含",
+            ),
+            (
+                "guard paths on path rule",
+                |s| s.rules[0].guard_paths = vec![r"C:\x\a.exe".into()],
+                "只有按进程名的规则可以带守护路径",
+            ),
+            (
+                "guard path not full",
+                |s| {
+                    s.rules[1] = rule("b", "b.exe", FaultPolicy::Block);
+                    s.rules[1].guard_paths = vec!["b.exe".into()];
+                },
+                "守护路径无效",
+            ),
+            (
+                "guard path overlaps path rule",
+                |s| {
+                    s.rules[1] = rule("b", "a.exe", FaultPolicy::Block);
+                    s.rules[1].guard_paths = vec![r"c:\APP\A.EXE".into()];
+                },
+                "守护路径与规则 a 重叠",
+            ),
+            (
+                "service exe as guard path",
+                |s| {
+                    let p = std::env::current_exe().unwrap();
+                    s.rules[1] = rule("b", "b.exe", FaultPolicy::Block);
+                    s.rules[1].guard_paths = vec![p.to_string_lossy().into_owned()];
+                },
+                "组件自身",
+            ),
             (
                 "service exe by name",
                 |s| {
                     let p = std::env::current_exe().unwrap();
-                    s.rules[1].exe_path = p.file_name().unwrap().to_string_lossy().to_uppercase();
+                    let name = p.file_name().unwrap().to_string_lossy().to_uppercase();
+                    s.rules[1] = rule("b", &name, FaultPolicy::Direct);
                 },
                 "组件自身",
             ),
@@ -1329,7 +1444,7 @@ pub(crate) mod tests {
             let dir = tempfile::tempdir().unwrap();
             let (mut srv, world) = boot(dir.path(), &[], true);
             let mut s = hello(&mut srv);
-            let mut st = state(ExitPolicy::Direct);
+            let mut st = state();
             edit(&mut st);
             match srv.handle(Request::Apply(st), &mut s) {
                 Response::Error(e) => assert!(e.contains(want), "{name}: {e}"),
@@ -1343,7 +1458,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, _world) = boot(dir.path(), &[], true);
         let mut s = hello(&mut srv);
-        let mut st = state(ExitPolicy::Direct);
+        let mut st = state();
         st.rules = (0..34)
             .map(|i| {
                 let mut r = rule(
@@ -1370,7 +1485,7 @@ pub(crate) mod tests {
         let mut srv = Server::boot(rec, path, "S-1-5-21-1".into(), true);
         let mut s = hello(&mut srv);
         let before = log(&world);
-        match srv.handle(Request::Apply(state(ExitPolicy::Direct)), &mut s) {
+        match srv.handle(Request::Apply(state()), &mut s) {
             Response::Error(e) => assert!(e.contains("保存状态失败"), "{e}"),
             other => panic!("{other:?}"),
         }
@@ -1386,7 +1501,7 @@ pub(crate) mod tests {
         let (mut srv, world) = boot(dir.path(), &[], true);
         w(&world).fail_rules.insert("a".into());
         let mut s = hello(&mut srv);
-        match srv.handle(Request::Apply(state(ExitPolicy::Direct)), &mut s) {
+        match srv.handle(Request::Apply(state()), &mut s) {
             Response::Applied { errors } => {
                 assert!(errors.iter().any(|e| e.contains("a 坏了")), "{errors:?}")
             }
@@ -1400,7 +1515,7 @@ pub(crate) mod tests {
         assert_eq!(report.rules.iter().find(|r| r.id == "a").unwrap().action.as_deref(), Some("Block"));
         assert_eq!(report.rules.iter().find(|r| r.id == "b").unwrap().action.as_deref(), Some("Proxy"));
         w(&world).fail_rules.clear();
-        assert_eq!(srv.handle(Request::RetryApply(state(ExitPolicy::Direct)), &mut s), Response::Ok);
+        assert_eq!(srv.handle(Request::RetryApply(state()), &mut s), Response::Ok);
         assert!(status(&mut srv, &mut s).rules.iter().all(|r| r.action.as_deref() == Some("Proxy")));
     }
 
@@ -1430,7 +1545,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut srv, world) = boot(dir.path(), &[r"C:\old\x.exe"], true);
         let mut s = hello(&mut srv);
-        applied(&mut srv, &mut s, state(ExitPolicy::Direct));
+        applied(&mut srv, &mut s, state());
         assert_eq!(srv.handle(Request::CleanupFilters, &mut s), Response::Ok);
         let keys: HashSet<String> = w(&world).blocks.keys().cloned().collect();
         assert_eq!(keys, HashSet::from([exe_key(A)]));
@@ -1504,11 +1619,11 @@ pub(crate) mod tests {
             let name = unique_pipe_name();
 
             let client = async {
-                // 会话 1：正常退出 → on_routa_exit
+                // 会话 1：正常退出 → 按每条规则的 on_fault
                 let mut c = open(&name).await;
                 hello(&mut c).await;
                 assert_eq!(
-                    call(&mut c, Request::Apply(state(ExitPolicy::Block))).await,
+                    call(&mut c, Request::Apply(state())).await,
                     Response::Ok
                 );
                 assert_eq!(action(&world, "a"), Some(PbAction::Proxy));
@@ -1517,7 +1632,8 @@ pub(crate) mod tests {
                 assert_eq!(call(&mut c, Request::Goodbye).await, Response::Ok);
                 drop(c);
                 eventually("graceful fallback", || {
-                    action(&world, "b") == Some(PbAction::Block)
+                    action(&world, "a") == Some(PbAction::Block)
+                        && action(&world, "b") == Some(PbAction::Direct)
                 })
                 .await;
 
@@ -1525,7 +1641,7 @@ pub(crate) mod tests {
                 let mut routa = spawn_routa();
                 let mut c = open(&name).await;
                 hello(&mut c).await;
-                let mut st = state(ExitPolicy::Block);
+                let mut st = state();
                 st.routa_pid = routa.id();
                 assert_eq!(call(&mut c, Request::Apply(st)).await, Response::Ok);
                 assert_eq!(action(&world, "b"), Some(PbAction::Proxy));

@@ -21,7 +21,7 @@ use routa_procsvc_proto::{Flow, ProxyKind, ProxyTarget};
 
 use crate::engine::{Interceptor, PbAction};
 use crate::lazy::Bridge;
-use crate::paths::{exe_of_pid, matches_process};
+use crate::paths::{exe_of_pid, matches_process, pattern_kind};
 
 pub const DLL_NAME: &str = "ProxyBridgeCore.dll";
 
@@ -283,7 +283,7 @@ fn to_flow(raw: &PbFlow, exe: Option<String>, rules: &HashMap<String, Entry>) ->
     let rule_id = exe.as_deref().and_then(|exe| {
         rules
             .iter()
-            .find(|(_, e)| e.pb_rule.is_some() && matches_process(&e.exe, exe))
+            .find(|(_, e)| e.pb_rule.is_some() && matches_process(pattern_kind(&e.exe), &e.exe, exe))
             .map(|(id, _)| id.clone())
     });
     Flow {
