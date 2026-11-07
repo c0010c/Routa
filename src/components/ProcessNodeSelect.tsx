@@ -1,8 +1,11 @@
-import { useState } from "react";
-import { Box, Button, CircularProgress, Typography } from "@mui/material";
+import { useRef, useState } from "react";
+import { Box, Button, ButtonBase, CircularProgress, Tooltip, Typography } from "@mui/material";
+import { Refresh } from "@mui/icons-material";
 import type { Model, NodeRef, ProcessRule } from "../bindings";
 import { desktopApi, useDesktopMutation } from "../api/desktop";
-import { errorMessage } from "../api/client";
+import { errorMessage, useStatus, useTestDelays } from "../api/client";
+import { ruleExit } from "../lib/hidden";
+import { DelayText, delayDescription } from "./DelayText";
 import { ruleLabel } from "../lib/processRule";
 import { nodeLabel } from "../lib/refs";
 import { NodePickerDialog } from "./NodePickerDialog";
@@ -23,6 +26,8 @@ export function ProcessNodeSelect({
   const save = useDesktopMutation((node: NodeRef) =>
     desktopApi.changeNode(rule.id, node),
   );
+  const status = useStatus(), test = useTestDelays();
+  const measuring = useRef(false);
   const [picking, setPicking] = useState(false);
   const [failedTarget, setFailedTarget] = useState<NodeRef | null>(null);
   const [error, setError] = useState("");
@@ -41,10 +46,36 @@ export function ProcessNodeSelect({
       ? reason
       : null;
   const text = problem ?? (rule.node ? nodeLabel(model, rule.node) : NODE_UNSET);
+  // 与代理页一样按出口路径测延迟；测试对象显示节点名，不露出隐藏出口的内部名字。
+  const s = status.data;
+  const exit = problem ? undefined : ruleExit(model, rule);
+  const pending = test.isPending && !!exit && !!test.variables?.[0]?.includes(exit.name);
+  const delayProps = exit && s && {
+    result: s.delays[exit.name],
+    kind: "proxy" as const,
+    target: text,
+    testUrl: model.settings.delay_test_url,
+    running: s.core === "Running",
+    interfaceName: exit.interface
+      ? s.interfaces.find((i) => i.guid === exit.interface)?.friendly_name ?? "网卡不可用"
+      : "系统默认网卡",
+    pending,
+  };
+  const measure = async () => {
+    if (!exit || measuring.current) return;
+    measuring.current = true;
+    try {
+      await test.mutateAsync([exit.name]);
+    } catch {
+      // The shared mutation reports measurement failures through the global feedback.
+    } finally {
+      measuring.current = false;
+    }
+  };
   return (
     <Box
       onClick={(e) => e.stopPropagation()}
-      sx={{ minWidth: 195, maxWidth: 250 }}
+      sx={{ minWidth: 195, maxWidth: 340 }}
     >
       <Button
         size="small"
@@ -59,6 +90,22 @@ export function ProcessNodeSelect({
           {text}
         </Box>
       </Button>
+      {delayProps && (
+        <Tooltip title={<Box sx={{ whiteSpace: "pre-line" }}>{delayDescription(delayProps)}{"\n"}点击重新测延迟</Box>}>
+          <Box component="span" sx={{ display: "inline-flex", ml: 1, verticalAlign: "middle" }}>
+            <ButtonBase
+              aria-label={`测量 ${ruleLabel(rule)} 的代理延迟`}
+              aria-busy={pending || undefined}
+              disabled={test.isPending || !delayProps.running}
+              onClick={() => void measure()}
+              sx={{ borderRadius: 0.5, minHeight: 28, px: 0.5, gap: 0.5, "&:hover": { bgcolor: "action.hover" } }}
+            >
+              <DelayText {...delayProps} tooltip={false} emptyText="未测试" variant="card" />
+              {!pending && <Refresh sx={{ fontSize: 13, color: "text.secondary" }} />}
+            </ButtonBase>
+          </Box>
+        </Tooltip>
+      )}
       {save.isPending && (
         <Typography role="status" variant="caption" color="text.secondary" sx={{ display: "block" }}>
           <CircularProgress size={10} sx={{ mr: 0.5 }} />
