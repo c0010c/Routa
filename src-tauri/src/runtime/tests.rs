@@ -1818,9 +1818,13 @@ async fn change_process_node_switches_hidden_listener() {
     crate::commands::ops::save_process_rule(&h.rt, rule.clone()).await.unwrap();
     let m2 = NodeRef::Manual { manual_id: ManualNodeId("m2".into()) };
 
+    // The new listener gets a different port (the old one is not reused); mihomo
+    // releases the old hidden port when that listener goes away.
+    h.ports.0.lock().unwrap().remove(&37800);
     ui.change_process_node(&h.rt, rule.id.clone(), m2.clone()).await.unwrap();
     let m = h.rt.model();
     assert_eq!(m.process_routing.rules[0].node, Some(m2));
+    assert_eq!(hidden(&m)[0].port, 37801);
     let hid = hidden(&m);
     assert_eq!(hid.len(), 1);
     let exit = m.exits.iter().find(|e| Some(&e.id) == hid[0].exit.as_ref()).unwrap();
