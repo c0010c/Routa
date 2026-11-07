@@ -144,6 +144,8 @@ struct Entry {
     stale: Vec<u32>,
     /// 规则的 exe（`set_rule` 时的写法），用于把连接归到规则上。
     exe: String,
+    /// ProxyBridge 规则当前的动作是代理（因而引用着一份代理配置）。
+    proxied: bool,
 }
 
 pub struct ProxyBridge {
@@ -330,9 +332,13 @@ impl Interceptor for ProxyBridge {
         if let Some(old) = self.pool.detach(rule) {
             entry.stale.push(old);
         }
-        if let Attach::Create = self.pool.attach(rule, target) {
+        let mut cfg = match self.pool.attach(rule, target) {
+            Attach::Reuse(cfg) => cfg,
+            Attach::Create => 0,
+        };
+        if cfg == 0 {
             // SAFETY: 所有指针指向本函数内存活的 CString 或为 NULL。
-            let cfg = unsafe {
+            cfg = unsafe {
                 (self.api.add_proxy_config)(
                     kind,
                     host.as_ptr(),
@@ -350,6 +356,30 @@ impl Interceptor for ProxyBridge {
                 return Err(format!("添加规则 {rule} 的 ProxyBridge 代理配置失败"));
             }
             self.pool.created(rule, target, cfg);
+        }
+        // plan 在只有目标变化时只发 SetProxy：已按代理动作生效的 ProxyBridge 规则要在这里改指新配置，
+        // 然后才能删掉旧配置。
+        if let (Some(id), true) = (entry.pb_rule, entry.proxied) {
+            let exe_c = pb_exe(&entry.exe)?;
+            let (any, empty) = (c"*", c"");
+            // SAFETY: 所有指针指向本函数内存活的 C 字符串。
+            let ok = unsafe {
+                (self.api.edit_rule)(
+                    id,
+                    exe_c.as_ptr(),
+                    any.as_ptr(),
+                    any.as_ptr(),
+                    empty.as_ptr(),
+                    RULE_PROTOCOL_BOTH,
+                    RULE_ACTION_PROXY,
+                    cfg,
+                    FALSE,
+                )
+            };
+            if ok == FALSE {
+                return Err(format!("修改规则 {rule} 的 ProxyBridge 规则失败"));
+            }
+            flush_stale(&self.api, entry);
         }
         Ok(())
     }
@@ -409,6 +439,7 @@ impl Interceptor for ProxyBridge {
         };
         let e = self.rules.entry(rule.to_string()).or_default();
         e.exe = exe.to_string();
+        e.proxied = action == PbAction::Proxy;
         // 非代理动作不再需要代理配置：放掉引用，归零的配置删除（DLL 最多 32 份）。
         if action != PbAction::Proxy {
             if let Some(old) = self.pool.detach(rule) {
@@ -537,6 +568,7 @@ mod tests {
             Entry {
                 pb_rule: Some(7),
                 stale: vec![],
+                proxied: false,
                 exe: r"C:\Apps\Foo.exe".into(),
             },
         );
@@ -545,6 +577,7 @@ mod tests {
             Entry {
                 pb_rule: None,
                 stale: vec![],
+                proxied: false,
                 exe: r"C:\Apps\Bar.exe".into(),
             },
         );
@@ -577,6 +610,7 @@ mod tests {
             Entry {
                 pb_rule: Some(9),
                 stale: vec![],
+                proxied: false,
                 exe: "Baz.exe".into(),
             },
         );
@@ -766,12 +800,11 @@ mod tests {
         assert_eq!(take(), ["del_rule 5"]);
 
         // 目标变化：换一份新配置，规则改指新配置后才删旧的。
+        // plan 只发 SetProxy（不再发 SetRule）：规则在这一步就改指新配置。
         pb.set_proxy("b", &t2).unwrap();
-        assert_eq!(take(), ["add_cfg 7"]);
-        pb.set_rule("b", r"C:\b.exe", PbAction::Proxy).unwrap();
         assert_eq!(
             take(),
-            [r"edit_rule 6 C:\b.exe 0 7", "del_cfg 4", "move_rule 6 1"]
+            ["add_cfg 7", r"edit_rule 6 C:\b.exe 0 7", "del_cfg 4"]
         );
         pb.remove_rule("b").unwrap();
         assert_eq!(take(), ["del_rule 6", "del_cfg 7"]);
