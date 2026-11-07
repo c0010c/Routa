@@ -2,7 +2,7 @@
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-pub const PROTO_VERSION: u32 = 4;
+pub const PROTO_VERSION: u32 = 5;
 pub const PIPE_NAME: &str = r"\\.\pipe\RoutaProcSvc";
 pub const SERVICE_NAME: &str = "RoutaProcSvc";
 /// 单帧 JSON 正文的最大字节数。
@@ -44,13 +44,26 @@ pub enum Action {
     Block,
 }
 
+/// 规则里 `exe_path` 的含义。
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub enum ProcessKind {
+    Name,
+    Path,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct RuleSpec {
     pub id: String,
-    /// 完整路径（`X:\…\a.exe`），或只写进程名（`a.exe`，见 [`is_process_name`]）。
-    /// 进程名不能用于 WFP 防护，所以按进程名的规则 `on_fault` 只能是 `Direct`。
+    /// `kind=Name` 时是进程名（`a.exe`），阻断由 ProxyBridge 按名称执行；
+    /// `kind=Path` 时是完整路径（`X:\…\a.exe`）。
     pub exe_path: String,
+    pub kind: ProcessKind,
+    /// `kind=Name` 时是已知位置（仅用于 WFP 守护）；`kind=Path` 时必须为空。
+    #[serde(default)]
+    pub guard_paths: Vec<String>,
     pub action: Action,
+    /// 管所有 Routa / 组件不可用的场景。
     pub on_fault: FaultPolicy,
     pub reset_on_change: bool,
 }
@@ -58,8 +71,15 @@ pub struct RuleSpec {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct DesiredState {
     pub rules: Vec<RuleSpec>,
-    pub on_routa_exit: ExitPolicy,
     pub routa_pid: u32,
+}
+
+/// 服务自己学到的某条规则的程序位置。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LearnedPath {
+    /// 对应 `RuleSpec.id`。
+    pub rule_id: String,
+    pub path: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -116,6 +136,9 @@ pub struct SvcStatus {
     pub truncated_flows: bool,
     pub conflicts: Vec<String>,
     pub rules: Vec<RuleStatus>,
+    /// 服务自己学到、且还不在对应 `RuleSpec.guard_paths` 里的位置。
+    #[serde(default)]
+    pub learned: Vec<LearnedPath>,
 }
 
 /// 服务确认的规则动作；不回传代理密码等配置。
@@ -229,6 +252,8 @@ mod tests {
             rules: vec![RuleSpec {
                 id: "r1".into(),
                 exe_path: r"C:\app\a.exe".into(),
+                kind: ProcessKind::Path,
+                guard_paths: vec![],
                 action: Action::Proxy(ProxyTarget {
                     kind: ProxyKind::Socks5,
                     host: "127.0.0.1".into(),
@@ -239,7 +264,6 @@ mod tests {
                 on_fault: FaultPolicy::Block,
                 reset_on_change: true,
             }],
-            on_routa_exit: ExitPolicy::Direct,
             routa_pid: 42,
         });
         let buf = encode(&req).unwrap();
@@ -247,6 +271,34 @@ mod tests {
         assert_eq!(len, buf.len() - 4);
         let back: Request = decode(&buf[4..]).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn rule_spec_round_trips_kind_and_guard_paths() {
+        let spec = RuleSpec {
+            id: "r1".into(),
+            exe_path: "x.exe".into(),
+            kind: ProcessKind::Name,
+            guard_paths: vec![r"C:\a\x.exe".into()],
+            action: Action::Block,
+            on_fault: FaultPolicy::Block,
+            reset_on_change: false,
+        };
+        let buf = encode(&spec).unwrap();
+        assert_eq!(decode::<RuleSpec>(&buf[4..]).unwrap(), spec);
+
+        let json = r#"{"id":"r","exe_path":"x.exe","kind":"Name","action":"Block","on_fault":"Block","reset_on_change":false}"#;
+        assert!(decode::<RuleSpec>(json.as_bytes()).unwrap().guard_paths.is_empty());
+
+        let json = r#"{"version":5,"owner_sid":"s","last_interruption":null,"truncated_flows":false,"conflicts":[],"rules":[]}"#;
+        assert!(decode::<SvcStatus>(json.as_bytes()).unwrap().learned.is_empty());
+
+        let ds = serde_json::to_string(&DesiredState { rules: vec![], routa_pid: 1 }).unwrap();
+        assert!(!ds.contains("on_routa_exit"));
+        assert_eq!(PROTO_VERSION, 5);
+        let lp = LearnedPath { rule_id: "r1".into(), path: r"C:\a\x.exe".into() };
+        let buf = encode(&lp).unwrap();
+        assert_eq!(decode::<LearnedPath>(&buf[4..]).unwrap(), lp);
     }
 
     #[test]
