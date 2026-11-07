@@ -36,7 +36,7 @@ use windows_sys::Win32::System::Services::{
 };
 
 use super::decide::{self, decide, rule_of_spec};
-use super::learn;
+use super::{learn, store};
 use crate::model::ProcessRuleId;
 use crate::runtime::Runtime;
 
@@ -835,9 +835,39 @@ async fn merge_learned(rt: &Runtime, reported: &[routa_procsvc_proto::LearnedPat
     }
 }
 
+/// 商店应用装好 / 更新完的包（包全名，安装目录）。订阅放在专用线程上（WinRT 对象不是 `Send`），
+/// 返回的 `stop` 被丢弃时线程醒来并注销订阅。订阅失败只记日志，通道随之关闭。
+fn watch_store() -> (mpsc::UnboundedReceiver<(String, String)>, std::sync::mpsc::Sender<()>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    let spawned = std::thread::Builder::new().name("procroute-store".into()).spawn(move || {
+        match store::watch(move |name, root| { let _ = tx.send((name, root)); }) {
+            Ok(_guard) => { let _ = stopped.recv(); }
+            Err(e) => eprintln!("procroute: watching store app updates failed: {e}"),
+        }
+    });
+    if let Err(e) = spawned {
+        eprintln!("procroute: starting store watcher failed: {e}");
+    }
+    (rx, stop)
+}
+
+/// 商店应用装好新版本后，把各学习中规则的已知位置映射到新目录（找到才保存）。
+async fn learn_package(rt: &Runtime, full_name: &str, root: &str) {
+    let exists = |p: &str| std::path::Path::new(p).is_file();
+    let found = learn::from_package(&rt.model(), full_name, root, &exists);
+    if found.is_empty() {
+        return;
+    }
+    if let Err(e) = rt.mutate_process_routing(|pr| learn::add(pr, &found)).await {
+        eprintln!("procroute: saving store app locations failed: {e:?}");
+    }
+}
+
 async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Command>) {
     let pid = std::process::id();
     drop_missing_learned(&rt).await;
+    let (mut packages, _stop_store) = watch_store();
     let mut link = Link::default();
     let mut tick = interval(TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -877,6 +907,10 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
                     false
                 }
             },
+            Some((name, root)) = packages.recv() => {
+                learn_package(&rt, &name, &root).await;
+                false
+            }
             _ = RUNTIME_CHANGED.notified() => false,
             _ = tick.tick() => true,
         };
