@@ -17,7 +17,7 @@ import {
   TextField,
   Tooltip,
 } from "@mui/material";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { errorMessage, isValidationError, useModel } from "../api/client";
 import { useRemoveLearnedPath, useRunningProcesses, useSaveProcessRuleConfirmed } from "../api/procroute";
 import type { FaultPolicy, ProcessRule, ValidationError } from "../bindings";
@@ -26,7 +26,7 @@ import { FormDialog } from "../components/FormDialog";
 import { InterfacePicker } from "../components/InterfacePicker";
 import { LearnedLocations } from "../components/LearnedLocations";
 import { NodePickerDialog } from "../components/NodePickerDialog";
-import { ProcessEntriesField } from "../components/ProcessEntriesField";
+import { ProcessEntriesField, type ProcessEntriesHandle } from "../components/ProcessEntriesField";
 import { fileName, newlyLearning, ruleLabel, skippedOf } from "../lib/processRule";
 import { isTailscaleRef, nodeLabel } from "../lib/refs";
 import { fieldErrors } from "../lib/validation";
@@ -114,6 +114,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
   );
   const [errs, setErrs] = useState<RuleErrors>({ form: [] });
   const [picking, setPicking] = useState(false);
+  const entries = useRef<ProcessEntriesHandle>(null);
   const node = r.node ?? null;
   const tailscale = !!m && !!node && isTailscaleRef(m, node);
   /** A Tailscale instance has its own NIC (set in its node settings); the rule's value doesn't apply. */
@@ -129,7 +130,13 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
   const autoName = r.processes.length ? ruleLabel({ name: "", processes: r.processes }) : "";
 
   const submit = async () => {
-    if (r.processes.length === 0) {
+    // Text still in the box counts as one more process; if it can't be added the field says why.
+    const processes = entries.current ? entries.current.commit() : r.processes;
+    if (processes === null) {
+      setErrs({ form: [] });
+      return;
+    }
+    if (processes.length === 0) {
       setErrs({ form: [], processes: "至少添加一个进程" });
       return;
     }
@@ -138,7 +145,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
       return;
     }
     setErrs({ form: [] });
-    const next = { ...r, name: r.name.trim(), interface: tailscale ? null : (r.interface ?? null) };
+    const next = { ...r, processes, name: r.name.trim(), interface: tailscale ? null : (r.interface ?? null) };
     try {
       await save.mutateAsync(next);
       onClose();
@@ -170,6 +177,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
             helperText={autoName && !r.name ? `不填时显示为「${autoName}」` : "不填时用第一个进程名代替"}
           />
           <ProcessEntriesField
+            ref={entries}
             entries={r.processes}
             others={others}
             routingEnabled={routingEnabled}

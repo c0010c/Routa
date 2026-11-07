@@ -246,6 +246,32 @@ describe("ProcessRuleDialog", () => {
     expect(saved()).not.toHaveProperty("match_full_path");
   });
 
+  it("saves text still in the process box as one more entry", async () => {
+    const onClose = renderDialog();
+    await loaded();
+    await pickNode("n1 · 来源甲");
+    addProcess("ChatGPT.exe");
+    fireEvent.change(screen.getByRole("combobox", { name: "进程" }), { target: { value: "codex.exe" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(saved().processes).toEqual([
+      { kind: "Name", value: "ChatGPT.exe" },
+      { kind: "Name", value: "codex.exe" },
+    ]);
+  });
+
+  it("does not save when the text left in the process box is invalid", async () => {
+    const onClose = renderDialog();
+    await loaded();
+    await pickNode("n1 · 来源甲");
+    fireEvent.change(screen.getByRole("combobox", { name: "进程" }), { target: { value: "notes.txt" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText(/notes\.txt 不是 \.exe 程序/)).toBeInTheDocument();
+    expect(screen.queryByText("至少添加一个进程")).not.toBeInTheDocument();
+    expect(commands.saveProcessRuleConfirmed).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("requires at least one process", async () => {
     renderDialog();
     await loaded();

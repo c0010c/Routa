@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createRef, useState } from "react";
 import type { ProcessEntry, ProcessRule, RunningProcess } from "../bindings";
-import { ProcessEntriesField } from "./ProcessEntriesField";
+import { ProcessEntriesField, type ProcessEntriesHandle } from "./ProcessEntriesField";
 
 const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const CANARY = "C:\\Users\\Q\\AppData\\Local\\Google\\Chrome SxS\\Application\\chrome.exe";
@@ -80,6 +80,26 @@ describe("ProcessEntriesField", () => {
     expect(out()).toHaveLength(0);
     type(TG);
     await waitFor(() => expect(out()).toEqual([{ kind: "Path", value: TG }]));
+  });
+
+  it("commit() adds pending text, or reports why it can't", async () => {
+    const ref = createRef<ProcessEntriesHandle>();
+    const onChange = vi.fn();
+    const entries: ProcessEntry[] = [{ kind: "Name", value: "chrome.exe" }];
+    render(<ProcessEntriesField ref={ref} entries={entries} others={[]} routingEnabled running={[]} onChange={onChange} />);
+    // Nothing typed: the entries as they are.
+    let got: ProcessEntry[] | null = null;
+    act(() => void (got = ref.current!.commit()));
+    expect(got).toEqual(entries);
+    fireEvent.change(input(), { target: { value: TG } });
+    act(() => void (got = ref.current!.commit()));
+    expect(got).toEqual([...entries, { kind: "Path", value: TG }]);
+    expect(onChange).toHaveBeenLastCalledWith(got);
+    expect(input().value).toBe("");
+    fireEvent.change(input(), { target: { value: "chrome.exe" } });
+    act(() => void (got = ref.current!.commit()));
+    expect(got).toBeNull();
+    expect(await screen.findByText(/已经在这条规则里/)).toBeTruthy();
   });
 
   it("shows the external error and the help tooltip trigger", () => {
