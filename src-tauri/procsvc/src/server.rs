@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use routa_procsvc_proto::{
-    decode, decode_len, encode, Action, DesiredState, Interruption, ProcessKind, Request, Response,
-    RuleSpec, SvcStatus, PROTO_VERSION,
+    decode, decode_len, encode, Action, DesiredState, FaultPolicy, Interruption, LearnedPath,
+    ProcessKind, Request, Response, RuleSpec, SvcStatus, PROTO_VERSION,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
@@ -35,6 +35,7 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::engine::{ConnKiller, Guard, Interceptor};
 use crate::fallback::{fallback, RoutaGone};
+use crate::learn;
 use crate::persist;
 use crate::paths::{matches_process, same_path};
 use crate::reconcile::{exe_key, guard_exes, Reconciler};
@@ -63,6 +64,12 @@ pub struct Server<I: Interceptor, G: Guard, K: ConnKiller> {
     last_interruption: Option<Interruption>,
     truncated_flows: bool,
     next_session: u64,
+    /// 服务自己学到、还不在 Routa 下发的 `guard_paths` 里的位置（见 [`crate::learn`]）。
+    learned: Vec<LearnedPath>,
+    /// 取进程完整路径；测试里可替换。
+    exe_of_pid: fn(u32) -> Option<String>,
+    /// 文件是否存在；测试里可替换。
+    file_exists: fn(&str) -> bool,
 }
 
 /// 一条管道连接的会话状态。由 [`Server::new_session`] 创建。
@@ -106,6 +113,9 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
             last_interruption: None,
             truncated_flows: false,
             next_session: 0,
+            learned: Vec::new(),
+            exe_of_pid: crate::paths::exe_of_pid,
+            file_exists,
         };
         match persist::load(&srv.state_path) {
             Some(state) => {
@@ -114,7 +124,8 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
                 } else {
                     RoutaGone::Crashed
                 };
-                srv.reconciler.apply(fallback(&state, why));
+                let eff = learn::effective(&state, &[], &srv.file_exists);
+                srv.reconciler.apply(fallback(&eff, why));
                 if !previous_stop_clean {
                     srv.interrupted(SERVICE_RESTARTED);
                 }
@@ -190,7 +201,7 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
                 truncated_flows: self.truncated_flows,
                 conflicts: conflicts(),
                 rules: self.reconciler.status(),
-                learned: Vec::new(),
+                learned: self.learned.clone(),
             }),
             Request::CleanupFilters => {
                 let keep = guarded_keys(self.reconciler.current());
@@ -205,6 +216,9 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
     /// 校验 → 打开 Routa 进程句柄 → 保存 → 落地。校验、打开句柄或保存失败时什么都不动，
     /// 回 `Error`（保存不了就不落地：否则服务重启后会按旧状态回落）。
     /// 落地时引擎的非致命错误以 `Applied` 返回（失败的规则已按 Block 处理）。
+    ///
+    /// 保存与落地的都是并入学到的位置后的状态（[`learn::effective`]）；先 [`learn::forget`]
+    /// 掉 Routa 已下发或已不适用的位置。
     fn apply(&mut self, state: DesiredState, session: &mut Session) -> Response {
         self.apply_inner(state, session, false)
     }
@@ -217,11 +231,15 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
             Ok(p) => p,
             Err(e) => return Response::Error(e),
         };
-        if let Err(e) = persist::save(&self.state_path, &state) {
+        let mut learned = self.learned.clone();
+        learn::forget(&mut learned, &state, &self.file_exists);
+        let eff = learn::effective(&state, &learned, &self.file_exists);
+        if let Err(e) = persist::save(&self.state_path, &eff) {
             return Response::Error(format!("保存状态失败：{e}"));
         }
-        let errors = if retry { self.reconciler.retry(state.rules.clone()) } else { self.reconciler.apply(state.rules.clone()) };
+        let errors = if retry { self.reconciler.retry(eff.rules) } else { self.reconciler.apply(eff.rules) };
         let state_pid = state.routa_pid;
+        self.learned = learned;
         self.last = Some(state);
         self.routa = Some(Routa {
             session: session.id,
@@ -262,14 +280,59 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
         if self.routa.take().is_none() {
             return;
         }
-        if let Some(state) = &self.last {
-            let rules = fallback(state, why);
+        if let Some(eff) = self.effective() {
+            let rules = fallback(&eff, why);
             // 无处上报；失败的规则已按 Block 处理
             self.reconciler.apply(rules);
         }
         if why == RoutaGone::Crashed {
             self.interrupted(ROUTA_CRASHED);
         }
+    }
+
+    /// 最近一次完整状态并入学到的位置（[`learn::effective`]）。
+    fn effective(&self) -> Option<DesiredState> {
+        let state = self.last.as_ref()?;
+        Some(learn::effective(state, &self.learned, &self.file_exists))
+    }
+
+    /// 从新出现连接的进程里学习 Name + Block 规则的程序位置（与 [`Server::check_routa`] 同一个 tick）。
+    /// 有新学到的位置时保存并重新落地：Routa 在场按其状态，不在时按回落。错误无处上报，忽略。
+    pub fn learn_tick(&mut self) {
+        let pids = self.reconciler.interceptor().take_new_processes();
+        // 没有可学习的规则时不必逐个查进程路径
+        let wanted = |s: &DesiredState| {
+            s.rules
+                .iter()
+                .any(|r| r.kind == ProcessKind::Name && r.on_fault == FaultPolicy::Block)
+        };
+        let Some(mut eff) = self.effective().filter(|s| !pids.is_empty() && wanted(s)) else {
+            return;
+        };
+        let mut added = false;
+        for pid in pids {
+            let Some(exe) = (self.exe_of_pid)(pid) else { continue };
+            if let Some(l) = learn::observe(&eff.rules, &exe) {
+                // 文件检查不过时 effective 不会并入它：不重复记
+                if self.learned.contains(&l) {
+                    continue;
+                }
+                // 并入当前状态，同一批里同一位置不再重复学习
+                eff = learn::effective(&eff, std::slice::from_ref(&l), &self.file_exists);
+                self.learned.push(l);
+                added = true;
+            }
+        }
+        if !added {
+            return;
+        }
+        let _ = persist::save(&self.state_path, &eff);
+        let rules = if self.routa.is_some() {
+            eff.rules
+        } else {
+            fallback(&eff, RoutaGone::Graceful)
+        };
+        self.reconciler.apply(rules);
     }
 
     /// 关机：等同 Routa 正常退出。
@@ -320,6 +383,10 @@ impl<I: Interceptor, G: Guard, K: ConnKiller> Server<I, G, K> {
     }
 }
 
+fn file_exists(path: &str) -> bool {
+    std::path::Path::new(path).is_file()
+}
+
 /// 已执行的请求的回复：没有错误为 `Ok`，部分失败为 `Applied`。
 fn applied(errors: Vec<String>) -> Response {
     if errors.is_empty() {
@@ -349,6 +416,8 @@ fn own_exes() -> Vec<String> {
 fn validate(state: &DesiredState) -> Result<(), String> {
     let own = own_exes();
     let mut ids = HashSet::new();
+    // 守护路径（exe_key）→ 所属规则 id
+    let mut guards: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
     let mut exes = HashSet::new();
     let mut targets: Vec<&routa_procsvc_proto::ProxyTarget> = Vec::new();
     for r in &state.rules {
@@ -375,7 +444,8 @@ fn validate(state: &DesiredState) -> Result<(), String> {
             return Err(format!("不能对进程分流组件自身设置规则：{exe}"));
         }
         // 守护路径交给 WFP 按完整路径阻断：必须是完整路径，不能是服务自身，
-        // 也不能与某条按路径的规则重叠（同一个 exe 的阻断 / 放行只能归一条规则管）。
+        // 也不能与某条按路径的规则重叠、不能出现在两条规则上（同一个 exe 的阻断 / 放行只能归一条规则管），
+        // 文件名必须就是该规则的进程名。
         for g in &r.guard_paths {
             if let Some(reason) = routa_procsvc_proto::exe_path_problem(g) {
                 return Err(format!("守护路径无效（{reason}）：{g}"));
@@ -389,6 +459,12 @@ fn validate(state: &DesiredState) -> Result<(), String> {
                 .find(|p| p.kind == ProcessKind::Path && exe_key(&p.exe_path) == exe_key(g))
             {
                 return Err(format!("守护路径与规则 {} 重叠：{g}", p.id));
+            }
+            if !matches_process(ProcessKind::Name, exe, g) {
+                return Err(format!("守护路径 {g} 与规则 {} 的进程名不符", r.id));
+            }
+            if *guards.entry(exe_key(g)).or_insert(r.id.as_str()) != r.id {
+                return Err(format!("守护路径重复：{g}"));
             }
         }
         if !exes.insert(exe_key(exe)) {
@@ -587,7 +663,11 @@ where
     loop {
         tokio::select! {
             out = &mut fut => return out,
-            _ = tick.tick() => lock(server).check_routa(),
+            _ = tick.tick() => {
+                let mut srv = lock(server);
+                srv.check_routa();
+                srv.learn_tick();
+            }
         }
     }
 }
@@ -619,7 +699,7 @@ async fn write_frame(pipe: &mut NamedPipeServer, resp: &Response) -> io::Result<
 /// 在管道 `pipe_name` 上一个接一个地服务客户端，直到出现无法恢复的错误。
 /// DACL 按服务的 `owner_sid` 生成。连上后 [`HELLO_TIMEOUT`] 内没有握手成功的客户端被断开。
 /// 会话结束（断开、协议错误、握手超时）时调用 [`Server::end_session`]；
-/// 全程每 250 ms 调用一次 [`Server::check_routa`]。
+/// 全程每 250 ms 调用一次 [`Server::check_routa`] 与 [`Server::learn_tick`]。
 ///
 /// 不在内部 spawn 任务，引擎类型不需要 `Send`。
 pub async fn run_pipe<I, G, K>(
@@ -677,7 +757,8 @@ pub(crate) mod tests {
     use crate::persist;
     use crate::reconcile::exe_key;
     use routa_procsvc_proto::{
-        Action, FaultPolicy, Flow, ProcessKind, ProxyKind, ProxyTarget, RuleSpec, PROTO_VERSION,
+        Action, FaultPolicy, Flow, LearnedPath, ProcessKind, ProxyKind, ProxyTarget, RuleSpec,
+        PROTO_VERSION,
     };
     use std::collections::{HashMap, HashSet};
     use std::path::Path;
@@ -696,6 +777,8 @@ pub(crate) mod tests {
         pub(crate) flows: usize,
         /// 这些规则 id 的非 Block `set_rule` 失败。
         pub(crate) fail_rules: HashSet<String>,
+        /// 下一次 `take_new_processes` 返回的 PID。
+        pub(crate) new_pids: Vec<u32>,
     }
 
     pub(crate) type Shared = Arc<Mutex<World>>;
@@ -743,6 +826,9 @@ pub(crate) mod tests {
                 };
                 n
             ]
+        }
+        fn take_new_processes(&mut self) -> Vec<u32> {
+            std::mem::take(&mut w(&self.0).new_pids)
         }
     }
 
@@ -808,12 +894,15 @@ pub(crate) mod tests {
     /// 用假引擎启动服务：`blocks` 是启动前就存在的永久阻断。
     pub(crate) fn boot(dir: &Path, blocks: &[&str], clean: bool) -> (Srv, Shared) {
         let (rec, world) = rig(blocks);
-        let srv = Server::boot(
+        let mut srv = Server::boot(
             rec,
             dir.join(persist::STATE_FILE),
             "S-1-5-21-1".into(),
             clean,
         );
+        // 测试里的守护路径都是虚构的
+        srv.file_exists = |_| true;
+        srv.exe_of_pid = |_| None;
         (srv, world)
     }
 
@@ -1323,6 +1412,65 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn learned_path_is_guarded_and_reported() {
+        const P: &str = r"C:\N\ChatGPT.exe";
+        const Q: &str = r"D:\Q\chatgpt.exe";
+        let dir = tempfile::tempdir().unwrap();
+        let (mut srv, world) = boot(dir.path(), &[], true);
+        srv.exe_of_pid = |pid| match pid {
+            7 => Some(P.into()),
+            8 => Some(Q.into()),
+            _ => Some(r"C:\Other\x.exe".into()),
+        };
+        let mut s = hello(&mut srv);
+        let mut st = state();
+        st.rules[1] = rule("c", "chatgpt.exe", FaultPolicy::Block);
+        applied(&mut srv, &mut s, st.clone());
+        assert!(!w(&world).blocks.contains_key(&exe_key(P)));
+
+        w(&world).new_pids = vec![3, 7, 7];
+        srv.learn_tick();
+        assert!(w(&world).blocks.contains_key(&exe_key(P)));
+        assert!(permitted(&world, P), "Routa 在场：守护路径放行");
+        assert_eq!(
+            status(&mut srv, &mut s).learned,
+            vec![LearnedPath { rule_id: "c".into(), path: P.into() }]
+        );
+        let saved = persist::load(&dir.path().join(persist::STATE_FILE)).unwrap();
+        assert_eq!(saved.rules[1].guard_paths, vec![P.to_string()]);
+        // 同一位置不再重复学习
+        let before = log(&world);
+        w(&world).new_pids = vec![7];
+        srv.learn_tick();
+        assert_eq!(log(&world), before);
+        // 受 CleanupFilters 保护
+        assert_eq!(srv.handle(Request::CleanupFilters, &mut s), Response::Ok);
+        assert!(w(&world).blocks.contains_key(&exe_key(P)));
+
+        // Routa 下发了该位置：从 learned 里删掉，阻断照旧
+        st.rules[1].guard_paths = vec![P.into()];
+        applied(&mut srv, &mut s, st.clone());
+        assert!(status(&mut srv, &mut s).learned.is_empty());
+        assert!(w(&world).blocks.contains_key(&exe_key(P)));
+
+        // Routa 不在（回落）时同样学习，并按回落落地
+        srv.end_session(&s);
+        assert!(!permitted(&world, P));
+        w(&world).new_pids = vec![8];
+        srv.learn_tick();
+        assert!(w(&world).blocks.contains_key(&exe_key(Q)));
+        assert!(!permitted(&world, Q));
+        assert_eq!(action(&world, "c"), Some(PbAction::Block));
+        let mut s2 = hello(&mut srv);
+        assert_eq!(
+            status(&mut srv, &mut s2).learned,
+            vec![LearnedPath { rule_id: "c".into(), path: Q.into() }]
+        );
+        let saved = persist::load(&dir.path().join(persist::STATE_FILE)).unwrap();
+        assert_eq!(saved.rules[1].guard_paths, vec![P.to_string(), Q.to_string()]);
+    }
+
+    #[test]
     fn apply_rejects_invalid_state() {
         type Edit = fn(&mut DesiredState);
         fn set_target(s: &mut DesiredState, f: fn(&mut ProxyTarget)) {
@@ -1433,6 +1581,24 @@ pub(crate) mod tests {
                     s.rules[1].guard_paths = vec![r"c:\APP\A.EXE".into()];
                 },
                 "守护路径与规则 a 重叠",
+            ),
+            (
+                "guard path name mismatch",
+                |s| {
+                    s.rules[1] = rule("b", "b.exe", FaultPolicy::Block);
+                    s.rules[1].guard_paths = vec![r"C:\x\c.exe".into()];
+                },
+                r"守护路径 C:\x\c.exe 与规则 b 的进程名不符",
+            ),
+            (
+                "guard path on two rules",
+                |s| {
+                    s.rules[0] = rule("a", "b.exe", FaultPolicy::Block);
+                    s.rules[0].guard_paths = vec![r"C:\x\b.exe".into()];
+                    s.rules[1] = rule("b", "B.EXE", FaultPolicy::Block);
+                    s.rules[1].guard_paths = vec![r"c:\X\B.exe".into()];
+                },
+                r"守护路径重复：c:\X\B.exe",
             ),
             (
                 "service exe as guard path",

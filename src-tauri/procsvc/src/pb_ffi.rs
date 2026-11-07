@@ -14,6 +14,7 @@ use std::net::{Ipv4Addr, TcpListener, UdpSocket};
 use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use libloading::os::windows::{
     Library, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -92,6 +93,9 @@ type MoveRuleFn = unsafe extern "C" fn(u32, u32) -> Bool;
 type GetFlowsFn = unsafe extern "C" fn(*mut PbFlow, u32) -> u32;
 type SetRelayPortsFn = unsafe extern "C" fn(u16, u16) -> Bool;
 type VoidBoolFn = unsafe extern "C" fn() -> Bool;
+/// `ConnectionCallback`：进程名、PID、目标 IP、目标端口、动作说明。
+type ConnectionCallback = extern "C" fn(*const c_char, u32, *const c_char, u16, *const c_char);
+type SetConnectionCallbackFn = unsafe extern "C" fn(Option<ConnectionCallback>);
 
 /// 加载时一次性解析好的导出函数。
 struct Api {
@@ -105,6 +109,7 @@ struct Api {
     set_relay_ports: SetRelayPortsFn,
     start: VoidBoolFn,
     stop: VoidBoolFn,
+    set_connection_callback: SetConnectionCallbackFn,
 }
 
 impl Api {
@@ -128,12 +133,37 @@ impl Api {
             set_relay_ports: sym!("ProxyBridge_SetRelayPorts"),
             start: sym!("ProxyBridge_Start"),
             stop: sym!("ProxyBridge_Stop"),
+            set_connection_callback: sym!("ProxyBridge_SetConnectionCallback"),
         })
     }
 }
 
 /// DLL 持有全局状态，一个进程里只能有一个 [`ProxyBridge`]。
 static LOADED: AtomicBool = AtomicBool::new(false);
+
+/// 连接回调报来的、还没被取走的 PID（去重）。
+static NEW_PROCESSES: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// 队列上限：服务长时间不取时不无限增长（超出的丢弃；同一进程之后的新连接还会再报）。
+const NEW_PROCESSES_MAX: usize = 1024;
+
+/// ProxyBridge 的连接回调：在 DLL 的收包线程上调用（按 PID + 目标 + 端口 + 动作去重，
+/// 所以每个进程的第一条连接必定会报）。只把 PID 记进队列：不做 I/O，锁只在入队 / 取走的一瞬间持有。
+extern "C" fn on_connection(
+    _process_name: *const c_char,
+    pid: u32,
+    _dest_ip: *const c_char,
+    _dest_port: u16,
+    _proxy_info: *const c_char,
+) {
+    let mut q = NEW_PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+    if q.len() < NEW_PROCESSES_MAX && !q.contains(&pid) {
+        q.push(pid);
+    }
+}
+
+fn take_queued_processes() -> Vec<u32> {
+    std::mem::take(&mut *NEW_PROCESSES.lock().unwrap_or_else(|e| e.into_inner()))
+}
 
 /// 一条 Routa 规则在 ProxyBridge 里的落地。
 #[derive(Debug, Default)]
@@ -202,6 +232,8 @@ fn open(path: &Path) -> Result<ProxyBridge, String> {
     let lib = ManuallyDrop::new(lib);
     // SAFETY: lib 永不卸载。
     let api = unsafe { Api::resolve(&lib)? };
+    // SAFETY: on_connection 是签名一致的 'static 函数，不访问参数指针、不会 panic 穿过 FFI。
+    unsafe { (api.set_connection_callback)(Some(on_connection)) };
     Ok(ProxyBridge {
         api,
         _lib: lib,
@@ -307,6 +339,10 @@ fn to_flow(raw: &PbFlow, exe: Option<String>, rules: &HashMap<String, Entry>) ->
 }
 
 impl Interceptor for ProxyBridge {
+    fn take_new_processes(&mut self) -> Vec<u32> {
+        take_queued_processes()
+    }
+
     fn set_proxy(&mut self, rule: &str, target: &ProxyTarget) -> Result<(), String> {
         // 目标没变：沿用现有配置（编辑它会影响共用者，也没有必要）。
         if self.pool.target_of(rule) == Some(target) && self.pool.cfg_of(rule).is_some() {
@@ -710,6 +746,7 @@ mod tests {
         unsafe extern "C" fn noop() -> Bool {
             TRUE
         }
+        unsafe extern "C" fn set_cb(_: Option<ConnectionCallback>) {}
 
         pub fn bridge() -> ProxyBridge {
             ProxyBridge {
@@ -724,6 +761,7 @@ mod tests {
                     set_relay_ports: set_ports,
                     start: noop,
                     stop: noop,
+                    set_connection_callback: set_cb,
                 },
                 _lib: ManuallyDrop::new(Library::this().unwrap()),
                 rules: HashMap::new(),
@@ -731,6 +769,21 @@ mod tests {
                 running: false,
             }
         }
+    }
+
+    #[test]
+    fn connection_callback_queues_new_pids() {
+        let mut pb = fake::bridge();
+        let n = c"x.exe";
+        on_connection(n.as_ptr(), 7, n.as_ptr(), 443, n.as_ptr());
+        on_connection(n.as_ptr(), 9, ptr::null(), 80, ptr::null());
+        on_connection(n.as_ptr(), 7, n.as_ptr(), 80, n.as_ptr());
+        assert_eq!(pb.take_new_processes(), vec![7, 9]);
+        assert!(pb.take_new_processes().is_empty());
+        for pid in 0..(NEW_PROCESSES_MAX as u32 + 10) {
+            on_connection(ptr::null(), pid, ptr::null(), 0, ptr::null());
+        }
+        assert_eq!(pb.take_new_processes().len(), NEW_PROCESSES_MAX);
     }
 
     #[test]
