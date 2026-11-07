@@ -31,7 +31,7 @@ pub fn process_rule_label(r: &ProcessRule) -> String {
     if !r.name.is_empty() {
         return r.name.clone();
     }
-    r.processes.first().map(|p| process_file_name(p).to_string()).unwrap_or_default()
+    r.processes.first().map(|p| process_file_name(&p.value).to_string()).unwrap_or_default()
 }
 
 /// 进程（进程名或完整路径）的文件名部分。
@@ -57,12 +57,12 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
         if r.processes.is_empty() {
             errors.push(ValidationError::EmptyProcessRule { rule: process_rule_label(r) });
         }
-        if !r.match_full_path && r.on_fault == FaultPolicy::Block {
+        if r.processes.iter().any(|p| p.kind == ProcessKind::Name) && r.on_fault == FaultPolicy::Block {
             errors.push(ValidationError::ProcessNameCannotBlock { rule: process_rule_label(r) });
         }
-        for p in &r.processes {
-            let p = normalize_exe_path(p);
-            let problem = if r.match_full_path {
+        for entry in &r.processes {
+            let p = normalize_exe_path(&entry.value);
+            let problem = if entry.kind == ProcessKind::Path {
                 routa_procsvc_proto::exe_path_problem(&p)
             } else if !routa_procsvc_proto::is_process_name(&p) {
                 Some("按进程名匹配时只填写进程名，如 app.exe".to_string())
@@ -92,16 +92,16 @@ pub fn validate_forbidden_exes(pr: &ProcessRouting, forbidden: &[std::path::Path
         .map(|p| normalize_exe_path(&p.to_string_lossy()).to_lowercase())
         .collect();
     // 按进程名的规则比较文件名，按完整路径的规则比较整条路径。
-    let hits = |r: &ProcessRule, p: &str| {
-        let p = normalize_exe_path(p).to_lowercase();
-        keys.iter().any(|k| if r.match_full_path { *k == p } else { process_file_name(k) == p })
+    let hits = |e: &ProcessEntry| {
+        let p = normalize_exe_path(&e.value).to_lowercase();
+        keys.iter().any(|k| if e.kind == ProcessKind::Path { *k == p } else { process_file_name(k) == p })
     };
     let errors: Vec<ValidationError> = pr
         .rules
         .iter()
-        .flat_map(|r| r.processes.iter().filter(move |p| hits(r, p)))
+        .flat_map(|r| r.processes.iter().filter(|p| hits(p)))
         .map(|p| ValidationError::InvalidExePath {
-            exe_path: p.clone(),
+            exe_path: p.value.clone(),
             reason: "不能对 Routa 自身或 mihomo 内核做进程分流".to_string(),
         })
         .collect();
@@ -439,11 +439,11 @@ mod tests {
 
     /// 按完整路径匹配的单进程规则。
     fn prule(path: &str, _l: &Listener) -> ProcessRule {
-        ProcessRule { processes: vec![path.into()], match_full_path: true, ..ProcessRule::default() }
+        ProcessRule { processes: vec![ProcessEntry::path(path)], ..ProcessRule::default() }
     }
     /// 按进程名匹配的规则。
     fn nrule(names: &[&str], _l: &Listener) -> ProcessRule {
-        ProcessRule { processes: names.iter().map(|s| s.to_string()).collect(), ..ProcessRule::default() }
+        ProcessRule { processes: names.iter().map(|s| ProcessEntry::name(*s)).collect(), ..ProcessRule::default() }
     }
 
     #[test]

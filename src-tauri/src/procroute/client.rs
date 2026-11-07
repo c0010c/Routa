@@ -925,7 +925,7 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use routa_procsvc_proto::{Action, ExitPolicy, FaultPolicy, RuleSpec};
+    use routa_procsvc_proto::{Action, FaultPolicy, ProcessKind, RuleSpec};
 
     use super::*;
 
@@ -970,6 +970,7 @@ mod tests {
                 return Ok(Response::Status(SvcStatus {
                     version: PROTO_VERSION, owner_sid: "test".into(),
                     last_interruption: None, truncated_flows: false, conflicts: vec![], rules: vec![],
+                    learned: vec![],
                 }));
             }
             if self.replies.is_empty() {
@@ -984,11 +985,12 @@ mod tests {
             rules: vec![RuleSpec {
                 id: "r1".into(),
                 exe_path: exe.into(),
+                kind: ProcessKind::Path,
+                guard_paths: vec![],
                 action: Action::Block,
                 on_fault: FaultPolicy::Block,
                 reset_on_change: false,
             }],
-            on_routa_exit: ExitPolicy::Block,
             routa_pid: 1,
         }
     }
@@ -1331,6 +1333,7 @@ mod tests {
             version: PROTO_VERSION, owner_sid: "test".into(), last_interruption: None,
             truncated_flows: false, conflicts: vec![],
             rules: vec![routa_procsvc_proto::RuleStatus { id: "r1".into(), action: Some("Block".into()), reason: Some("应用失败，已阻断".into()) }],
+            learned: vec![],
         });
         assert_eq!(link.view(&desired, &HashMap::new()).actions[&key].action, "Block");
         assert_eq!(link.view(&state(r"C:\b.exe"), &HashMap::new()).actions[&key].action, "Pending");
@@ -1376,6 +1379,7 @@ mod tests {
             truncated_flows: true,
             conflicts: vec!["冲突".into()],
             rules: vec![routa_procsvc_proto::RuleStatus { id: "r1".into(), action: Some("Block".into()), reason: None }],
+            learned: vec![],
         });
         let why = HashMap::from([(ProcessRuleId("r1".into()), Some("内核崩溃".into()))]);
         let v = link.view(&state(r"C:\a.exe"), &why);
@@ -1409,6 +1413,7 @@ mod tests {
             version: PROTO_VERSION, owner_sid: "test".into(), last_interruption: None,
             truncated_flows: false, conflicts: vec![],
             rules: vec![status("r1|a.exe", "Proxy", None), status("r1|b.exe", "Block", Some("b 失败"))],
+            learned: vec![],
         });
         let v = link.view(&desired, &HashMap::new());
         assert_eq!(v.actions.len(), 1);

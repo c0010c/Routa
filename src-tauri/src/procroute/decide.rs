@@ -20,15 +20,17 @@ pub fn decide(model: &Model, status: &RuntimeStatus, routa_pid: u32) -> DesiredS
         .flat_map(|r| {
             let action = rule_action(model, status, r).0;
             r.processes.iter().map(move |p| RuleSpec {
-                id: spec_id(&r.id, p),
-                exe_path: p.clone(),
+                id: spec_id(&r.id, &p.value),
+                exe_path: p.value.clone(),
+                kind: p.kind,
+                guard_paths: vec![],
                 action: action.clone(),
                 on_fault: r.on_fault.clone(),
                 reset_on_change: r.reset_on_change,
             })
         })
         .collect();
-    DesiredState { rules, on_routa_exit: model.process_routing.on_routa_exit.clone(), routa_pid }
+    DesiredState { rules, routa_pid }
 }
 
 /// 规则 `rule` 中进程 `process` 在服务端的规则 id：`<规则 id>|<进程小写>`。
@@ -123,7 +125,7 @@ mod tests {
     use super::*;
     use crate::core::apply::FailedListener;
     use crate::model::health::Health;
-    use crate::model::{ListenerId, Node, NodeRef, Subscription, SubscriptionId};
+    use crate::model::{ListenerId, Node, NodeRef, ProcessEntry, ProcessKind, Subscription, SubscriptionId};
     use crate::stats::delay::DelayBook;
 
     const PID: u32 = 4242;
@@ -137,9 +139,8 @@ mod tests {
         ProcessRule {
             id: ProcessRuleId("r1".into()),
             name: String::new(),
-            processes: vec![EXE.into()],
-            match_full_path: true,
-            exe_path: String::new(),
+            processes: vec![ProcessEntry::path(EXE)],
+            learned: vec![],
             listener: ListenerId(String::new()),
             node: Some(n1()),
             interface: None,
@@ -225,8 +226,9 @@ mod tests {
         assert_eq!(only_action(&d), proxy("127.0.0.1"));
         let r = &d.rules[0];
         assert_eq!((rule_of_spec(&r.id), r.exe_path.as_str()), ("r1", EXE));
+        assert_eq!((r.kind, r.guard_paths.is_empty()), (ProcessKind::Path, true));
         assert_eq!((r.on_fault.clone(), r.reset_on_change), (FaultPolicy::Direct, true));
-        assert_eq!((d.on_routa_exit, d.routa_pid), (ExitPolicy::Direct, PID));
+        assert_eq!(d.routa_pid, PID);
     }
 
     #[test]
@@ -321,7 +323,7 @@ mod tests {
         m.process_routing.enabled = false;
         let d = decide(&m, &running(), PID);
         assert!(d.rules.is_empty());
-        assert_eq!((d.on_routa_exit, d.routa_pid), (ExitPolicy::Direct, PID));
+        assert_eq!(d.routa_pid, PID);
     }
 
     #[test]
@@ -366,12 +368,12 @@ mod tests {
     #[test]
     fn each_process_becomes_one_spec() {
         let mut m = model(FaultPolicy::Direct, ExitPolicy::Direct);
-        m.process_routing.rules[0].processes = vec!["ChatGPT.exe".into(), "codex.exe".into()];
-        m.process_routing.rules[0].match_full_path = false;
+        m.process_routing.rules[0].processes = vec![ProcessEntry::name("ChatGPT.exe"), ProcessEntry::name("codex.exe")];
         let d = decide(&m, &running(), PID);
         let ids: Vec<&str> = d.rules.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["r1|chatgpt.exe", "r1|codex.exe"]);
         assert_eq!(d.rules.iter().map(|r| r.exe_path.as_str()).collect::<Vec<_>>(), ["ChatGPT.exe", "codex.exe"]);
+        assert!(d.rules.iter().all(|r| r.kind == ProcessKind::Name && r.guard_paths.is_empty()));
         assert!(d.rules.iter().all(|r| r.action == proxy("127.0.0.1")));
         assert_eq!(rule_of_spec("r1|chatgpt.exe"), "r1");
         assert_eq!(rule_of_spec("plain"), "plain");
