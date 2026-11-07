@@ -307,6 +307,14 @@ describe("ProcessRoutingPage", () => {
     await waitFor(() => expect(commands.disableRoutingAndQuit).toHaveBeenCalled());
   });
 
+  it("shows why 停用并退出 did not quit", async () => {
+    const reason = "进程分流还没有停用成功，暂不退出：服务启动失败";
+    vi.mocked(commands.disableRoutingAndQuit).mockResolvedValue({ status: "error", error: reason });
+    renderPage(base);
+    fireEvent.click(await screen.findByRole("button", { name: "停用并退出" }));
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+  });
+
   it("hides 停用并退出 while routing is paused", async () => {
     renderPage(base, { ...model, process_routing: { ...model.process_routing, enabled: false } });
     await screen.findByRole("switch", { name: "启用进程分流规则" });

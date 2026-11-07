@@ -12,10 +12,12 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import { commands } from "../bindings";
 import { useDisableRoutingAndQuit, useSetExitPrompt } from "../api/procroute";
+import { useApplyResult } from "./ApplyResultSnackbar";
 
 /**
  * Shown when the tray's 退出 finds enabled block rules (Rust emits
  * "confirm-exit" with their names): quitting would cut those programs off.
+ * Also reports why the tray's 停用进程分流并退出 did not quit ("exit-error").
  */
 export function ExitConfirmDialog() {
   const [names, setNames] = useState<string[] | null>(null);
@@ -23,22 +25,28 @@ export function ExitConfirmDialog() {
   const disableAndQuit = useDisableRoutingAndQuit();
   const setExitPrompt = useSetExitPrompt({ errorFeedback: "local" });
   const [busy, setBusy] = useState(false);
+  const { showError } = useApplyResult();
 
   useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void) | undefined;
-    listen<string[]>("confirm-exit", (e) => {
-      setNames(e.payload);
-      setDontAsk(false);
-      setBusy(false);
-    })
-      .then((u) => (disposed ? u() : (unlisten = u)))
-      .catch((e) => console.error("event subscription failed", e));
+    const unlistens: (() => void)[] = [];
+    const reg = (p: Promise<() => void>) =>
+      p
+        .then((u) => (disposed ? u() : unlistens.push(u)))
+        .catch((e) => console.error("event subscription failed", e));
+    reg(
+      listen<string[]>("confirm-exit", (e) => {
+        setNames(e.payload);
+        setDontAsk(false);
+        setBusy(false);
+      }),
+    );
+    reg(listen<string>("exit-error", (e) => showError(e.payload)));
     return () => {
       disposed = true;
-      unlisten?.();
+      unlistens.forEach((u) => u());
     };
-  }, []);
+  }, [showError]);
 
   const rememberChoice = async () => {
     if (!dontAsk) return;
@@ -62,7 +70,8 @@ export function ExitConfirmDialog() {
     try {
       await disableAndQuit.mutateAsync();
     } catch {
-      // The error is shown by the mutation; keep the dialog usable.
+      // Routa did not quit (programs may still be blocked); the mutation shows
+      // why. The dialog stays open so 仍然退出 is still available.
       setBusy(false);
     }
   };

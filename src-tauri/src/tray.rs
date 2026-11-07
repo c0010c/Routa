@@ -2,7 +2,7 @@
 //! plus an icon that follows the connection state.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
@@ -12,8 +12,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::core::apply::ApplyOutcome;
 use crate::core::process::CoreState;
 use crate::model::health::{ExitStatus, ListenerStatus};
-use crate::model::{FaultPolicy, Model, ProcessRouting, ProcessRule, ValidationError};
-use crate::procroute::client::ProcRouteStatus;
+use crate::model::{FaultPolicy, Model, ProcessRouting, ProcessRule};
+use crate::procroute::client::{ComponentState, ProcRouteStatus};
 use crate::runtime::{Runtime, RuntimeStatus};
 
 const TRAY_ID: &str = "main";
@@ -163,34 +163,84 @@ pub fn exit_needs_confirm(m: &Model) -> bool {
     m.process_routing.exit_prompt && blocking_rules(m).next().is_some()
 }
 
-/// Turns process routing off, waits (at most `DISABLE_CONFIRM_WAIT`) until the
-/// service confirmed the new rules, then exits. Does not exit when the
-/// disable itself fails.
-pub async fn disable_routing_and_quit(app: &AppHandle, rt: &Runtime) -> Result<(), Vec<ValidationError>> {
-    use crate::procroute::client::{current_rules_confirmed, runtime_changed, status, ComponentState};
-    rt.mutate_process_routing(|p| p.enabled = false).await?;
+/// What "停用进程分流并退出" does after the disable was saved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DisableExit {
+    /// Nothing is blocking any more (or no service could be blocking): exit.
+    ExitNow,
+    /// The service runs but has not confirmed the new rules yet.
+    Wait,
+    /// Programs may still be blocked: do not exit. The reason, for the user.
+    Fail(String),
+}
+
+/// Decides from the component state, whether the service confirmed the
+/// current (disabled) rules, and whether the wait ran out.
+pub fn disable_exit_decision(component: &ComponentState, confirmed: bool, timed_out: bool) -> DisableExit {
+    match component {
+        ComponentState::NotInstalled | ComponentState::Stopped => DisableExit::ExitNow,
+        ComponentState::Running if confirmed => DisableExit::ExitNow,
+        ComponentState::Running if !timed_out => DisableExit::Wait,
+        ComponentState::Running => DisableExit::Fail("分流服务没有确认新的规则".into()),
+        ComponentState::NeedsUpdate => DisableExit::Fail("分流服务需要更新".into()),
+        ComponentState::OwnedByOtherUser => DisableExit::Fail("分流服务属于其他 Windows 用户".into()),
+        ComponentState::Error { message } => DisableExit::Fail(message.clone()),
+    }
+}
+
+fn not_disabled(reason: &str) -> String {
+    format!("进程分流还没有停用成功，暂不退出：{reason}")
+}
+
+/// Turns process routing off and exits once no program can stay blocked: right
+/// away without a service (NotInstalled / Stopped), otherwise after the running
+/// service confirmed the new rules (at most `DISABLE_CONFIRM_WAIT`). Any other
+/// outcome returns the reason and does not exit.
+pub async fn disable_routing_and_quit(app: &AppHandle, rt: &Runtime) -> Result<(), String> {
+    use crate::procroute::client::{current_rules_confirmed, runtime_changed, status};
+    rt.mutate_process_routing(|p| p.enabled = false)
+        .await
+        .map_err(|e| not_disabled(&crate::desktop::validation(e)))?;
     runtime_changed();
-    // Without a running service there is nothing to confirm.
     let deadline = tokio::time::Instant::now() + DISABLE_CONFIRM_WAIT;
-    while matches!(status().component, ComponentState::Running)
-        && !current_rules_confirmed(rt)
-        && tokio::time::Instant::now() < deadline
-    {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    loop {
+        let timed_out = tokio::time::Instant::now() >= deadline;
+        match disable_exit_decision(&status().component, current_rules_confirmed(rt), timed_out) {
+            DisableExit::ExitNow => break,
+            DisableExit::Wait => tokio::time::sleep(Duration::from_millis(100)).await,
+            DisableExit::Fail(reason) => return Err(not_disabled(&reason)),
+        }
     }
     // Goes through RunEvent::ExitRequested, which runs the shutdown.
     app.exit(0);
     Ok(())
 }
 
+/// A second tray 退出 this soon after a confirm-exit prompt exits directly, so
+/// the user can always quit (e.g. when the window never answers the prompt).
+const REPROMPT_WINDOW: Duration = Duration::from_secs(30);
+
+/// When the last confirm-exit prompt was sent.
+static LAST_PROMPT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Whether tray 退出 skips the prompt because one was sent moments ago.
+pub fn quit_without_prompt(last_prompt: Option<Instant>, now: Instant) -> bool {
+    last_prompt.is_some_and(|t| now.saturating_duration_since(t) < REPROMPT_WINDOW)
+}
+
 /// Tray "退出": asks in the main window first when block rules would cut programs off.
 fn request_quit(app: &AppHandle) {
+    let now = Instant::now();
+    let mut last = LAST_PROMPT.lock().unwrap_or_else(|e| e.into_inner());
     match app.try_state::<Arc<Runtime>>().map(|rt| rt.model()) {
-        Some(m) if exit_needs_confirm(&m) => {
+        Some(m) if exit_needs_confirm(&m) && !quit_without_prompt(*last, now) => {
             show_main_window(app);
-            if let Err(e) = app.emit("confirm-exit", blocking_rule_names(&m)) {
-                eprintln!("emit confirm-exit failed: {e}");
-                app.exit(0);
+            match app.emit("confirm-exit", blocking_rule_names(&m)) {
+                Ok(()) => *last = Some(now),
+                Err(e) => {
+                    eprintln!("emit confirm-exit failed: {e}");
+                    app.exit(0);
+                }
             }
         }
         // Goes through RunEvent::ExitRequested, which runs the shutdown.
@@ -266,7 +316,12 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = disable_routing_and_quit(&app, &rt).await {
-                        eprintln!("tray: disable process routing failed: {e:?}");
+                        eprintln!("tray: {e}");
+                        show_main_window(&app);
+                        // Shown by the frontend's result snackbar.
+                        if let Err(e) = app.emit("exit-error", e) {
+                            eprintln!("emit exit-error failed: {e}");
+                        }
                     }
                 });
             }
@@ -427,6 +482,35 @@ mod tests {
         let mut off = m;
         off.process_routing.enabled = false;
         assert!(!exit_needs_confirm(&off), "routing off");
+    }
+
+    #[test]
+    fn disable_exit_waits_for_confirmation_and_never_exits_blocked() {
+        use DisableExit::*;
+        for c in [ComponentState::NotInstalled, ComponentState::Stopped] {
+            assert_eq!(disable_exit_decision(&c, false, false), ExitNow, "{c:?}");
+        }
+        let running = ComponentState::Running;
+        assert_eq!(disable_exit_decision(&running, true, false), ExitNow);
+        assert_eq!(disable_exit_decision(&running, true, true), ExitNow);
+        assert_eq!(disable_exit_decision(&running, false, false), Wait);
+        assert!(matches!(disable_exit_decision(&running, false, true), Fail(_)));
+        let err = ComponentState::Error { message: "服务启动失败".into() };
+        assert_eq!(disable_exit_decision(&err, true, false), Fail("服务启动失败".into()));
+        for c in [ComponentState::NeedsUpdate, ComponentState::OwnedByOtherUser] {
+            assert!(matches!(disable_exit_decision(&c, true, false), Fail(_)), "{c:?}");
+        }
+        assert_eq!(not_disabled("x"), "进程分流还没有停用成功，暂不退出：x");
+    }
+
+    #[test]
+    fn second_quit_soon_after_a_prompt_exits_directly() {
+        let now = Instant::now();
+        assert!(!quit_without_prompt(None, now));
+        assert!(quit_without_prompt(Some(now), now));
+        assert!(quit_without_prompt(Some(now), now + Duration::from_secs(29)));
+        assert!(!quit_without_prompt(Some(now), now + Duration::from_secs(30)));
+        assert!(!quit_without_prompt(Some(now), now + Duration::from_secs(120)));
     }
 
     #[test]
