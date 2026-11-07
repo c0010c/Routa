@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
-import type { Model, ProcRouteStatus } from "../bindings";
+import type { Model, ProcessEntry, ProcessRule, ProcRouteStatus } from "../bindings";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -18,6 +18,7 @@ vi.mock("../bindings", () => ({
     saveProcessRule: vi.fn(),
     deleteProcessRule: vi.fn(),
     saveProcessRoutingSettings: vi.fn(),
+    removeLearnedProcessPath: vi.fn(),
     listRunningProcesses: vi.fn(),
   },
 }));
@@ -26,6 +27,9 @@ import { resetFlowsStore, setFlows } from "../api/procroute";
 import { commands } from "../bindings";
 import { ApplyResultProvider } from "../components/ApplyResultSnackbar";
 import { ProcessRoutingPage } from "./ProcessRouting";
+
+const N = (value: string): ProcessEntry => ({ kind: "Name", value });
+const P = (value: string): ProcessEntry => ({ kind: "Path", value });
 
 const model: Model = {
   subscriptions: [],
@@ -39,20 +43,23 @@ const model: Model = {
   process_routing: {
     enabled: true,
     rules: [
-      { id: "r1", name: "", processes: ["curl.exe"], match_full_path: false, node: { manual_id: "m1" }, on_fault: "Direct", reset_on_change: false, user_enabled: true },
+      { id: "r1", name: "", processes: [N("curl.exe")], learned: [], node: { manual_id: "m1" }, on_fault: "Direct", reset_on_change: false, user_enabled: true },
       {
         id: "r2",
         name: "AI 工具",
-        processes: ["ChatGPT.exe", "codex.exe", "Claude.exe", "node.exe", "C:\\Tools\\git.exe"],
-        match_full_path: false,
+        processes: [N("ChatGPT.exe"), N("codex.exe"), N("Claude.exe"), N("node.exe"), P("C:\\Tools\\git.exe")],
+        learned: [],
         node: { manual_id: "m1" },
         on_fault: "Direct",
         reset_on_change: false,
         user_enabled: true,
       },
     ],
+    exit_prompt: true,
   },
 };
+
+const withRules = (...rules: ProcessRule[]): Model => ({ ...model, process_routing: { ...model.process_routing, rules } });
 
 const base: ProcRouteStatus = {
   component: "Running",
@@ -230,6 +237,44 @@ describe("ProcessRoutingPage", () => {
     }
     expect(within(row).getByText("+1")).toBeInTheDocument();
     expect(within(row).queryByText("git.exe")).not.toBeInTheDocument();
+  });
+
+  it("labels a program's entries with one chip", async () => {
+    const chrome: ProcessRule = {
+      ...model.process_routing.rules[0],
+      id: "r3",
+      name: "浏览器",
+      processes: [N("chrome.exe"), P("C:\\Chrome\\chrome.exe")],
+    };
+    renderPage(base, withRules(chrome));
+    const row = (await screen.findByText("浏览器")).closest("tr")!;
+    expect(within(row).getByText("chrome.exe + 1 个位置")).toBeInTheDocument();
+  });
+
+  it("tags blocking rules and lists learned locations with removal", async () => {
+    const A = "C:\\A\\curl.exe";
+    vi.mocked(commands.removeLearnedProcessPath).mockResolvedValue({ status: "ok", data: null });
+    const learning: ProcessRule = {
+      ...model.process_routing.rules[0],
+      on_fault: "Block",
+      learned: [A, "C:\\B\\curl.exe"],
+    };
+    renderPage(base, withRules(learning));
+    const row = (await screen.findAllByText("curl.exe"))[0].closest("tr")!;
+    expect(within(row).getByText("不可用时阻断")).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: /已记录 2 个位置/ }));
+    // Opening the list doesn't open the connections drawer.
+    expect(screen.queryByRole("presentation")).not.toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: `移除 ${A}` }));
+    await waitFor(() => expect(commands.removeLearnedProcessPath).toHaveBeenCalledWith("r1", A));
+  });
+
+  it("searches entry values", async () => {
+    renderPage(base);
+    const search = await screen.findByLabelText("搜索规则名称或进程");
+    fireEvent.change(search, { target: { value: "c:\\tools" } });
+    expect(screen.getByText("AI 工具")).toBeInTheDocument();
+    expect(screen.queryByText("curl.exe")).not.toBeInTheDocument();
   });
 
   it("searches rule names and processes", async () => {

@@ -10,14 +10,18 @@ vi.mock("../bindings", () => ({
     testDelays: vi.fn(),
     saveProcessRule: vi.fn(),
     saveProcessRuleConfirmed: vi.fn(),
+    removeLearnedProcessPath: vi.fn(),
     listRunningProcesses: vi.fn(),
   },
 }));
 
 import { commands } from "../bindings";
+import { ApplyResultProvider } from "../components/ApplyResultSnackbar";
 import { ProcessRuleDialog } from "./ProcessRuleDialog";
 
 const n1: NodeRef = { subscription_id: "s", name: "n1" };
+const CANARY = "C:\\Users\\Q\\AppData\\Local\\Google\\Chrome SxS\\Application\\chrome.exe";
+const OLD = "C:\\Apps\\Codex\\1.0\\a.exe";
 
 const model = {
   subscriptions: [
@@ -31,28 +35,40 @@ const model = {
     { id: "ts", name: "家里", groups: [], kind: { Tailscale: { hostname: "h", exit_node: "x", ephemeral: false, udp: true, auth_key: null, interface: "{NIC-TS}" } } },
   ],
   node_groups: [],
-  process_routing: { enabled: true, rules: [] },
+  process_routing: { enabled: true, rules: [], exit_prompt: true },
 } as unknown as Model;
 
-/** A rule migrated from the old one-exe shape: matched by full path, blocks on fault. */
+/** A rule matched by full path that blocks when Routa or a component is unavailable. */
 const rule: ProcessRule = {
   id: "r1",
   name: "",
-  processes: ["C:\\Apps\\curl.exe"],
-  match_full_path: true,
+  processes: [{ kind: "Path", value: "C:\\Apps\\curl.exe" }],
+  learned: [],
   node: n1,
   on_fault: "Block",
   reset_on_change: false,
   user_enabled: true,
 };
 
+const canaryRule: ProcessRule = {
+  ...rule,
+  id: "r2",
+  name: "Chrome Canary",
+  processes: [{ kind: "Path", value: CANARY }],
+  on_fault: "Direct",
+};
+
+const withRules = (...rules: ProcessRule[]): Model => ({ ...model, process_routing: { ...model.process_routing, rules } });
+
 function renderDialog(r?: ProcessRule, onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <ProcessRuleDialog open rule={r} onClose={onClose} />
-      </MemoryRouter>
+      <ApplyResultProvider>
+        <MemoryRouter>
+          <ProcessRuleDialog open rule={r} onClose={onClose} />
+        </MemoryRouter>
+      </ApplyResultProvider>
     </QueryClientProvider>,
   );
   return onClose;
@@ -64,10 +80,18 @@ async function loaded() {
   await new Promise((r) => setTimeout(r, 0));
 }
 
-async function pickNode(name: string) {
+async function pickNode(name: string | RegExp) {
   fireEvent.click(screen.getByRole("button", { name: /节点/ }));
   fireEvent.click(await screen.findByRole("radio", { name }));
 }
+
+function addProcess(v: string) {
+  const input = screen.getByRole("combobox", { name: "进程" });
+  fireEvent.change(input, { target: { value: v } });
+  fireEvent.keyDown(input, { key: "Enter" });
+}
+
+const saved = () => vi.mocked(commands.saveProcessRuleConfirmed).mock.calls[0][0];
 
 describe("ProcessRuleDialog", () => {
   beforeEach(() => {
@@ -75,26 +99,100 @@ describe("ProcessRuleDialog", () => {
     vi.mocked(commands.listRunningProcesses).mockResolvedValue([
       { pid: 42, name: "curl.exe", exe_path: "C:\\Apps\\curl.exe" },
     ]);
+    vi.mocked(commands.saveProcessRuleConfirmed).mockReset();
+    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "ok", data: null });
+    vi.mocked(commands.saveProcessRule).mockClear();
+    vi.mocked(commands.removeLearnedProcessPath).mockReset();
   });
 
-  it("shows ipv4 hint when reset enabled", async () => {
-    renderDialog(rule);
+  it("lays out the fields in order without advanced options", async () => {
+    renderDialog();
     await loaded();
-    expect(screen.queryByText(/仅对 IPv4 TCP 连接有效/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("switch", { name: "规则变化时断开旧连接" }));
-    expect(screen.getByText("仅对 IPv4 TCP 连接有效；更换代理目标不触发断开")).toBeInTheDocument();
+    const fields = [
+      screen.getByRole("textbox", { name: "规则名称（可选）" }),
+      screen.getByRole("combobox", { name: "进程" }),
+      screen.getByRole("button", { name: /节点/ }),
+      screen.getByRole("combobox", { name: "网卡" }),
+      screen.getByRole("switch", { name: "启用" }),
+      screen.getByRole("radiogroup", { name: "Routa 或组件不可用时" }),
+      screen.getByRole("switch", { name: "规则变化时断开旧连接" }),
+    ];
+    for (let i = 1; i < fields.length; i++) {
+      expect(fields[i - 1].compareDocumentPosition(fields[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(screen.queryByText("高级选项")).not.toBeInTheDocument();
+    expect(screen.queryByText("按完整路径匹配")).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "直连" })).toBeChecked();
   });
 
-  it("shows fault policy explanation", async () => {
-    renderDialog(rule);
+  it("allows blocking with only process names", async () => {
+    renderDialog();
     await loaded();
-    expect(
-      screen.getByText("只在 mihomo 或分流组件意外故障时生效；节点失效、网卡断开时，始终阻断"),
-    ).toBeInTheDocument();
+    addProcess("chrome.exe");
+    expect(screen.getByRole("radio", { name: "阻断" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("radio", { name: "阻断" }));
     expect(screen.getByRole("radio", { name: "阻断" })).toBeChecked();
   });
 
-  it("maps duplicate error to path field", async () => {
+  it("notes locations another enabled rule owns when blocking", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue(withRules(canaryRule));
+    renderDialog();
+    await loaded();
+    addProcess("chrome.exe");
+    expect(screen.queryByText(/不受这条规则阻断/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "阻断" }));
+    expect(screen.getByText("chrome.exe 在「Chrome Canary」指定的位置不受这条规则阻断。")).toBeInTheDocument();
+  });
+
+  it("info_toast_on_newly_learning", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue(withRules(canaryRule));
+    const onClose = renderDialog();
+    await loaded();
+    addProcess("chrome.exe");
+    await pickNode("n1 · 来源甲");
+    fireEvent.click(screen.getByRole("radio", { name: "阻断" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(saved()).toMatchObject({ processes: [{ kind: "Name", value: "chrome.exe" }], on_fault: "Block" });
+    const toast = await screen.findByText(/已开启按进程名阻断/);
+    expect(toast.closest(".MuiAlert-root")).toHaveClass("MuiAlert-colorInfo");
+    expect(toast).toHaveTextContent("chrome.exe 联网时会自动记录位置，分流服务停止后也能拦住；还没联网过的位置除外。");
+    expect(toast).toHaveTextContent("「Chrome Canary」指定的 chrome.exe 不受影响。");
+  });
+
+  it("no_info_toast_when_nothing_newly_learning", async () => {
+    const learning: ProcessRule = { ...rule, processes: [{ kind: "Name", value: "a.exe" }] };
+    vi.mocked(commands.getModel).mockResolvedValue(withRules(learning));
+    const onClose = renderDialog(learning);
+    await loaded();
+    await pickNode(/家里/);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(saved().node).toEqual({ manual_id: "ts" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText(/已开启按进程名阻断/)).not.toBeInTheDocument();
+  });
+
+  it("shows learned locations when editing a learning rule; 移除 calls removeLearnedProcessPath", async () => {
+    vi.mocked(commands.removeLearnedProcessPath).mockResolvedValue({ status: "ok", data: null });
+    const learning: ProcessRule = { ...rule, processes: [{ kind: "Name", value: "a.exe" }], learned: [OLD] };
+    vi.mocked(commands.getModel).mockResolvedValue(withRules(learning));
+    renderDialog(learning);
+    await loaded();
+    fireEvent.click(screen.getByRole("button", { name: /已记录 1 个位置/ }));
+    fireEvent.click(screen.getByRole("button", { name: `移除 ${OLD}` }));
+    await waitFor(() => expect(commands.removeLearnedProcessPath).toHaveBeenCalledWith("r1", OLD));
+  });
+
+  it("keeps the reset hint behind a help icon", async () => {
+    renderDialog(rule);
+    await loaded();
+    expect(screen.getByRole("switch", { name: "规则变化时断开旧连接" })).not.toBeChecked();
+    expect(screen.queryByText(/仅对 IPv4 TCP 连接有效/)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "阻断" })).toBeChecked();
+  });
+
+  it("maps duplicate error to the process field", async () => {
     vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({
       status: "error",
       error: [{ DuplicateProcessRule: { exe_path: "C:\\Apps\\curl.exe" } }],
@@ -102,16 +200,13 @@ describe("ProcessRuleDialog", () => {
     const onClose = renderDialog(rule);
     await loaded();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByText("C:\\Apps\\curl.exe 已在其他规则中，一个程序只能属于一条规则")).toBeInTheDocument();
+    expect(await screen.findByText("C:\\Apps\\curl.exe 已在其他规则中，同一个进程名或路径只能属于一条规则")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "进程" })).toHaveAttribute("aria-invalid", "true");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 
   it("saves through save_process_rule_confirmed, not saveProcessRule", async () => {
-    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "ok", data: null });
-    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
-    vi.mocked(commands.saveProcessRule).mockClear();
     const onClose = renderDialog(rule);
     await loaded();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -130,59 +225,28 @@ describe("ProcessRuleDialog", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("saves typed process names and closes", async () => {
-    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "ok", data: null });
-    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
+  it("saves typed entries with their kinds and closes", async () => {
     const onClose = renderDialog();
     await loaded();
     await pickNode("n1 · 来源甲");
-    const input = screen.getByRole("combobox", { name: "进程" });
-    fireEvent.change(input, { target: { value: "ChatGPT.exe" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    // A pasted path is cut down to its file name when matching by name; text left in the box is saved too.
-    fireEvent.change(input, { target: { value: "D:\\Tools\\codex.exe" } });
+    addProcess("ChatGPT.exe");
+    addProcess("D:\\Tools\\codex.exe");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    const saved = vi.mocked(commands.saveProcessRuleConfirmed).mock.calls[0][0];
-    expect(saved).toMatchObject({
+    expect(saved()).toMatchObject({
       name: "",
-      processes: ["ChatGPT.exe", "codex.exe"],
-      match_full_path: false,
+      processes: [
+        { kind: "Name", value: "ChatGPT.exe" },
+        { kind: "Path", value: "D:\\Tools\\codex.exe" },
+      ],
+      learned: [],
       on_fault: "Direct",
       reset_on_change: false,
     });
-  });
-
-  it("warns about name matching and only allows blocking with full paths", async () => {
-    renderDialog();
-    await loaded();
-    expect(screen.getByText(/按进程名匹配：同名程序装在哪里都会被分流/)).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "直连" })).toBeChecked();
-    expect(screen.getByRole("radio", { name: "阻断" })).toBeDisabled();
-    // Turning on full paths swaps a running program's name for its path and allows blocking.
-    const input = screen.getByRole("combobox", { name: "进程" });
-    fireEvent.change(input, { target: { value: "curl.exe" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    fireEvent.click(screen.getByRole("switch", { name: "按完整路径匹配" }));
-    expect(screen.getByRole("button", { name: "C:\\Apps\\curl.exe" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "阻断" })).toBeEnabled();
-    expect(screen.queryByText(/按进程名匹配：同名程序装在哪里都会被分流/)).not.toBeInTheDocument();
-  });
-
-  it("refuses a program that already belongs to another rule", async () => {
-    const other: ProcessRule = { ...rule, id: "r2", name: "AI 工具", processes: ["ChatGPT.exe"], match_full_path: false, on_fault: "Direct" };
-    vi.mocked(commands.getModel).mockResolvedValue({ ...model, process_routing: { ...model.process_routing, rules: [other] } });
-    renderDialog();
-    await loaded();
-    const input = screen.getByRole("combobox", { name: "进程" });
-    fireEvent.change(input, { target: { value: "chatgpt.EXE" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    expect(await screen.findByText("chatgpt.EXE 已在规则「AI 工具」中，一个程序只能属于一条规则")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "chatgpt.EXE" })).not.toBeInTheDocument();
+    expect(saved()).not.toHaveProperty("match_full_path");
   });
 
   it("requires at least one process", async () => {
-    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
     renderDialog();
     await loaded();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -191,46 +255,35 @@ describe("ProcessRuleDialog", () => {
   });
 
   it("requires a node and does not save without one", async () => {
-    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
     renderDialog();
     await loaded();
-    const input = screen.getByRole("combobox", { name: "进程" });
-    fireEvent.change(input, { target: { value: "a.exe" } });
+    addProcess("a.exe");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText("请选择一个节点")).toBeInTheDocument();
     expect(commands.saveProcessRuleConfirmed).not.toHaveBeenCalled();
   });
 
   it("saves the picked node with a null interface", async () => {
-    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "ok", data: null });
-    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
     const onClose = renderDialog();
     await loaded();
-    fireEvent.change(screen.getByRole("combobox", { name: "进程" }), { target: { value: "a.exe" } });
+    addProcess("a.exe");
     await pickNode("n1 · 来源甲");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    const saved = vi.mocked(commands.saveProcessRuleConfirmed).mock.calls[0][0];
-    expect(saved.node).toEqual(n1);
-    expect(saved.interface).toBeNull();
+    expect(saved().node).toEqual(n1);
+    expect(saved().interface).toBeNull();
   });
 
-  it("locks the exit NIC for a Tailscale node and shows the instance NIC", async () => {
-    vi.mocked(commands.saveProcessRuleConfirmed).mockResolvedValue({ status: "ok", data: null });
-    vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
+  it("locks the NIC for a Tailscale node and shows the instance NIC", async () => {
     const onClose = renderDialog({ ...rule, interface: "{OTHER}" });
     await loaded();
-    fireEvent.click(screen.getByText("高级选项"));
-    expect(screen.getByRole("combobox", { name: "出口网卡" })).not.toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(screen.getByRole("button", { name: /节点/ }));
-    fireEvent.click(await screen.findByRole("radio", { name: /家里/ }));
-    const nic = screen.getByRole("combobox", { name: "出口网卡" });
-    expect(nic).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("combobox", { name: "网卡" })).not.toHaveAttribute("aria-disabled", "true");
+    await pickNode(/家里/);
+    expect(screen.getByRole("combobox", { name: "网卡" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText("在 Tailscale 节点设置里修改")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    const saved = vi.mocked(commands.saveProcessRuleConfirmed).mock.calls[0][0];
-    expect(saved.node).toEqual({ manual_id: "ts" });
-    expect(saved.interface).toBeNull();
+    expect(saved().node).toEqual({ manual_id: "ts" });
+    expect(saved().interface).toBeNull();
   });
 });

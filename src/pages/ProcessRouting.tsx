@@ -1,4 +1,5 @@
 import AppsOutlined from "@mui/icons-material/AppsOutlined";
+import FolderOutlined from "@mui/icons-material/FolderOutlined";
 import {
   Alert,
   Box,
@@ -26,6 +27,8 @@ import {
   useProcRouteInstall,
   useProcRouteStatus,
   useProcRouteRetry,
+  useRemoveLearnedPath,
+  useRunningProcesses,
   useSaveProcessRoutingSettings,
 } from "../api/procroute";
 import type {
@@ -36,9 +39,10 @@ import type {
 } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { EmptyState } from "../components/EmptyState";
+import { LearnedLocations } from "../components/LearnedLocations";
 import { RowActions } from "../components/RowActions";
 import { formatBytes, type Label } from "../lib/format";
-import { fileName, ruleLabel } from "../lib/processRule";
+import { chipLabel, fileName, groupsOf, learningNames, ruleLabel, type ProcessGroup } from "../lib/processRule";
 import { ProcessRuleDialog } from "./ProcessRuleDialog";
 import { ProcessNodeSelect } from "../components/ProcessNodeSelect";
 import { desktopApi, useDesktopMutation } from "../api/desktop";
@@ -262,18 +266,25 @@ function GuardChips({
   );
 }
 
-/** 规则里的进程：只显示文件名，悬停看完整写法；多出的折成「+N」。 */
+/** 规则里的进程：一个程序一个标签，悬停看匹配方式和位置；多出的折成「+N」。 */
 function ProcessChips({ rule }: { rule: ProcessRule }) {
-  const extra = rule.processes.slice(MAX_CHIPS);
+  const groups = groupsOf(rule.processes);
+  const extra = groups.slice(MAX_CHIPS);
+  const tip = (g: ProcessGroup) => [...(g.hasName ? ["所有位置（按进程名）"] : []), ...g.paths].join("\n");
   return (
     <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
-      {rule.processes.slice(0, MAX_CHIPS).map((p) => (
-        <Tooltip key={p} title={p}>
-          <Chip size="small" label={fileName(p)} sx={{ borderRadius: 1, height: 22 }} />
+      {groups.slice(0, MAX_CHIPS).map((g) => (
+        <Tooltip key={g.key} title={<Box sx={{ whiteSpace: "pre-line", wordBreak: "break-all" }}>{tip(g)}</Box>}>
+          <Chip
+            size="small"
+            icon={g.paths.length ? <FolderOutlined /> : undefined}
+            label={chipLabel(g)}
+            sx={{ borderRadius: 1, height: 22 }}
+          />
         </Tooltip>
       ))}
       {extra.length > 0 && (
-        <Tooltip title={extra.join("\n")}>
+        <Tooltip title={<Box sx={{ whiteSpace: "pre-line" }}>{extra.map(chipLabel).join("\n")}</Box>}>
           <Chip size="small" label={`+${extra.length}`} sx={{ borderRadius: 1, height: 22 }} />
         </Tooltip>
       )}
@@ -387,6 +398,8 @@ export function ProcessRoutingPage() {
     }
   };
   const delRule = useDeleteProcessRule();
+  const removeLearned = useRemoveLearnedPath();
+  const running = useRunningProcesses();
   const [editing, setEditing] = useState<{ rule?: ProcessRule } | null>(null);
   const [deleting, setDeleting] = useState<ProcessRule | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -402,7 +415,7 @@ export function ProcessRoutingPage() {
     (r) =>
       !q ||
       ruleLabel(r).toLowerCase().includes(q) ||
-      r.processes.some((p) => p.toLowerCase().includes(q)),
+      r.processes.some((p) => p.value.toLowerCase().includes(q)),
   );
 
   return (
@@ -461,8 +474,24 @@ export function ProcessRoutingPage() {
                     <TableCell sx={{ width: "42%" }}>
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>
                         {name}
+                        {r.on_fault === "Block" && (
+                          <Typography component="span" variant="caption" sx={{ ml: 1, fontWeight: 400, color: "text.secondary" }}>
+                            不可用时阻断
+                          </Typography>
+                        )}
                       </Typography>
                       <ProcessChips rule={r} />
+                      {learningNames(r).length > 0 && (
+                        <Box sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>
+                          <LearnedLocations
+                            rule={r}
+                            others={pr.rules.filter((x) => x.id !== r.id)}
+                            routingEnabled={pr.enabled}
+                            running={running.data ?? []}
+                            onRemove={(p) => removeLearned.mutate(r.id, p)}
+                          />
+                        </Box>
+                      )}
                     </TableCell>
                     <TableCell>
                       <ProcessNodeSelect rule={r} model={m} reason={view?.reason} />

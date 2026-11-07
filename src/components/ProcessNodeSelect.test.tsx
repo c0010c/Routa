@@ -23,8 +23,8 @@ const model = {
 const rule: ProcessRule = {
   id: "r1",
   name: "",
-  processes: ["chrome.exe"],
-  match_full_path: false,
+  processes: [{ kind: "Name", value: "chrome.exe" }],
+  learned: [],
   node: { manual_id: "m1" },
   on_fault: "Direct",
   reset_on_change: false,
