@@ -1,0 +1,207 @@
+//! 按进程名阻断的规则（Name + on_fault=Block）已知的程序位置：下发给服务做 WFP 守护，
+//! 合并服务从连接里学到的位置，保存规则时预先记下正在运行的同名程序。纯逻辑，不做 IO。
+
+use std::collections::HashSet;
+
+use routa_procsvc_proto::{FaultPolicy, LearnedPath, ProcessKind};
+
+use super::decide::rule_of_spec;
+use super::processes::RunningProcess;
+use crate::model::normalize::normalize_exe_path;
+use crate::model::validate::process_file_name;
+use crate::model::{Model, ProcessRouting, ProcessRule, ProcessRuleId};
+
+/// 判同用的键：去首尾空白、`/` → `\`、小写（与服务端 `exe_key` 一致）。
+pub fn exe_key(p: &str) -> String {
+    normalize_exe_path(p).to_lowercase()
+}
+
+/// 规则本身（不看全局开关）处在学习状态：启用、Block、至少一个按进程名的条目。
+fn rule_learning(r: &ProcessRule) -> bool {
+    r.user_enabled && r.on_fault == FaultPolicy::Block && r.processes.iter().any(|p| p.kind == ProcessKind::Name)
+}
+
+/// 规则正在学习位置：全局开关开、规则启用、`on_fault=Block`、至少一个 `Name` 条目。
+pub fn is_learning(model: &Model, r: &ProcessRule) -> bool {
+    model.process_routing.enabled && rule_learning(r)
+}
+
+/// 规则 `r` 自己有与 `path` 同键的 `Path` 条目。
+fn own_path(r: &ProcessRule, path: &str) -> bool {
+    let key = exe_key(path);
+    r.processes.iter().any(|p| p.kind == ProcessKind::Path && exe_key(&p.value) == key)
+}
+
+/// 规则 `r` 有文件名与 `path` 相同的 `Name` 条目。
+fn names_file(r: &ProcessRule, path: &str) -> bool {
+    let file = exe_key(process_file_name(&normalize_exe_path(path)));
+    r.processes.iter().any(|p| p.kind == ProcessKind::Name && exe_key(&p.value) == file)
+}
+
+/// 其他**启用**规则有与 `path` 同键的 `Path` 条目：该程序归那条规则管。
+pub fn owned_by_others(model: &Model, rule: &ProcessRuleId, path: &str) -> bool {
+    model.process_routing.rules.iter().any(|r| &r.id != rule && r.user_enabled && own_path(r, path))
+}
+
+/// 下发给进程名 `name` 的守护路径：`r.learned` 中文件名等于 `name`、不是本规则 `Path` 条目、
+/// 也不归其他启用规则管的路径。文件是否存在由服务端过滤。
+pub fn guard_paths(model: &Model, r: &ProcessRule, name: &str) -> Vec<String> {
+    let name = exe_key(name);
+    r.learned
+        .iter()
+        .filter(|p| exe_key(process_file_name(&normalize_exe_path(p))) == name)
+        .filter(|p| !own_path(r, p) && !owned_by_others(model, &r.id, p))
+        .cloned()
+        .collect()
+}
+
+/// 把服务回报的位置并入对应规则的 `learned`（按 [`exe_key`] 去重）。只收规则仍在学习、
+/// 文件名对得上某个 `Name` 条目、且不是本规则 `Path` 条目的路径（与 `prune_learned` 一致）。
+/// 返回是否有改动。
+pub fn merge_reported(pr: &mut ProcessRouting, reported: &[LearnedPath]) -> bool {
+    let mut changed = false;
+    for l in reported {
+        let id = rule_of_spec(&l.rule_id);
+        let Some(r) = pr.rules.iter_mut().find(|r| r.id.0 == id) else { continue };
+        let path = normalize_exe_path(&l.path);
+        if !rule_learning(r) || !names_file(r, &path) || own_path(r, &path) {
+            continue;
+        }
+        let key = exe_key(&path);
+        if !r.learned.iter().any(|p| exe_key(p) == key) {
+            r.learned.push(path);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// 本次保存后新进入学习的进程名：`after` 处于学习状态，而 `before` 不存在、不在学习，
+/// 或没有这个进程名。
+pub fn newly_learning(before: Option<&ProcessRule>, after: &ProcessRule) -> Vec<String> {
+    if !rule_learning(after) {
+        return vec![];
+    }
+    let known: HashSet<String> = before
+        .filter(|b| rule_learning(b))
+        .map(|b| b.processes.iter().filter(|p| p.kind == ProcessKind::Name).map(|p| exe_key(&p.value)).collect())
+        .unwrap_or_default();
+    after
+        .processes
+        .iter()
+        .filter(|p| p.kind == ProcessKind::Name && !known.contains(&exe_key(&p.value)))
+        .map(|p| p.value.clone())
+        .collect()
+}
+
+/// 保存规则时：对本次新进入学习的进程名，把正在运行的同名 exe 路径记进 `rule.learned`
+/// （排除本规则的 `Path` 条目和归其他启用规则管的路径）。全局开关关闭时不记。
+pub fn seed(model: &Model, before: Option<&ProcessRule>, rule: &mut ProcessRule, running: &[RunningProcess]) {
+    if !model.process_routing.enabled {
+        return;
+    }
+    for name in newly_learning(before, rule) {
+        let name = exe_key(&name);
+        for p in running.iter().filter(|p| exe_key(&p.name) == name) {
+            let path = normalize_exe_path(&p.exe_path);
+            let key = exe_key(&path);
+            if own_path(rule, &path)
+                || owned_by_others(model, &rule.id, &path)
+                || rule.learned.iter().any(|l| exe_key(l) == key)
+            {
+                continue;
+            }
+            rule.learned.push(path);
+        }
+    }
+}
+
+/// 删掉文件已不存在的已知位置；返回是否有改动。
+pub fn drop_missing(pr: &mut ProcessRouting, exists: &dyn Fn(&str) -> bool) -> bool {
+    let mut changed = false;
+    for r in &mut pr.rules {
+        let before = r.learned.len();
+        r.learned.retain(|p| exists(p));
+        changed |= r.learned.len() != before;
+    }
+    changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ProcessEntry;
+
+    fn block_rule(id: &str, entries: Vec<ProcessEntry>) -> ProcessRule {
+        ProcessRule {
+            id: ProcessRuleId(id.into()),
+            processes: entries,
+            on_fault: FaultPolicy::Block,
+            ..ProcessRule::default()
+        }
+    }
+
+    fn model(rules: Vec<ProcessRule>) -> Model {
+        let mut m = Model::default();
+        m.process_routing.enabled = true;
+        m.process_routing.rules = rules;
+        m
+    }
+
+    fn running(pid: u32, path: &str) -> RunningProcess {
+        RunningProcess { pid, name: process_file_name(path).to_string(), exe_path: path.to_string() }
+    }
+
+    #[test]
+    fn merge_reported_adds_once() {
+        let mut pr = model(vec![block_rule("r1", vec![ProcessEntry::name("ChatGPT.exe")])]).process_routing;
+        let reported = vec![
+            LearnedPath { rule_id: "r1|chatgpt.exe".into(), path: r"C:\A\ChatGPT.exe".into() },
+            LearnedPath { rule_id: "r1|chatgpt.exe".into(), path: r"c:/a/chatgpt.exe".into() },
+            LearnedPath { rule_id: "gone|chatgpt.exe".into(), path: r"C:\B\ChatGPT.exe".into() },
+        ];
+        assert!(merge_reported(&mut pr, &reported));
+        assert_eq!(pr.rules[0].learned, vec![r"C:\A\ChatGPT.exe".to_string()]);
+        assert!(!merge_reported(&mut pr, &reported));
+        assert_eq!(pr.rules[0].learned.len(), 1);
+    }
+
+    #[test]
+    fn seed_only_for_newly_learning_names() {
+        let other = ProcessRule {
+            id: ProcessRuleId("r2".into()),
+            processes: vec![ProcessEntry::path(r"C:\B\chrome.exe")],
+            ..ProcessRule::default()
+        };
+        let m = model(vec![other]);
+        let procs = vec![running(1, r"C:\A\chrome.exe"), running(2, r"C:\B\chrome.exe"), running(3, r"C:\A\other.exe")];
+
+        let mut rule = block_rule("r1", vec![ProcessEntry::name("chrome.exe")]);
+        seed(&m, None, &mut rule, &procs);
+        assert_eq!(rule.learned, vec![r"C:\A\chrome.exe".to_string()]);
+
+        // 之前已是同名 Block：不再预记录。
+        let before = block_rule("r1", vec![ProcessEntry::name("Chrome.exe")]);
+        let mut rule = block_rule("r1", vec![ProcessEntry::name("chrome.exe")]);
+        seed(&m, Some(&before), &mut rule, &procs);
+        assert!(rule.learned.is_empty());
+
+        // 之前是 Direct：本次才进入学习。
+        let before = ProcessRule { on_fault: FaultPolicy::Direct, ..before };
+        let mut rule = block_rule("r1", vec![ProcessEntry::name("chrome.exe")]);
+        seed(&m, Some(&before), &mut rule, &procs);
+        assert_eq!(rule.learned, vec![r"C:\A\chrome.exe".to_string()]);
+        assert_eq!(newly_learning(Some(&before), &rule), vec!["chrome.exe".to_string()]);
+    }
+
+    #[test]
+    fn drop_missing_removes_deleted_files() {
+        let mut r = block_rule("r1", vec![ProcessEntry::name("a.exe")]);
+        r.learned = vec![r"C:\A\a.exe".into(), r"C:\B\a.exe".into()];
+        let mut pr = model(vec![r]).process_routing;
+        let exists = |p: &str| p.starts_with(r"C:\A");
+        assert!(drop_missing(&mut pr, &exists));
+        assert_eq!(pr.rules[0].learned, vec![r"C:\A\a.exe".to_string()]);
+        assert!(!drop_missing(&mut pr, &exists));
+    }
+}

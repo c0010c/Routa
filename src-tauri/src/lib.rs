@@ -158,6 +158,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::open_project_link,
             commands::retry_tailscale_exit_nodes,
             commands::save_process_rule,
+            commands::remove_learned_process_path,
             commands::delete_process_rule,
             commands::save_process_routing_settings,
             commands::procroute_status,

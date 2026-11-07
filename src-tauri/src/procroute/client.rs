@@ -36,6 +36,7 @@ use windows_sys::Win32::System::Services::{
 };
 
 use super::decide::{self, decide, rule_of_spec};
+use super::learn;
 use crate::model::ProcessRuleId;
 use crate::runtime::Runtime;
 
@@ -812,8 +813,31 @@ pub fn spawn(rt: Arc<Runtime>, app: AppHandle) -> JoinHandle<()> {
     tauri::async_runtime::spawn(run(rt, app, rx))
 }
 
+/// 启动时删掉文件已不存在的已知位置（有改动才保存）。
+async fn drop_missing_learned(rt: &Runtime) {
+    let exists = |p: &str| std::path::Path::new(p).is_file();
+    if !learn::drop_missing(&mut rt.model().process_routing, &exists) {
+        return;
+    }
+    if let Err(e) = rt.mutate_process_routing(|pr| { learn::drop_missing(pr, &exists); }).await {
+        eprintln!("procroute: dropping missing learned paths failed: {e:?}");
+    }
+}
+
+/// 把服务回报的位置并入模型；先在副本上比较，没有新内容时不保存（服务每轮都会回报，直到收到守护路径）。
+/// 不在任何锁内调用：`mutate_process_routing` 要拿运行时的引擎锁。
+async fn merge_learned(rt: &Runtime, reported: &[routa_procsvc_proto::LearnedPath]) {
+    if reported.is_empty() || !learn::merge_reported(&mut rt.model().process_routing, reported) {
+        return;
+    }
+    if let Err(e) = rt.mutate_process_routing(|pr| { learn::merge_reported(pr, reported); }).await {
+        eprintln!("procroute: saving learned paths failed: {e:?}");
+    }
+}
+
 async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Command>) {
     let pid = std::process::id();
+    drop_missing_learned(&rt).await;
     let mut link = Link::default();
     let mut tick = interval(TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -890,6 +914,9 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
         }
         if was_connected && !link.connected() {
             reconnect.next = Instant::now() + RECONNECT;
+        }
+        if let Some(reported) = link.svc.as_ref().map(|s| s.learned.clone()) {
+            merge_learned(&rt, &reported).await;
         }
 
         let view = link.view(&desired, &decide::reasons(&model, &st));
