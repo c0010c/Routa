@@ -3,6 +3,7 @@ pub mod config_gen;
 pub mod core;
 pub mod desktop;
 pub mod model;
+pub mod monitor;
 pub mod netif;
 pub mod procroute;
 pub mod relaunch;
