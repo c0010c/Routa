@@ -3,18 +3,18 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { settingsSaveMessage, useSettingsSave } from "../api/settings";
 import { unwrap, useModel, useStatus } from "../api/client";
-import { commands, type MonitorStatus, type MonitorTarget, type NodeMonitorSettings } from "../bindings";
-import { customMembersFrom, droppedMessage, failureText, intervalLabel, MONITOR_INTERVALS } from "../lib/monitor";
+import { commands, type MonitorTarget, type NodeMonitorSettings } from "../bindings";
+import {
+  EMPTY_MONITOR_STATUS, failureText, fetchInUseNodes, intervalLabel, MONITOR_INTERVALS, MONITOR_THRESHOLDS, skippedMessage,
+} from "../lib/monitor";
 import { useApplyResult } from "./ApplyResultSnackbar";
+import { memberKey, nodeKey } from "../lib/refs";
 import { MemberPicker } from "./MemberPicker";
 import { SaveFeedback, useSaveFeedback } from "./SaveFeedback";
 import { Row, Section } from "./SettingsSection";
 
-type Key = "monitorEnabled" | "monitorScope" | "monitorMembers" | "monitorInterval" | "monitorThreshold" | "monitorLatency" | "monitorRecovery";
+type Key = "monitorEnabled" | "monitorMembers" | "monitorInterval" | "monitorThreshold" | "monitorLatency" | "monitorRecovery";
 
-const EMPTY_STATUS: MonitorStatus = {
-  last_run: null, next_run: null, probing: false, paused_reason: null, network_down: false, targets: [],
-};
 const PREVIEW_COUNT = 5;
 const LATENCY_ERROR = "请输入 1–60000 的整数";
 
@@ -38,15 +38,14 @@ const TEXT_COLOR: Record<Tone, string> = {
   idle: "text.secondary", ok: "text.secondary", warn: "warning.main", down: "error.main",
 };
 
-function secondaryText(t: MonitorTarget, scope: NodeMonitorSettings["scope"]): string {
-  if (scope === "Custom") return t.proxy.split("/")[0];
-  const users = t.used_by.join("，");
-  return t.node === null ? `自动选择 · ${users}` : users;
+/** Where the node comes from, then who uses it now. */
+function secondaryText(t: MonitorTarget): string {
+  return [t.proxy.split("/")[0], ...t.used_by].join(" · ");
 }
 
 export function NodeMonitorSection() {
   const model = useModel().data;
-  const status = useStatus().data?.monitor ?? EMPTY_STATUS;
+  const status = useStatus().data?.monitor ?? EMPTY_MONITOR_STATUS;
   const save = useSettingsSave();
   const qc = useQueryClient();
   const apply = useApplyResult();
@@ -70,15 +69,25 @@ export function NodeMonitorSection() {
       if (key === "monitorLatency") setDraft(null);
     });
 
-  const changeScope = (scope: NodeMonitorSettings["scope"]) => {
-    if (scope === nm.scope) return;
-    if (scope === "Custom" && nm.members.length === 0) {
-      const { members, dropped } = customMembersFrom(status);
-      if (dropped.length) apply.showMessage(droppedMessage(dropped), "info");
-      void saveMonitor("monitorScope", { scope, members });
-    } else {
-      void saveMonitor("monitorScope", { scope });
-    }
+  /** Members prefilled with the nodes in use; tells the user which exits could not be. */
+  const inUseMembers = async () => {
+    const inUse = await fetchInUseNodes();
+    if (inUse.auto_exits.length) apply.showMessage(skippedMessage(inUse.auto_exits), "info");
+    return inUse.nodes;
+  };
+
+  const toggleEnabled = async (enabled: boolean) => {
+    // First time on: start from what is in use instead of an empty list.
+    const members = enabled && nm.members.length === 0 ? await inUseMembers() : nm.members;
+    void saveMonitor("monitorEnabled", { enabled, members });
+  };
+
+  /** Adds the in-use nodes not already members; the user's own picks stay. */
+  const addInUse = async () => {
+    const inUse = await inUseMembers();
+    const missing = inUse.filter((n) => !nm.members.some((m) => memberKey(m) === nodeKey(n)));
+    if (missing.length) void saveMonitor("monitorMembers", { members: [...nm.members, ...missing] });
+    else apply.showMessage(inUse.length ? "正在使用的节点都已在监测中" : "当前没有正在使用的节点", "info");
   };
 
   const commitLatency = () => {
@@ -103,7 +112,10 @@ export function NodeMonitorSection() {
     }
   };
 
-  const paused = status.paused_reason === "CoreNotRunning";
+  const paused = status.paused_reason !== null;
+  const pausedText = status.paused_reason === "ConfigNotApplied"
+    ? "新配置未生效，监测已暂停；配置恢复正常后自动继续"
+    : "内核未运行，监测已暂停";
   const targets = status.targets;
   const downCount = targets.filter((t) => t.down).length;
   // Unprobed, not-yet-applied and currently failing (below threshold) targets are not "normal".
@@ -117,40 +129,29 @@ export function NodeMonitorSection() {
       <Switch
         checked={nm.enabled}
         disabled={pending}
-        onChange={(_, v) => void saveMonitor("monitorEnabled", { enabled: v })}
+        onChange={(_, v) => void toggleEnabled(v)}
         slotProps={{ input: { "aria-label": "节点监测" } }}
       />
     </Row>,
     nm.enabled && (
       <Row
-        key="scope"
-        label="监测范围"
-        description={nm.scope === "InUse"
-          ? `代理和进程分流当前使用的节点，随配置自动变化 · ${targets.length} 个`
-          : `${targets.length} 个节点`}
-        feedback={notice("monitorScope")}
-        below={nm.scope === "Custom" && (
+        key="members"
+        label="监测节点"
+        description={`${targets.length} 个节点 · 首次开启时默认为正在使用的节点`}
+        feedback={notice("monitorMembers")}
+        below={
           <Box>
             <MemberPicker
               label="选择节点或整组"
               value={nm.members}
               onChange={(members) => void saveMonitor("monitorMembers", { members })}
             />
-            {feedback.notices.monitorMembers && <SaveFeedback notice={feedback.notices.monitorMembers} />}
           </Box>
-        )}
+        }
       >
-        <Select
-          size="small"
-          aria-label="监测范围"
-          value={nm.scope}
-          disabled={pending}
-          sx={{ width: 180 }}
-          onChange={(e) => changeScope(e.target.value as NodeMonitorSettings["scope"])}
-        >
-          <MenuItem value="InUse">正在使用的节点</MenuItem>
-          <MenuItem value="Custom">指定节点</MenuItem>
-        </Select>
+        <Button size="small" variant="outlined" disabled={pending} onClick={() => void addInUse()}>
+          加入正在使用的节点
+        </Button>
       </Row>
     ),
     nm.enabled && (
@@ -177,7 +178,7 @@ export function NodeMonitorSection() {
           sx={{ width: 180 }}
           onChange={(e) => void saveMonitor("monitorThreshold", { fail_threshold: Number(e.target.value) })}
         >
-          {[1, 2, 3, 5].map((v) => (
+          {MONITOR_THRESHOLDS.map((v) => (
             <MenuItem key={v} value={v}>{v === 1 ? "失败 1 次即通知" : `连续失败 ${v} 次`}</MenuItem>
           ))}
         </Select>
@@ -220,7 +221,7 @@ export function NodeMonitorSection() {
     <Stack spacing={1} sx={{ px: 2, py: 1.5, borderTop: 1, borderColor: "divider", bgcolor: "action.hover" }}>
       <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
         <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
-          {paused ? "内核未运行，监测已暂停" : status.last_run === null ? "尚未探测" : (
+          {paused ? pausedText : status.last_run === null ? "尚未探测" : (
             <>
               上次探测 {hhmm(status.last_run)}
               {status.next_run !== null && ` · 下次 ${hhmm(status.next_run)}`}
@@ -250,7 +251,7 @@ export function NodeMonitorSection() {
                 <Box sx={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, bgcolor: TONE_COLOR[state.tone] }} />
                 <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>{t.label}</Typography>
                 <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1 }}>
-                  {secondaryText(t, nm.scope)}
+                  {secondaryText(t)}
                 </Typography>
                 <Typography variant="caption" sx={{ color: TEXT_COLOR[state.tone] }}>{state.text}</Typography>
               </Stack>

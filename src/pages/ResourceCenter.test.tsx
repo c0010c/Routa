@@ -17,7 +17,7 @@ vi.mock("../components/InterfaceProvider", () => ({
 import { ResourceCenter } from "./ResourceCenter";
 import type { Model, MonitorTarget, NodeRef, RuntimeStatus } from "../bindings";
 vi.mock("../bindings", () => ({
-  commands: { getModel: vi.fn(), getStatus: vi.fn(), testDelays: vi.fn(), saveSettings: vi.fn() },
+  commands: { getModel: vi.fn(), getStatus: vi.fn(), testDelays: vi.fn(), saveSettings: vi.fn(), monitorInUseNodes: vi.fn() },
 }));
 import { commands } from "../bindings";
 const model: Model = {
@@ -62,7 +62,7 @@ const model: Model = {
     controller_port: 19097,
     delay_test_interval_mins: 10,
     delay_test_url: "u",
-    node_monitor: { enabled: false, scope: "InUse", members: [], interval_secs: 300, fail_threshold: 2, latency_limit_ms: 1000, notify_recovery: true },
+    node_monitor: { enabled: false, members: [], interval_secs: 300, fail_threshold: 2, latency_limit_ms: 1000, notify_recovery: true },
   },
   process_routing: { enabled: false, rules: [], exit_prompt: true },
 };
@@ -327,6 +327,7 @@ describe("node monitor on cards", () => {
     mode.value = "Full";
     clearMonitorFocus();
     vi.mocked(commands.saveSettings).mockResolvedValue({ status: "ok", data: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } });
+    vi.mocked(commands.monitorInUseNodes).mockResolvedValue({ status: "ok", data: { nodes: [], auto_exits: [] } });
   });
 
   it("monitored node shows mark", async () => {
@@ -345,7 +346,7 @@ describe("node monitor on cards", () => {
     expect(plain.querySelector("[data-card-mark]")).toBeNull();
   });
 
-  it("keeps the Tailscale mark instead of the monitor mark", async () => {
+  it("keeps the Tailscale mark while the node is up", async () => {
     const ts = { id: "t1", name: "TS", groups: [], kind: { Tailscale: { exit: null } } };
     const data = { ...model, manual_nodes: [...model.manual_nodes, ts] } as unknown as Model;
     setup(false, "/nodes", data, [target({ proxy: "手动/TS", node: { manual_id: "t1" }, label: "TS" })]);
@@ -353,29 +354,47 @@ describe("node monitor on cards", () => {
     expect(within(card).queryByLabelText("监测中")).not.toBeInTheDocument();
   });
 
-  it("menu adds node to monitor", async () => {
+  it("shows the down mark over the Tailscale mark", async () => {
+    const ts = { id: "t1", name: "TS", groups: [], kind: { Tailscale: { exit: null } } };
+    const data = { ...model, manual_nodes: [...model.manual_nodes, ts] } as unknown as Model;
+    setup(false, "/nodes", data, [target({ proxy: "手动/TS", node: { manual_id: "t1" }, label: "TS", down: true, fails: 2 })]);
+    const card = await screen.findByRole("article", { name: "TS" });
+    expect(within(card).getByLabelText("监测：不可用")).toBeInTheDocument();
+  });
+
+  it("menu turns monitoring on with the in-use nodes plus this one", async () => {
+    const used = { manual_id: "m9" };
+    vi.mocked(commands.monitorInUseNodes).mockResolvedValue({ status: "ok", data: { nodes: [used], auto_exits: ["工作出口"] } });
     setup();
     fireEvent.click(await screen.findByRole("button", { name: "操作 订阅节点" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "加入监测 订阅节点" }));
     await waitFor(() => expect(commands.saveSettings).toHaveBeenCalled());
     expect(vi.mocked(commands.saveSettings).mock.calls[0][0].node_monitor).toEqual({
-      ...model.settings.node_monitor, enabled: true, scope: "Custom", members: [subRef],
+      ...model.settings.node_monitor, enabled: true, members: [used, subRef],
     });
+    expect(await screen.findByText("自动选择的出口「工作出口」没有固定节点，未加入监测")).toBeInTheDocument();
   });
 
-  it("menu removes node and reports dropped auto group", async () => {
-    const data = { ...model, settings: { ...model.settings, node_monitor: { ...model.settings.node_monitor, enabled: true } } };
-    setup(false, "/nodes", data, [
-      target(),
-      target({ proxy: "出口/工作", node: null, label: "工作出口" }),
-    ]);
+  it("menu adds to existing members without asking for in-use nodes", async () => {
+    const other = { manual_id: "m9" };
+    const data = { ...model, settings: { ...model.settings, node_monitor: { ...model.settings.node_monitor, enabled: true, members: [other] } } };
+    setup(false, "/nodes", data);
+    fireEvent.click(await screen.findByRole("button", { name: "操作 订阅节点" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "加入监测 订阅节点" }));
+    await waitFor(() => expect(commands.saveSettings).toHaveBeenCalled());
+    expect(vi.mocked(commands.saveSettings).mock.calls[0][0].node_monitor.members).toEqual([other, subRef]);
+    expect(commands.monitorInUseNodes).not.toHaveBeenCalled();
+  });
+
+  it("menu removes only that node from the members", async () => {
+    const other = { manual_id: "m9" };
+    const nm = { ...model.settings.node_monitor, enabled: true, members: [subRef, other] };
+    const data = { ...model, settings: { ...model.settings, node_monitor: nm } };
+    setup(false, "/nodes", data, [target()]);
     fireEvent.click(await screen.findByRole("button", { name: "操作 订阅节点" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "移出监测 订阅节点" }));
     await waitFor(() => expect(commands.saveSettings).toHaveBeenCalled());
-    const saved = vi.mocked(commands.saveSettings).mock.calls[0][0].node_monitor;
-    expect(saved.members).toEqual([]);
-    expect(saved.scope).toBe("Custom");
-    expect(await screen.findByText("自动选择的出口「工作出口」不能加入指定节点，已不再监测")).toBeInTheDocument();
+    expect(vi.mocked(commands.saveSettings).mock.calls[0][0].node_monitor.members).toEqual([other]);
   });
 
   it("simple mode has no monitor menu item", async () => {

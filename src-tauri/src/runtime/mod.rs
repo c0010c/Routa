@@ -1470,6 +1470,11 @@ impl Runtime {
         self.inner.test_delays(names).await
     }
 
+    /// Nodes the listeners and process rules use now: the default monitor members.
+    pub fn monitor_in_use_nodes(&self) -> crate::monitor::InUseNodes {
+        crate::monitor::in_use_nodes(&self.inner.model.lock().unwrap())
+    }
+
     /// Asks the node monitor to run a round now (ignoring the interval).
     pub fn monitor_probe_now(&self) {
         self.inner.monitor.lock().unwrap().force = true;

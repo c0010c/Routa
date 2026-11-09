@@ -164,12 +164,11 @@ async fn monitor_loop(inner: Arc<Inner>) {
 }
 
 /// The settings whose change makes a round due right away (spec §4: turning
-/// monitoring on, changing the scope or the interval). Threshold, latency
+/// monitoring on, changing the members or the interval). Threshold, latency
 /// limit and recovery notices apply from the next round.
 fn monitor_key(cfg: &NodeMonitorSettings) -> NodeMonitorSettings {
     NodeMonitorSettings {
         enabled: cfg.enabled,
-        scope: cfg.scope,
         members: cfg.members.clone(),
         interval_secs: cfg.interval_secs,
         ..NodeMonitorSettings::default()
@@ -191,7 +190,7 @@ async fn monitor_tick(inner: &Arc<Inner>) {
     if !cfg.enabled {
         let had_state = {
             let mut m = inner.monitor.lock().unwrap();
-            let had = !m.book.targets().is_empty() || m.settings_key.is_some() || m.last_run.is_some() || m.force;
+            let had = !m.book.is_empty() || m.settings_key.is_some() || m.last_run.is_some() || m.force;
             if had {
                 *m = Default::default();
             }
@@ -203,25 +202,26 @@ async fn monitor_tick(inner: &Arc<Inner>) {
         return;
     }
 
-    // `status` and `model` are locked one after the other, never together.
-    let (health, nics) = {
-        let st = inner.status.lock().unwrap();
-        (st.health.clone(), st.interfaces.clone())
-    };
-    let specs = monitor_targets(&inner.model.lock().unwrap(), &health, &nics);
+    let specs = monitor_targets(&inner.model.lock().unwrap());
     let mut changed = inner.monitor.lock().unwrap().book.reconcile(&specs);
 
     let has_api = inner.live.lock().unwrap().api.is_some();
-    let reloaded = matches!(inner.status.lock().unwrap().last_apply, Some(ApplyOutcome::Reloaded { .. }));
-    if !has_api || !reloaded {
-        if set_monitor_pause(inner, Some(MonitorPause::CoreNotRunning)) | changed {
+    let pause = match inner.status.lock().unwrap().last_apply {
+        _ if !has_api => Some(MonitorPause::CoreNotRunning),
+        Some(ApplyOutcome::Reloaded { .. }) => None,
+        // The core still runs the previous config; results would be stale.
+        Some(ApplyOutcome::FailedKeptPrevious { .. }) => Some(MonitorPause::ConfigNotApplied),
+        _ => Some(MonitorPause::CoreNotRunning),
+    };
+    if let Some(reason) = pause {
+        if set_monitor_pause(inner, Some(reason)) | changed {
             inner.publish_monitor();
         }
         return;
     }
     if set_monitor_pause(inner, None) {
-        // The core just came back (the only pause reason): its nodes have not
-        // been checked since it went away, so the next round is due now.
+        // The core (or its config) just came back: its nodes have not been
+        // checked since, so the next round is due now.
         let mut m = inner.monitor.lock().unwrap();
         m.last_end = None;
         m.retry_at = None;
@@ -253,7 +253,7 @@ async fn monitor_tick(inner: &Arc<Inner>) {
     let proxies = specs.into_iter().map(|t| t.proxy).collect();
     let results = inner.test_delays_with(proxies, MONITOR_TIMEOUT_MS).await;
 
-    // Settings changed while probing (turned off, other scope / members /
+    // Settings changed while probing (turned off, other members /
     // interval): the round belongs to a set that no longer exists. Drop it
     // without judging; the next tick starts over from the new settings.
     let current = inner.model.lock().unwrap().settings.node_monitor.clone();
@@ -263,12 +263,16 @@ async fn monitor_tick(inner: &Arc<Inner>) {
         return;
     }
 
-    let outcome = inner.monitor.lock().unwrap().book.apply_round(&results, &cfg, now_unix());
+    // Windows' own online verdict tells a dead network from nodes all failing together.
+    let nics = inner.nics.clone();
+    let internet = tokio::task::spawn_blocking(move || nics.internet_access()).await.ok().flatten();
+    let outcome = inner.monitor.lock().unwrap().book.apply_round_with(&results, &cfg, now_unix(), internet);
     let notices = match outcome {
         RoundOutcome::Applied(notices) => notices,
         RoundOutcome::Voided => {
-            // The core failed mid-round: nothing was judged, so keep the
-            // schedule (and any pending probe-now) and retry shortly.
+            // The core failed mid-round or every result went stale: nothing
+            // was judged, so keep the schedule (and any pending probe-now)
+            // and retry shortly.
             let mut m = inner.monitor.lock().unwrap();
             m.retry_at = Some(Instant::now() + interval.min(MONITOR_VOID_RETRY));
             m.probing = false;

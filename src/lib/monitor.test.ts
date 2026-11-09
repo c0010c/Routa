@@ -1,13 +1,5 @@
-import type { MonitorStatus, MonitorTarget, NodeMonitorSettings, NodeRef } from "../bindings";
-import {
-  customMembersFrom,
-  droppedMessage,
-  failureText,
-  intervalLabel,
-  targetsForNode,
-  withNode,
-  withoutNode,
-} from "./monitor";
+import type { Model, MonitorStatus, MonitorTarget, NodeMonitorSettings, NodeRef } from "../bindings";
+import { failureText, intervalLabel, skippedMessage, targetsForNode, withNode, withoutNode } from "./monitor";
 
 const a: NodeRef = { subscription_id: "s1", name: "A" };
 const b: NodeRef = { subscription_id: "s1", name: "B" };
@@ -21,9 +13,15 @@ const status = (targets: MonitorTarget[]): MonitorStatus => ({
   last_run: null, next_run: null, probing: false, paused_reason: null, network_down: false, targets,
 });
 const settings = (over: Partial<NodeMonitorSettings> = {}): NodeMonitorSettings => ({
-  enabled: true, scope: "InUse", members: [], interval_secs: 300, fail_threshold: 2,
+  enabled: true, members: [], interval_secs: 300, fail_threshold: 2,
   latency_limit_ms: 1000, notify_recovery: true, ...over,
 });
+const model = {
+  subscriptions: [{ id: "s1", nodes: [{ name: "A" }, { name: "B" }] }],
+  manual_nodes: [{ id: "m1", name: "M", groups: [], kind: { Proxy: { raw: {} } } }],
+  node_groups: [],
+} as unknown as Model;
+const group = { group: { Subscription: "s1" } };
 
 describe("monitor helpers", () => {
   it("labels intervals", () => {
@@ -32,35 +30,30 @@ describe("monitor helpers", () => {
     expect(intervalLabel(3600)).toBe("1 小时");
   });
 
-  it("customMembersFrom drops auto groups and dedupes paths of one node", () => {
-    const st = status([target("p1", a), target("p2", a), target("g", null, "工作出口")]);
-    expect(customMembersFrom(st)).toEqual({ members: [a], dropped: ["工作出口"] });
+  it("withNode turns monitoring on with the in-use nodes first", () => {
+    expect(withNode(settings({ enabled: false }), b, [a]).members).toEqual([a, b]);
+    expect(withNode(settings({ enabled: false }), a, [a]).members).toEqual([a]);
+    expect(withNode(settings({ enabled: false }), a, [a]).enabled).toBe(true);
   });
 
-  it("withNode enables custom scope when disabled", () => {
-    const r = withNode(settings({ enabled: false }), status([]), a);
-    expect(r.settings).toMatchObject({ enabled: true, scope: "Custom", members: [a] });
+  it("withNode keeps existing members and ignores in-use nodes", () => {
+    const s = settings({ enabled: false, members: [c] });
+    expect(withNode(s, b, [a]).members).toEqual([c, b]);
+    expect(withNode(settings({ members: [a] }), b, [c]).members).toEqual([a, b]);
+    expect(withNode(settings({ members: [a] }), a, []).members).toEqual([a]);
   });
 
-  it("withNode adds to the in-use nodes", () => {
-    const r = withNode(settings(), status([target("p1", a), target("g", null, "工作出口")]), b);
-    expect(r.settings.scope).toBe("Custom");
-    expect(r.settings.members).toEqual([a, b]);
-    expect(r.dropped).toEqual(["工作出口"]);
+  it("withoutNode drops a node member and leaves the rest", () => {
+    const s = settings({ members: [group, a, c] });
+    expect(withoutNode(settings({ members: [b, c] }), model, b).members).toEqual([c]);
+    // A group that does not contain the node stays a group.
+    expect(withoutNode(s, model, c).members).toEqual([group, a]);
   });
 
-  it("withNode appends in custom scope without duplicating", () => {
-    const s = settings({ scope: "Custom", members: [a] });
-    expect(withNode(s, status([]), b).settings.members).toEqual([a, b]);
-    expect(withNode(s, status([]), a).settings.members).toEqual([a]);
-  });
-
-  it("withoutNode expands groups through status targets", () => {
-    const s = settings({ scope: "Custom", members: [{ group: { Subscription: "s1" } }, c] });
-    const st = status([target("p1", a), target("p2", b), target("p3", c)]);
-    const r = withoutNode(s, st, b);
-    expect(r.settings.scope).toBe("Custom");
-    expect(r.settings.members).toEqual([a, c]);
+  it("withoutNode expands only the group containing the node", () => {
+    const custom = { group: { Custom: "g" } };
+    const s = settings({ members: [group, custom, c] });
+    expect(withoutNode(s, model, b).members).toEqual([a, custom, c]);
   });
 
   it("finds targets for a node", () => {
@@ -72,7 +65,7 @@ describe("monitor helpers", () => {
     expect(failureText("Timeout")).toBe("超时");
     expect(failureText("Failed")).toBe("连接失败");
     expect(failureText({ OverLimit: 1280 })).toBe("延迟 1280 ms 超过上限");
-    expect(droppedMessage(["工作出口"])).toBe("自动选择的出口「工作出口」不能加入指定节点，已不再监测");
-    expect(droppedMessage(["A", "B"])).toBe("自动选择的出口「A」、「B」不能加入指定节点，已不再监测");
+    expect(skippedMessage(["工作出口"])).toBe("自动选择的出口「工作出口」没有固定节点，未加入监测");
+    expect(skippedMessage(["A", "B"])).toBe("自动选择的出口「A」、「B」没有固定节点，未加入监测");
   });
 });

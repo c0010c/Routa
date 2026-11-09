@@ -34,7 +34,7 @@ import {
   useDeleteNodeGroup,
   useTestDelays,
 } from "../api/client";
-import type { ManualNode, MonitorStatus, NodeGroup, NodeMonitorSettings, NodeRef, Subscription } from "../bindings";
+import type { ManualNode, NodeGroup, NodeRef, Subscription } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { MonitorMark } from "../components/MonitorMark";
 import { useApplyResult } from "../components/ApplyResultSnackbar";
@@ -45,14 +45,13 @@ import { desktopApi, useDesktopMutation } from "../api/desktop";
 import { nodeKey, expandMembers } from "../lib/refs";
 import { clearMonitorFocus, useMonitorFocus } from "../api/monitorFocus";
 import { useSettingsSave, settingsSaveMessage } from "../api/settings";
-import { droppedMessage, targetsForNode, withNode, withoutNode } from "../lib/monitor";
+import { EMPTY_MONITOR_STATUS, fetchInUseNodes, skippedMessage, targetsForNode, withNode, withoutNode } from "../lib/monitor";
 import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
 import { ManualNodeDialog, newManualNode } from "./ManualNodeDialog";
 import { NodeGroupDialog, newNodeGroup } from "./NodeGroupDialog";
 import { TailscaleDialog, newTailscaleNode } from "./TailscaleDialog";
 import { ListenerDialog, newListener } from "./ListenerDialog";
 
-const NO_MONITOR: MonitorStatus = { last_run: null, next_run: null, probing: false, paused_reason: null, network_down: false, targets: [] };
 const FOCUS_MS = 3000;
 
 export function ResourceCenter({
@@ -119,13 +118,19 @@ export function ResourceCenter({
     return <Typography>正在加载资源…</Typography>;
   const m = model.data,
     st = runtime.data;
-  const monitor = st.monitor ?? NO_MONITOR;
-  const toggleMonitor = (ref: NodeRef, watched: boolean) => {
+  const monitor = st.monitor ?? EMPTY_MONITOR_STATUS;
+  const toggleMonitor = async (ref: NodeRef, watched: boolean) => {
     const nm = m.settings.node_monitor;
-    const { settings, dropped } = (watched ? withoutNode : withNode)(nm, monitor, ref);
-    if (dropped.length) apply.showMessage(droppedMessage(dropped), "info");
+    let settings;
+    if (watched) settings = withoutNode(nm, m, ref);
+    else {
+      // Turning monitoring on from a card: the nodes in use come along, as in settings.
+      const inUse = !nm.enabled && nm.members.length === 0 ? await fetchInUseNodes() : { nodes: [], auto_exits: [] };
+      if (inUse.auto_exits.length) apply.showMessage(skippedMessage(inUse.auto_exits), "info");
+      settings = withNode(nm, ref, inUse.nodes);
+    }
     saveSettings.mutate(
-      { node_monitor: settings as NodeMonitorSettings },
+      { node_monitor: settings },
       { onError: (e) => apply.showMessage(settingsSaveMessage(e), "error") },
     );
   };
@@ -528,7 +533,10 @@ export function ResourceCenter({
                               pending={test.isPending && !!test.variables?.[0]?.includes(n.proxy)}
                               monitorFocus={!!highlight?.lit && highlight.key === nodeKey(n.ref)}
                               status={
-                                n.manual && "Tailscale" in n.manual.kind ? (
+                                // One mark slot: a down node outranks the Tailscale state.
+                                mt.some((t) => t.down) ? (
+                                  <MonitorMark targets={mt} />
+                                ) : n.manual && "Tailscale" in n.manual.kind ? (
                                   <TailscaleStateChip node={n.manual} compact />
                                 ) : mt.length ? (
                                   <MonitorMark targets={mt} />
@@ -577,7 +585,7 @@ export function ResourceCenter({
                                       {
                                         label: mt.length ? "移出监测" : "加入监测",
                                         disabled: saveSettings.isPending,
-                                        onClick: () => toggleMonitor(n.ref, mt.length > 0),
+                                        onClick: () => void toggleMonitor(n.ref, mt.length > 0),
                                       },
                                     ]),
                               ]}

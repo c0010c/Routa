@@ -168,3 +168,16 @@ mod tests {
         assert_eq!(got, (Some("Routa".into()), Some(icon.display().to_string())));
     }
 }
+
+#[cfg(test)]
+mod uninstall_tests {
+    /// The uninstaller deletes the key `register_app_id` writes; both follow the bundle identifier.
+    #[test]
+    fn uninstall_hook_removes_the_registered_app_id() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let id = conf["identifier"].as_str().unwrap();
+        let hooks = include_str!("../nsis/hooks.nsh");
+        assert!(hooks.contains(&format!(r#"!define ROUTA_AUMID_KEY "Software\Classes\AppUserModelId\{id}""#)), "hooks.nsh key must match {id}");
+        assert!(hooks.contains(r#"DeleteRegKey HKCU "${ROUTA_AUMID_KEY}""#));
+    }
+}

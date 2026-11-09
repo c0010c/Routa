@@ -8,6 +8,7 @@ vi.mock("../bindings", () => ({
     getStatus: vi.fn(),
     saveSettings: vi.fn(),
     monitorProbeNow: vi.fn(),
+    monitorInUseNodes: vi.fn(),
   },
 }));
 
@@ -16,7 +17,7 @@ import { ApplyResultProvider } from "./ApplyResultSnackbar";
 import { NodeMonitorSection } from "./NodeMonitorSection";
 
 const monitorOn: NodeMonitorSettings = {
-  enabled: true, scope: "InUse", members: [], interval_secs: 300, fail_threshold: 2,
+  enabled: true, members: [], interval_secs: 300, fail_threshold: 2,
   latency_limit_ms: 1000, notify_recovery: true,
 };
 
@@ -51,6 +52,10 @@ function renderSection(nm: Partial<NodeMonitorSettings>, mon: MonitorStatus = mo
     data: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } },
   });
   vi.mocked(commands.monitorProbeNow).mockResolvedValue({ status: "ok", data: null });
+  vi.mocked(commands.monitorInUseNodes).mockResolvedValue({
+    status: "ok",
+    data: { nodes: [{ subscription_id: "s1", name: "A" }, { manual_id: "m1" }], auto_exits: ["自动"] },
+  });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
@@ -70,14 +75,24 @@ describe("NodeMonitorSection", () => {
   it("hides rows when disabled", async () => {
     renderSection({ enabled: false });
     expect(await screen.findByRole("switch", { name: "节点监测" })).toBeInTheDocument();
-    expect(screen.queryByText("监测范围")).not.toBeInTheDocument();
+    expect(screen.queryByText("监测节点")).not.toBeInTheDocument();
   });
 
-  it("toggle saves enabled", async () => {
+  it("first enable prefills the in-use nodes", async () => {
     renderSection({ enabled: false });
     fireEvent.click(await screen.findByRole("switch", { name: "节点监测" }));
     await waitFor(() => expect(commands.saveSettings).toHaveBeenCalled());
     expect(savedMonitor().enabled).toBe(true);
+    expect(savedMonitor().members).toEqual([{ subscription_id: "s1", name: "A" }, { manual_id: "m1" }]);
+    expect(await screen.findByText("自动选择的出口「自动」没有固定节点，未加入监测")).toBeInTheDocument();
+  });
+
+  it("enabling keeps members chosen before", async () => {
+    renderSection({ enabled: false, members: [{ manual_id: "m2" }] });
+    fireEvent.click(await screen.findByRole("switch", { name: "节点监测" }));
+    await waitFor(() => expect(commands.saveSettings).toHaveBeenCalled());
+    expect(savedMonitor().members).toEqual([{ manual_id: "m2" }]);
+    expect(commands.monitorInUseNodes).not.toHaveBeenCalled();
   });
 
   it("interval select offers 10 seconds", async () => {
@@ -88,14 +103,16 @@ describe("NodeMonitorSection", () => {
     expect(savedMonitor().interval_secs).toBe(10);
   });
 
-  it("switching to custom prefills in-use nodes", async () => {
-    renderSection({ enabled: true }, monitor({ targets: [target("A"), target("B")] }));
-    await screen.findByText("A");
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: "监测范围" }));
-    fireEvent.click(await screen.findByRole("option", { name: "指定节点" }));
+  it("adds the in-use nodes that are not members yet", async () => {
+    renderSection({ enabled: true, members: [{ manual_id: "m1" }, { manual_id: "m2" }] });
+    fireEvent.click(await screen.findByRole("button", { name: "加入正在使用的节点" }));
     await waitFor(() => expect(commands.saveSettings).toHaveBeenCalled());
-    expect(savedMonitor().scope).toBe("Custom");
-    expect(savedMonitor().members).toHaveLength(2);
+    expect(savedMonitor().members).toEqual([{ manual_id: "m1" }, { manual_id: "m2" }, { subscription_id: "s1", name: "A" }]);
+  });
+
+  it("target row shows source and users", async () => {
+    renderSection({ enabled: true }, monitor({ last_run: 1_700_000_000, targets: [target("A")] }));
+    expect(await screen.findByText("订阅 · 工作代理 :7890")).toBeInTheDocument();
   });
 
   it("clearing_latency_limit_saves_null", async () => {
@@ -161,6 +178,12 @@ describe("NodeMonitorSection", () => {
   it("paused footer", async () => {
     renderSection({ enabled: true }, monitor({ paused_reason: "CoreNotRunning", targets: [target("A")] }));
     expect(await screen.findByText("内核未运行，监测已暂停")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即探测" })).toBeDisabled();
+  });
+
+  it("config-not-applied footer", async () => {
+    renderSection({ enabled: true }, monitor({ paused_reason: "ConfigNotApplied", targets: [target("A")] }));
+    expect(await screen.findByText("新配置未生效，监测已暂停；配置恢复正常后自动继续")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "立即探测" })).toBeDisabled();
   });
 
