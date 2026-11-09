@@ -2065,3 +2065,163 @@ async fn status_has_default_monitor() {
     let h = harness(&model_with_listener(false));
     assert_eq!(h.rt.status().monitor, crate::monitor::MonitorStatus::default());
 }
+
+const MON_PROXY: &str = "直连出口";
+
+/// `model_with_node` with exit `直连出口` switched to node `m1` (so InUse
+/// monitors it) and no scheduled delay test to muddy `delay_calls`.
+fn monitored_model() -> Model {
+    let mut m = model_with_node();
+    m.exits[0].kind = ExitKind::Node { node: m1_ref() };
+    m.settings.delay_test_interval_mins = None;
+    m
+}
+
+async fn set_monitor(h: &Harness, enabled: bool, interval_secs: u32) {
+    let mut s = h.rt.model().settings;
+    s.node_monitor.enabled = enabled;
+    s.node_monitor.scope = MonitorScope::InUse;
+    s.node_monitor.interval_secs = interval_secs;
+    h.rt.save_settings(s, |_| Ok(())).await.unwrap();
+}
+
+/// Timeouts of the monitor probes so far.
+fn monitor_calls(api: &FakeApi) -> Vec<u32> {
+    api.delay_calls.lock().unwrap().iter().filter(|c| c.0 == MON_PROXY).map(|c| c.2).collect()
+}
+
+async fn wait_secs(s: u64) {
+    tokio::time::sleep(Duration::from_secs(s)).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_probes_immediately_when_enabled_then_on_interval() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 10).await;
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api), vec![crate::monitor::MONITOR_TIMEOUT_MS]);
+    let st = h.rt.status().monitor;
+    assert_eq!(st.targets.len(), 1);
+    assert!(st.targets[0].probed);
+    assert!(!st.probing);
+    assert_eq!(st.next_run, st.last_run.map(|t| t + 10));
+    wait_secs(5).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    wait_secs(6).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_sends_notify_after_threshold() {
+    let mut h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Err(crate::core::api::ApiError::Rejected { status: 504, message: "timeout".into() }));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 10).await;
+    wait_secs(2).await;
+    wait_secs(10).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    let notices: Vec<_> = drain(&mut h.events)
+        .into_iter()
+        .filter_map(|e| match e {
+            RuntimeEvent::Notify(n) => Some(n),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].title.starts_with("节点不可用："), "{}", notices[0].title);
+    assert!(h.rt.status().monitor.targets[0].down);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_skips_when_core_not_running() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    h.rt.stop_core().await;
+    h.api.delay_calls.lock().unwrap().clear();
+    set_monitor(&h, true, 10).await;
+    wait_secs(30).await;
+    assert!(h.api.delay_calls.lock().unwrap().is_empty());
+    assert_eq!(h.rt.status().monitor.paused_reason, Some(crate::monitor::MonitorPause::CoreNotRunning));
+
+    // Back to running: the pause clears and the first round runs.
+    h.rt.restart_core().await;
+    wait_secs(2).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, None);
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_rounds_never_overlap() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *h.api.delay_gate.lock().unwrap() = Some((entered.clone(), release.clone()));
+    set_monitor(&h, true, 10).await;
+    wait_secs(60).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    assert!(h.rt.status().monitor.probing);
+    release.notify_one();
+    wait_secs(11).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_probe_now_runs_without_waiting() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 300).await;
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    h.rt.monitor_probe_now();
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_disabling_clears_targets() {
+    let mut h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Err(crate::core::api::ApiError::Rejected { status: 504, message: "timeout".into() }));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 10).await;
+    wait_secs(2).await;
+    assert_eq!(h.rt.status().monitor.targets.len(), 1);
+    drain(&mut h.events);
+    set_monitor(&h, false, 10).await;
+    wait_secs(2).await;
+    let st = h.rt.status().monitor;
+    assert!(st.targets.is_empty());
+    assert_eq!((st.last_run, st.next_run), (None, None));
+    assert!(!drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::Notify(_))));
+    wait_secs(30).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_settings_change_does_not_reapply() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    let reloads = h.api.reloads.lock().unwrap().len();
+    let config = last_reload(&h.api);
+    set_monitor(&h, true, 10).await;
+    wait_secs(2).await;
+    set_monitor(&h, true, 30).await;
+    wait_secs(2).await;
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    assert_eq!(last_reload(&h.api), config);
+    // The interval change probes again right away.
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}

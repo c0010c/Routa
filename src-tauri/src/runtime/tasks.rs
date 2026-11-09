@@ -13,6 +13,8 @@ use super::{now_unix, Inner};
 use crate::core::api::MihomoApi;
 use crate::core::apply::ApplyOutcome;
 use crate::core::process::{backoff_delay, CoreState};
+use crate::model::NodeMonitorSettings;
+use crate::monitor::{monitor_targets, MonitorPause, RoundOutcome, MONITOR_TIMEOUT_MS};
 use crate::scheduler::delay_test_due;
 use crate::stats::traffic::Rate;
 
@@ -25,6 +27,7 @@ const DELAY_CHECK_EVERY: Duration = Duration::from_secs(60);
 const TRAFFIC_SAMPLE_EVERY: Duration = Duration::from_secs(1);
 const TOTALS_SAVE_EVERY: Duration = Duration::from_secs(30);
 const STREAM_RETRY_EVERY: Duration = Duration::from_secs(1);
+const MONITOR_TICK: Duration = Duration::from_secs(1);
 
 /// Runs `body` every `period`; the first run is after `first_delay`.
 fn every<F, Fut>(inner: &Arc<Inner>, first_delay: Duration, period: Duration, body: F) -> JoinHandle<()>
@@ -56,6 +59,7 @@ pub(super) fn spawn_all(inner: &Arc<Inner>) -> Vec<JoinHandle<()>> {
         every(inner, Duration::ZERO, DELAY_CHECK_EVERY, scheduled_delay_test),
         tokio::spawn(sample_traffic(inner.clone())),
         every(inner, TOTALS_SAVE_EVERY, TOTALS_SAVE_EVERY, |i| async move { i.save_totals() }),
+        tokio::spawn(monitor_loop(inner.clone())),
     ]
 }
 
@@ -144,6 +148,121 @@ async fn scheduled_delay_test(inner: Arc<Inner>) {
     inner.live.lock().unwrap().last_delay_run = Some(now);
     let names = inner.delay_targets();
     inner.test_delays(names).await;
+}
+
+/// Node monitor: one check per tick; a round runs inside the tick, so rounds
+/// never overlap and the interval counts from the end of the previous one.
+async fn monitor_loop(inner: Arc<Inner>) {
+    let mut tick = interval_at(Instant::now() + MONITOR_TICK, MONITOR_TICK);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        monitor_tick(&inner).await;
+    }
+}
+
+/// The settings whose change makes a round due right away (spec §4: turning
+/// monitoring on, changing the scope or the interval). Threshold, latency
+/// limit and recovery notices apply from the next round.
+fn monitor_key(cfg: &NodeMonitorSettings) -> NodeMonitorSettings {
+    NodeMonitorSettings {
+        enabled: cfg.enabled,
+        scope: cfg.scope,
+        members: cfg.members.clone(),
+        interval_secs: cfg.interval_secs,
+        ..NodeMonitorSettings::default()
+    }
+}
+
+/// Sets `status.monitor.paused_reason`; true when it changed.
+fn set_monitor_pause(inner: &Inner, reason: Option<MonitorPause>) -> bool {
+    let mut st = inner.status.lock().unwrap();
+    if st.monitor.paused_reason == reason {
+        return false;
+    }
+    st.monitor.paused_reason = reason;
+    true
+}
+
+async fn monitor_tick(inner: &Arc<Inner>) {
+    let cfg = inner.model.lock().unwrap().settings.node_monitor.clone();
+    if !cfg.enabled {
+        let had_state = {
+            let mut m = inner.monitor.lock().unwrap();
+            let had = !m.book.targets().is_empty() || m.settings_key.is_some() || m.last_run.is_some() || m.force;
+            if had {
+                m.book.clear();
+                *m = Default::default();
+            }
+            had
+        };
+        if set_monitor_pause(inner, None) | had_state {
+            inner.publish_monitor();
+        }
+        return;
+    }
+
+    // `status` and `model` are locked one after the other, never together.
+    let (health, nics) = {
+        let st = inner.status.lock().unwrap();
+        (st.health.clone(), st.interfaces.clone())
+    };
+    let specs = monitor_targets(&inner.model.lock().unwrap(), &health, &nics);
+    let mut changed = inner.monitor.lock().unwrap().book.reconcile(&specs);
+
+    let has_api = inner.live.lock().unwrap().api.is_some();
+    let reloaded = matches!(inner.status.lock().unwrap().last_apply, Some(ApplyOutcome::Reloaded { .. }));
+    if !has_api || !reloaded {
+        if set_monitor_pause(inner, Some(MonitorPause::CoreNotRunning)) | changed {
+            inner.publish_monitor();
+        }
+        return;
+    }
+    changed |= set_monitor_pause(inner, None);
+
+    let key = monitor_key(&cfg);
+    let interval = Duration::from_secs(u64::from(cfg.interval_secs));
+    let due = {
+        let mut m = inner.monitor.lock().unwrap();
+        let due = m.force
+            || m.settings_key.as_ref() != Some(&key)
+            || m.last_end.is_none_or(|end| Instant::now() >= end + interval);
+        if due && !specs.is_empty() {
+            m.probing = true;
+        }
+        due
+    };
+    if !due || specs.is_empty() {
+        if changed {
+            inner.publish_monitor();
+        }
+        return;
+    }
+    inner.publish_monitor();
+
+    let proxies = specs.into_iter().map(|t| t.proxy).collect();
+    let results = inner.test_delays_with(proxies, MONITOR_TIMEOUT_MS).await;
+    let outcome = inner.monitor.lock().unwrap().book.apply_round(&results, &cfg, now_unix());
+    let applied = match outcome {
+        RoundOutcome::Applied(notices) => {
+            for n in notices {
+                let _ = inner.events.send(super::RuntimeEvent::Notify(n)).await;
+            }
+            true
+        }
+        RoundOutcome::Voided => false,
+    };
+    {
+        let mut m = inner.monitor.lock().unwrap();
+        if applied {
+            m.last_run = Some(now_unix());
+        }
+        m.force = false;
+        m.settings_key = Some(key);
+        m.last_end = Some(Instant::now());
+        m.probing = false;
+    }
+    inner.publish_monitor();
 }
 
 /// `/connections` every second → per-listener rates and totals.
