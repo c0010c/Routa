@@ -28,6 +28,8 @@ const TRAFFIC_SAMPLE_EVERY: Duration = Duration::from_secs(1);
 const TOTALS_SAVE_EVERY: Duration = Duration::from_secs(30);
 const STREAM_RETRY_EVERY: Duration = Duration::from_secs(1);
 const MONITOR_TICK: Duration = Duration::from_secs(1);
+/// Wait before retrying a round voided by a core error (capped at the interval).
+const MONITOR_VOID_RETRY: Duration = Duration::from_secs(10);
 
 /// Runs `body` every `period`; the first run is after `first_delay`.
 fn every<F, Fut>(inner: &Arc<Inner>, first_delay: Duration, period: Duration, body: F) -> JoinHandle<()>
@@ -191,7 +193,6 @@ async fn monitor_tick(inner: &Arc<Inner>) {
             let mut m = inner.monitor.lock().unwrap();
             let had = !m.book.targets().is_empty() || m.settings_key.is_some() || m.last_run.is_some() || m.force;
             if had {
-                m.book.clear();
                 *m = Default::default();
             }
             had
@@ -224,9 +225,11 @@ async fn monitor_tick(inner: &Arc<Inner>) {
     let interval = Duration::from_secs(u64::from(cfg.interval_secs));
     let due = {
         let mut m = inner.monitor.lock().unwrap();
-        let due = m.force
-            || m.settings_key.as_ref() != Some(&key)
-            || m.last_end.is_none_or(|end| Instant::now() >= end + interval);
+        let now = Instant::now();
+        let due = m.retry_at.is_none_or(|at| now >= at)
+            && (m.force
+                || m.settings_key.as_ref() != Some(&key)
+                || m.last_end.is_none_or(|end| now >= end + interval));
         if due && !specs.is_empty() {
             m.probing = true;
         }
@@ -242,24 +245,41 @@ async fn monitor_tick(inner: &Arc<Inner>) {
 
     let proxies = specs.into_iter().map(|t| t.proxy).collect();
     let results = inner.test_delays_with(proxies, MONITOR_TIMEOUT_MS).await;
+
+    // Settings changed while probing (turned off, other scope / members /
+    // interval): the round belongs to a set that no longer exists. Drop it
+    // without judging; the next tick starts over from the new settings.
+    let current = inner.model.lock().unwrap().settings.node_monitor.clone();
+    if !current.enabled || monitor_key(&current) != key {
+        inner.monitor.lock().unwrap().probing = false;
+        inner.publish_monitor();
+        return;
+    }
+
     let outcome = inner.monitor.lock().unwrap().book.apply_round(&results, &cfg, now_unix());
-    let applied = match outcome {
-        RoundOutcome::Applied(notices) => {
-            for n in notices {
-                let _ = inner.events.send(super::RuntimeEvent::Notify(n)).await;
-            }
-            true
+    let notices = match outcome {
+        RoundOutcome::Applied(notices) => notices,
+        RoundOutcome::Voided => {
+            // The core failed mid-round: nothing was judged, so keep the
+            // schedule (and any pending probe-now) and retry shortly.
+            let mut m = inner.monitor.lock().unwrap();
+            m.retry_at = Some(Instant::now() + interval.min(MONITOR_VOID_RETRY));
+            m.probing = false;
+            drop(m);
+            inner.publish_monitor();
+            return;
         }
-        RoundOutcome::Voided => false,
     };
+    for n in notices {
+        let _ = inner.events.send(super::RuntimeEvent::Notify(n)).await;
+    }
     {
         let mut m = inner.monitor.lock().unwrap();
-        if applied {
-            m.last_run = Some(now_unix());
-        }
+        m.last_run = Some(now_unix());
         m.force = false;
         m.settings_key = Some(key);
         m.last_end = Some(Instant::now());
+        m.retry_at = None;
         m.probing = false;
     }
     inner.publish_monitor();
