@@ -311,6 +311,15 @@ pub mod ops {
         }).await
     }
 
+    /// Parses the first non-empty line of `text` as a share link
+    /// (`vless://`, `vmess://`, `ss://`, ...) into a mihomo proxy mapping.
+    pub fn parse_share_link(text: String) -> Result<ParsedProxy, String> {
+        let line = text.lines().map(str::trim).find(|l| !l.is_empty()).ok_or("没有找到链接")?;
+        let raw = crate::subscription::parse_share_link(line)
+            .ok_or("无法识别这条链接，支持 vless、vmess、ss、trojan、hysteria2、tuic")?;
+        parse_proxy_yaml(serde_json::to_string(&raw).map_err(|e| e.to_string())?)
+    }
+
     /// Keys a pasted proxy must not carry: the exit decides the interface,
     /// and chaining through other proxies is not supported.
     const STRIPPED_KEYS: [&str; 3] = ["interface-name", "routing-mark", "dialer-proxy"];
@@ -484,6 +493,12 @@ pub async fn save_manual_nodes(rt: Rt<'_>, nodes: Vec<ManualNode>) -> CmdResult 
 #[specta::specta]
 pub fn parse_proxy_yaml(text: String) -> Result<ParsedProxy, String> {
     ops::parse_proxy_yaml(text)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn parse_share_link(text: String) -> Result<ParsedProxy, String> {
+    ops::parse_share_link(text)
 }
 
 /// Exit name -> member mihomo currently uses; unknown names are omitted.
@@ -1038,6 +1053,39 @@ mod tests {
         assert!(ops::parse_proxy_yaml("[1, 2".into()).is_err());
         assert!(ops::parse_proxy_yaml("- 5".into()).is_err());
         assert!(ops::parse_proxy_yaml("[]".into()).is_err());
+    }
+
+    #[test]
+    fn parse_share_link_maps_vless_reality_from_first_line() {
+        let link = "  vless://3f1c2a9e-7b4d-4e2a-9c1f-0a1b2c3d4e5f@203.0.113.10:443?encryption=none&flow=xtls-rprx-vision\
+                    &security=reality&sni=www.microsoft.com&fp=chrome&pbk=Gq9XwR0oZ3nLk2bYp7VtHc5mJdE1sAfU8iQyN4xKr0M\
+                    &sid=6ba85179&type=tcp#%E4%B8%9C%E4%BA%AC\n\nvless://other@1.2.3.4:1?security=reality#b\n";
+        let p = ops::parse_share_link(link.into()).unwrap();
+        assert_eq!(p.raw["name"], "东京");
+        assert_eq!(p.raw["type"], "vless");
+        assert_eq!(p.raw["server"], "203.0.113.10");
+        assert_eq!(p.raw["flow"], "xtls-rprx-vision");
+        assert_eq!(p.raw["reality-opts"]["public-key"], "Gq9XwR0oZ3nLk2bYp7VtHc5mJdE1sAfU8iQyN4xKr0M");
+        assert!(p.stripped.is_empty());
+    }
+
+    #[test]
+    fn parse_share_link_keeps_explicit_mlkem_flag_only() {
+        let base = "vless://u@h:443?security=reality&pbk=k&sid=ab&type=tcp";
+        let on = ops::parse_share_link(format!("{base}&support-x25519mlkem768=true#a")).unwrap();
+        assert_eq!(on.raw["reality-opts"]["support-x25519mlkem768"], true);
+        let off = ops::parse_share_link(format!("{base}&support-x25519mlkem768=0#a")).unwrap();
+        assert_eq!(off.raw["reality-opts"]["support-x25519mlkem768"], false);
+        let absent = ops::parse_share_link(format!("{base}#a")).unwrap();
+        assert!(absent.raw["reality-opts"].get("support-x25519mlkem768").is_none());
+    }
+
+    #[test]
+    fn parse_share_link_rejects_unknown_and_empty() {
+        assert!(ops::parse_share_link("".into()).is_err());
+        assert!(ops::parse_share_link("  \n ".into()).is_err());
+        assert!(ops::parse_share_link("https://example.com".into()).is_err());
+        assert!(ops::parse_share_link("vless://@host:443".into()).is_err());
     }
 
     #[tokio::test]
