@@ -42,14 +42,36 @@ export const theme = createTheme({
   },
   components: {
     MuiCssBaseline: {
-      styleOverrides: {
+      styleOverrides: (theme) => ({
         // Desktop UI is not document content. Inputs and copyable data opt in;
         // keep this on body so dialogs, menus and snackbars in portals share it.
         body: { userSelect: "none" },
         'input, textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"], [data-selectable="true"], [role="alert"]:not(.MuiAlert-root)': {
           userSelect: "text",
         },
-      },
+        // Thin Win11-style scrollbar instead of WebView2's classic one: no arrow
+        // buttons, transparent track, a 4px pill that thickens on hover/drag.
+        // The transparent border + content-box clip makes the pill narrower than
+        // the 12px hit area. Do not also set the standard scrollbar-width /
+        // scrollbar-color: Chromium then ignores these ::-webkit-* rules.
+        "::-webkit-scrollbar": { width: 12, height: 12 },
+        "::-webkit-scrollbar-track, ::-webkit-scrollbar-corner": { background: "transparent" },
+        "::-webkit-scrollbar-button": { display: "none" },
+        "::-webkit-scrollbar-thumb": {
+          minHeight: 40,
+          border: "4px solid transparent",
+          borderRadius: 6,
+          backgroundClip: "content-box",
+          backgroundColor: `rgb(${theme.vars.palette.text.primaryChannel} / 0.28)`,
+        },
+        "::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active": { borderWidth: 3 },
+        "::-webkit-scrollbar-thumb:hover": {
+          backgroundColor: `rgb(${theme.vars.palette.text.primaryChannel} / 0.45)`,
+        },
+        "::-webkit-scrollbar-thumb:active": {
+          backgroundColor: `rgb(${theme.vars.palette.text.primaryChannel} / 0.55)`,
+        },
+      }),
     },
     MuiAlert: {
       styleOverrides: {
