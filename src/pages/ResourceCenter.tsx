@@ -4,7 +4,7 @@ import { NodeCard } from "../components/NodeCard";
 import { FixedCardGrid } from "../components/FixedCardGrid";
 import { SearchField } from "../components/SearchField";
 import { BatchNodeDialog } from "./BatchNodeDialog";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import NetworkCheck from "@mui/icons-material/NetworkCheck";
@@ -34,18 +34,26 @@ import {
   useDeleteNodeGroup,
   useTestDelays,
 } from "../api/client";
-import type { ManualNode, NodeGroup, NodeRef, Subscription } from "../bindings";
+import type { ManualNode, MonitorStatus, NodeGroup, NodeMonitorSettings, NodeRef, Subscription } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { MonitorMark } from "../components/MonitorMark";
+import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { RowActions } from "../components/RowActions";
 import { TailscaleStateChip } from "../components/TailscaleState";
 import { useInterface } from "../components/InterfaceProvider";
 import { desktopApi, useDesktopMutation } from "../api/desktop";
 import { nodeKey, expandMembers } from "../lib/refs";
+import { clearMonitorFocus, useMonitorFocus } from "../api/monitorFocus";
+import { useSettingsSave, settingsSaveMessage } from "../api/settings";
+import { droppedMessage, targetsForNode, withNode, withoutNode } from "../lib/monitor";
 import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
 import { ManualNodeDialog, newManualNode } from "./ManualNodeDialog";
 import { NodeGroupDialog, newNodeGroup } from "./NodeGroupDialog";
 import { TailscaleDialog, newTailscaleNode } from "./TailscaleDialog";
 import { ListenerDialog, newListener } from "./ListenerDialog";
+
+const NO_MONITOR: MonitorStatus = { last_run: null, next_run: null, probing: false, paused_reason: null, network_down: false, targets: [] };
+const FOCUS_MS = 3000;
 
 export function ResourceCenter({
   subscriptionsOnly = false,
@@ -69,6 +77,34 @@ export function ResourceCenter({
   const [openOverride, setOpenOverride] = useState<Map<string, boolean>>(new Map());
   // Open state chosen while searching; only applies to the query it was made under, so clearing the search restores openOverride.
   const [searchOverride, setSearchOverride] = useState<{ query: string; open: Map<string, boolean> }>({ query: "", open: new Map() });
+  const saveSettings = useSettingsSave();
+  const apply = useApplyResult();
+  const focus = useMonitorFocus();
+  // The node a toast click pointed at. Its sections stay open until the user toggles one;
+  // the card is outlined for FOCUS_MS.
+  const [highlight, setHighlight] = useState<{ key: string; lit: boolean; seq: number } | null>(null);
+  const focusSeq = useRef(0);
+  const loaded = !!model.data && !!runtime.data;
+  useEffect(() => {
+    if (subscriptionsOnly || !focus || typeof focus !== "object") return;
+    // Clear whatever could hide the card.
+    setSearch("");
+    if (params.has("source")) setParams({});
+    setHighlight({ key: nodeKey(focus.Node), lit: true, seq: ++focusSeq.current });
+    clearMonitorFocus();
+  }, [focus, subscriptionsOnly, params, setParams]);
+  useEffect(() => {
+    if (!highlight || !loaded) return;
+    const card = Array.from(document.querySelectorAll<HTMLElement>("[data-grid-key]")).find(
+      (el) => el.dataset.gridKey === highlight.key,
+    );
+    card?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlight?.seq, loaded]);
+  useEffect(() => {
+    if (!highlight?.lit) return;
+    const timer = setTimeout(() => setHighlight({ ...highlight, lit: false }), FOCUS_MS);
+    return () => clearTimeout(timer);
+  }, [highlight]);
   const [newMenu, setNewMenu] = useState<HTMLElement | null>(null);
   const [sub, setSub] = useState<Subscription | null>(null),
     [manual, setManual] = useState<ManualNode | null>(null),
@@ -83,6 +119,16 @@ export function ResourceCenter({
     return <Typography>正在加载资源…</Typography>;
   const m = model.data,
     st = runtime.data;
+  const monitor = st.monitor ?? NO_MONITOR;
+  const toggleMonitor = (ref: NodeRef, watched: boolean) => {
+    const nm = m.settings.node_monitor;
+    const { settings, dropped } = (watched ? withoutNode : withNode)(nm, monitor, ref);
+    if (dropped.length) apply.showMessage(droppedMessage(dropped), "info");
+    saveSettings.mutate(
+      { node_monitor: settings as NodeMonitorSettings },
+      { onError: (e) => apply.showMessage(settingsSaveMessage(e), "error") },
+    );
+  };
   const source = params.get("source");
   const nodes = [
     ...m.subscriptions.flatMap((s) =>
@@ -159,12 +205,18 @@ export function ResourceCenter({
   const defaultOpen = (id: string) => !id.startsWith("subscription:") || !!source;
   // A search opens every matching section unless the user collapsed it during this same search.
   const searchOpen = searchOverride.query === q ? searchOverride.open : new Map<string, boolean>();
+  const focusedSections = new Set(
+    highlight ? grouped.filter((g) => g.nodes.some((n) => nodeKey(n.ref) === highlight.key)).map((g) => g.id) : [],
+  );
   const isOpen = (id: string) =>
-    q ? searchOpen.get(id) ?? true : openOverride.get(id) ?? defaultOpen(id);
-  const setOpen = (entries: [string, boolean][]) =>
-    q
+    focusedSections.has(id) ||
+    (q ? searchOpen.get(id) ?? true : openOverride.get(id) ?? defaultOpen(id));
+  const setOpen = (entries: [string, boolean][]) => {
+    setHighlight(null);
+    return q
       ? setSearchOverride({ query: q, open: new Map([...searchOpen, ...entries]) })
       : setOpenOverride((old) => new Map([...old, ...entries]));
+  };
   const sections = grouped.flatMap((g) => {
     let shown = g.nodes.filter(
       (n) =>
@@ -472,10 +524,13 @@ export function ResourceCenter({
                             testUrl={m.settings.delay_test_url}
                             running={st.core === "Running"}
                             pending={test.isPending && !!test.variables?.[0]?.includes(n.proxy)}
+                            monitorFocus={!!highlight?.lit && highlight.key === nodeKey(n.ref)}
                             status={
                               n.manual && "Tailscale" in n.manual.kind ? (
                                 <TailscaleStateChip node={n.manual} compact />
-                              ) : undefined
+                              ) : (
+                                <MonitorMark targets={targetsForNode(monitor, n.ref)} />
+                              )
                             }
                             actions={[
                               {
@@ -514,6 +569,15 @@ export function ResourceCenter({
                                     },
                                   ]
                                 : []),
+                              ...(simple
+                                ? []
+                                : [
+                                    {
+                                      label: targetsForNode(monitor, n.ref).length ? "移出监测" : "加入监测",
+                                      disabled: saveSettings.isPending,
+                                      onClick: () => toggleMonitor(n.ref, targetsForNode(monitor, n.ref).length > 0),
+                                    },
+                                  ]),
                             ]}
                           />
                         ))}
