@@ -336,6 +336,15 @@ describe("node monitor on cards", () => {
     expect(within(screen.getByRole("article", { name: "手动节点甲" })).queryByLabelText("监测中")).not.toBeInTheDocument();
   });
 
+  it("unmonitored card reserves no mark area", async () => {
+    setup(false, "/nodes", model, [target()]);
+    const monitored = await screen.findByRole("article", { name: "订阅节点" });
+    expect(monitored.querySelector("[data-card-mark]")).not.toBeNull();
+    const plain = screen.getByRole("article", { name: "手动节点甲" });
+    expect(within(plain).queryByLabelText(/^监测/)).not.toBeInTheDocument();
+    expect(plain.querySelector("[data-card-mark]")).toBeNull();
+  });
+
   it("keeps the Tailscale mark instead of the monitor mark", async () => {
     const ts = { id: "t1", name: "TS", groups: [], kind: { Tailscale: { exit: null } } };
     const data = { ...model, manual_nodes: [...model.manual_nodes, ts] } as unknown as Model;

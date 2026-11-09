@@ -63,7 +63,7 @@ export function NodeCard({
             <Chip label={protocol} size="small" sx={{ height: 18, fontSize: 12, maxWidth: "60%", bgcolor: "action.hover", borderColor: "transparent", "& .MuiChip-label": { px: "5px" } }} />
             <Typography noWrap title={source} variant="caption" color="text.secondary" sx={{ minWidth: 0, flex: 1, fontSize: 12, lineHeight: "18px" }}>{source}</Typography>
           </Box>
-          {hasMark && <Box component="span" aria-label={current ? "当前使用的节点" : selected ? "已选择，等待确认" : undefined} sx={{ position: "absolute", right: actions.length ? 36 : 11, bottom: 9, height: 18, display: "flex", alignItems: "center", gap: "4px", fontSize: 11, color: selected ? "primary.main" : "text.secondary", maxWidth: 58, overflow: "hidden", "& .MuiChip-root": { height: 18, fontSize: 11, border: 0, maxWidth: "100%", "& .MuiChip-label": { px: 0 } } }}>
+          {hasMark && <Box component="span" data-card-mark aria-label={current ? "当前使用的节点" : selected ? "已选择，等待确认" : undefined} sx={{ position: "absolute", right: actions.length ? 36 : 11, bottom: 9, height: 18, display: "flex", alignItems: "center", gap: "4px", fontSize: 11, color: selected ? "primary.main" : "text.secondary", maxWidth: 58, overflow: "hidden", "& .MuiChip-root": { height: 18, fontSize: 11, border: 0, maxWidth: "100%", "& .MuiChip-label": { px: 0 } } }}>
             {selected ? <CheckCircle sx={{ fontSize: 12 }} /> : current ? <Box component="span" sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: "text.secondary", flexShrink: 0 }} /> : null}
             {current ? "当前" : selected ? "已选择" : status}
           </Box>}

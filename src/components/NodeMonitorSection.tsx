@@ -106,6 +106,8 @@ export function NodeMonitorSection() {
   const paused = status.paused_reason === "CoreNotRunning";
   const targets = status.targets;
   const downCount = targets.filter((t) => t.down).length;
+  // Unprobed, not-yet-applied and currently failing (below threshold) targets are not "normal".
+  const okCount = targets.filter((t) => t.probed && !t.down && t.fails === 0 && !t.not_applied).length;
   const listed = showAll ? targets : targets.slice(0, PREVIEW_COUNT);
   const probing = status.probing || probeRequested;
 
@@ -222,7 +224,7 @@ export function NodeMonitorSection() {
             <>
               上次探测 {hhmm(status.last_run)}
               {status.next_run !== null && ` · 下次 ${hhmm(status.next_run)}`}
-              {` · ${targets.length - downCount} 正常`}
+              {` · ${okCount} 正常`}
               {downCount > 0 && <Box component="span" sx={{ color: "error.main" }}> · {downCount} 不可用</Box>}
             </>
           )}
@@ -236,6 +238,9 @@ export function NodeMonitorSection() {
           {probing ? "探测中…" : "立即探测"}
         </Button>
       </Stack>
+      {!paused && status.network_down && (
+        <Typography variant="body2" color="error">网络可能不可用，节点状态暂不更新</Typography>
+      )}
       {targets.length > 0 && (
         <Box component="ul" aria-label="监测中的节点" sx={{ m: 0, p: 0, listStyle: "none" }}>
           {listed.map((t) => {
