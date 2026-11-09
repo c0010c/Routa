@@ -95,6 +95,11 @@ fn build_runtime(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<Arc<Runtim
                 }
                 RuntimeEvent::Traffic(t) => handle.emit("traffic", t),
                 RuntimeEvent::TrafficSnapshot(t) => handle.emit("traffic-snapshot", t),
+                // Task 5 turns this into a real toast; log only for now.
+                RuntimeEvent::Notify(n) => {
+                    eprintln!("monitor notice: {} - {}", n.title, n.body);
+                    Ok(())
+                }
             };
             if let Err(e) = res {
                 eprintln!("emit event failed: {e}");
@@ -140,6 +145,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::refresh_subscription,
             commands::select_group_member,
             commands::test_delays,
+            commands::monitor_probe_now,
             commands::save_settings,
             commands::save_manual_node,
             commands::delete_manual_node,
@@ -191,6 +197,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
         ])
         // Payload of the "procroute-flows" event (not returned by any command).
         .typ::<routa_procsvc_proto::Flow>()
+        .typ::<crate::model::NodeMonitorSettings>()
+        .typ::<crate::model::MonitorScope>()
+        .typ::<crate::monitor::MonitorStatus>()
+        .typ::<crate::monitor::MonitorNotice>()
 }
 
 /// Writes `src/bindings.ts` (debug builds do this at every start).

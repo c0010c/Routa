@@ -19,7 +19,7 @@ const model = {
   node_groups: [],
   listeners: [],
   exits: [],
-  settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
+  settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u", node_monitor: { enabled: false, scope: "InUse", members: [], interval_secs: 300, fail_threshold: 2, latency_limit_ms: 1000, notify_recovery: true } },
   process_routing: { enabled: false, rules: [] },
 } as unknown as Model;
 const status = { core: "Running", delays: {} } as unknown as RuntimeStatus;

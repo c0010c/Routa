@@ -91,6 +91,14 @@ async testDelays(proxyNames: string[]) : Promise<Result<([string, DelayResult])[
     else return { status: "error", error: e  as any };
 }
 },
+async monitorProbeNow() : Promise<Result<null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("monitor_probe_now") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async saveSettings(s: Settings) : Promise<Result<ApplyOutcome, SettingsSaveError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_settings", { s }) };
@@ -644,6 +652,42 @@ export type ManualNodeKind =
  */
 { Proxy: { raw: JsonValue } } | { Tailscale: TailscaleOpts }
 export type Model = { subscriptions: Subscription[]; exits: Exit[]; listeners: Listener[]; settings: Settings; manual_nodes: ManualNode[]; node_groups: NodeGroup[]; process_routing: ProcessRouting }
+/**
+ * Why a target failed a round.
+ */
+export type MonitorFailure = "Timeout" | "Failed" | { OverLimit: number }
+/**
+ * Where clicking a notice leads.
+ */
+export type MonitorFocus = { Node: NodeRef } | "Listeners" | "Settings"
+export type MonitorNotice = { title: string; body: string; focus: MonitorFocus }
+export type MonitorPause = "CoreNotRunning"
+/**
+ * 节点监测的范围：正在使用的节点，或用户自选的成员。
+ */
+export type MonitorScope = "InUse" | "Custom"
+export type MonitorStatus = { last_run: number | null; next_run: number | null; probing: boolean; paused_reason: MonitorPause | null; network_down: boolean; targets: MonitorTarget[] }
+export type MonitorTarget = { proxy: string; node: NodeRef | null; label: string; used_by: string[]; 
+/**
+ * Consecutive failed rounds.
+ */
+fails: number; down: boolean; 
+/**
+ * Unix seconds.
+ */
+down_since: number | null; 
+/**
+ * Latency of the last measured round (also set when over the limit).
+ */
+last_ms: number | null; last_failure: MonitorFailure | null; 
+/**
+ * At least one round produced a usable result.
+ */
+probed: boolean; 
+/**
+ * mihomo has no proxy by that name (exit not applied).
+ */
+not_applied: boolean }
 export type NetInterface = { 
 /**
  * Adapter GUID exactly as Windows reports it, e.g. `{XXXXXXXX-...}`.
@@ -661,6 +705,11 @@ export type Node = { name: string; proxy_type: string; server: string;
 raw: JsonValue }
 export type NodeGroup = { id: NodeGroupId; name: string; members?: NodeRef[] }
 export type NodeGroupId = string
+export type NodeMonitorSettings = { enabled: boolean; scope: MonitorScope; members: ExitMember[]; interval_secs: number; fail_threshold: number; 
+/**
+ * None = 不限
+ */
+latency_limit_ms: number | null; notify_recovery: boolean }
 /**
  * 指向一个节点。untagged：旧 JSON `{subscription_id, name}` 直接落到
  * `Subscription` 变体，存回去的形状也不变。
@@ -798,8 +847,12 @@ core_stop_reason: CoreStopReason | null;
  * `Starting` in this state is a recovery, not a normal start. Not set by
  * a fail-closed stop (`core_stop_reason` says `FailClosed` instead).
  */
-core_recovering: boolean }
-export type Settings = { autostart: boolean; core_path: string | null; controller_port: number; delay_test_interval_mins: number | null; delay_test_url: string }
+core_recovering: boolean; 
+/**
+ * Node monitor snapshot (targets, round timing, network verdict).
+ */
+monitor: MonitorStatus }
+export type Settings = { autostart: boolean; core_path: string | null; controller_port: number; delay_test_interval_mins: number | null; delay_test_url: string; node_monitor: NodeMonitorSettings }
 export type SettingsSaveError = ValidationError[] | string
 export type Subscription = { id: SubscriptionId; name: string; url: string; update_interval_mins: number | null; fallback_exit: ExitId | null; fallback_listener?: ListenerId | null; 
 /**

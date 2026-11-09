@@ -2047,3 +2047,21 @@ async fn confirmed_rule_save_reverts_when_the_reload_fails() {
     assert!(ui.save_process_rule_confirmed(&h.rt, edited).await.is_err());
     assert_eq!(h.rt.model().process_routing.rules, vec![rule]);
 }
+
+#[tokio::test]
+async fn test_delays_with_passes_timeout() {
+    let h = harness(&model_with_listener(false));
+    h.api.set_delay("直连出口", Ok(42));
+    h.rt.start().await.unwrap();
+    h.api.delay_calls.lock().unwrap().clear();
+    h.rt.inner.test_delays_with(vec!["直连出口".into()], 5000).await;
+    let calls = h.api.delay_calls.lock().unwrap().clone();
+    assert_eq!(calls[0].2, 5000);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn status_has_default_monitor() {
+    let h = harness(&model_with_listener(false));
+    assert_eq!(h.rt.status().monitor, crate::monitor::MonitorStatus::default());
+}
