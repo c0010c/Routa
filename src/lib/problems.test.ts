@@ -19,7 +19,7 @@ const model: Model = {
     { id: "l2", name: "下载", listener_type: "Mixed", listen: "0.0.0.0", port: 7891, auth: null, exit: "e3", user_enabled: true },
     { id: "l3", name: "备用", listener_type: "Mixed", listen: "0.0.0.0", port: 7892, auth: null, exit: null, user_enabled: true },
   ],
-  settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u" },
+  settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: 10, delay_test_url: "u", node_monitor: { enabled: false, scope: "InUse", members: [], interval_secs: 300, fail_threshold: 2, latency_limit_ms: 1000, notify_recovery: true } },
   manual_nodes: [],
   node_groups: [],
   process_routing: { enabled: false, rules: [], exit_prompt: true },
@@ -46,7 +46,7 @@ const status: RuntimeStatus = {
   tailscale_exit_errors: {},
   tailscale_exit_retrying: {},
   core_stop_reason: null,
-  core_recovering: false,
+  core_recovering: false, monitor: { last_run: null, next_run: null, probing: false, paused_reason: null, network_down: false, targets: [] },
 };
 
 describe("collectProblems", () => {

@@ -437,6 +437,13 @@ pub async fn test_delays(rt: Rt<'_>, proxy_names: Vec<String>) -> Result<Vec<(St
 
 #[tauri::command]
 #[specta::specta]
+pub async fn monitor_probe_now(rt: Rt<'_>) -> Result<(), ()> {
+    rt.monitor_probe_now();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn save_settings(app: AppHandle, rt: Rt<'_>, s: Settings) -> Result<ApplyOutcome, SettingsSaveError> {
     rt.save_settings(s, |enabled| {
         let mgr = app.autolaunch();

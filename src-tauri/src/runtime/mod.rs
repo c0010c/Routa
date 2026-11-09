@@ -35,6 +35,7 @@ use crate::model::{
     validate, validate::validate_forbidden_exes, FetchResult, ListenerId, Model, Node, ProcessRouting, Settings,
     Subscription, SubscriptionId, ValidationError,
 };
+use crate::monitor::{MonitorBook, MonitorNotice, MonitorStatus};
 use crate::netif::{InterfaceSource, NetInterface};
 use crate::stats::delay::{test_many, DelayBook, DelayError, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
 use crate::stats::traffic::{Rate, TrafficAggregator, TrafficTick};
@@ -96,6 +97,8 @@ pub struct RuntimeStatus {
     /// `Starting` in this state is a recovery, not a normal start. Not set by
     /// a fail-closed stop (`core_stop_reason` says `FailClosed` instead).
     pub core_recovering: bool,
+    /// Node monitor snapshot (targets, round timing, network verdict).
+    pub monitor: MonitorStatus,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, specta::Type)]
@@ -112,6 +115,8 @@ pub enum RuntimeEvent {
     Traffic(TrafficTick),
     /// A stop/reset correction, not a new rate sample for the history chart.
     TrafficSnapshot(TrafficTick),
+    /// A node monitor notice to show the user.
+    Notify(MonitorNotice),
 }
 
 /// One running mihomo instance.
@@ -175,6 +180,19 @@ struct Live {
     delay_generation: u64,
 }
 
+/// Node monitor loop state. Lock rule: never held together with `status`.
+#[derive(Default)]
+struct MonitorRun {
+    book: MonitorBook,
+    /// Set by `monitor_probe_now`: run a round at the next opportunity.
+    force: bool,
+    probing: bool,
+    last_end: Option<Instant>,
+    last_run: Option<i64>,
+    /// Settings the current book was built for.
+    settings_key: Option<crate::model::NodeMonitorSettings>,
+}
+
 struct Inner {
     store: Store,
     nics: Arc<dyn InterfaceSource>,
@@ -185,6 +203,8 @@ struct Inner {
     engine: tokio::sync::Mutex<Engine>,
     model: Mutex<Model>,
     status: Mutex<RuntimeStatus>,
+    /// Never locked while holding `status` (or the reverse).
+    monitor: Mutex<MonitorRun>,
     live: Mutex<Live>,
     traffic: Mutex<TrafficAggregator>,
     /// Lock order: `tailscale` before `status`.
@@ -360,6 +380,32 @@ impl Inner {
         // Status events are full snapshots: dropping one when the consumer
         // lags loses nothing the next one will not carry.
         let _ = self.events.try_send(RuntimeEvent::Status(s));
+    }
+
+    /// Copies the monitor book into `status.monitor` and emits it. The two
+    /// locks are taken one after the other, never together.
+    fn publish_monitor(&self) {
+        let snap = {
+            let m = self.monitor.lock().unwrap();
+            let next_run = match (&m.settings_key, m.last_run) {
+                (Some(k), Some(t)) if k.enabled => Some(t + i64::from(k.interval_secs)),
+                _ => None,
+            };
+            (m.book.targets(), m.book.network_down(), m.probing, m.last_run, next_run)
+        };
+        {
+            let mut st = self.status.lock().unwrap();
+            let paused_reason = st.monitor.paused_reason.take();
+            st.monitor = MonitorStatus {
+                last_run: snap.3,
+                next_run: snap.4,
+                probing: snap.2,
+                paused_reason,
+                network_down: snap.1,
+                targets: snap.0,
+            };
+        }
+        self.emit_status();
     }
 
     fn set_core_state(&self, state: CoreState) {
@@ -1000,6 +1046,10 @@ impl Inner {
     }
 
     async fn test_delays(&self, names: Vec<String>) -> Vec<(String, DelayResult)> {
+        self.test_delays_with(names, DEFAULT_TIMEOUT_MS).await
+    }
+
+    async fn test_delays_with(&self, names: Vec<String>, timeout_ms: u32) -> Vec<(String, DelayResult)> {
         // Take the snapshot after any in-flight apply, but release the engine
         // while measuring so node switches remain responsive.
         let (api, versions, generation, url, applied) = {
@@ -1016,7 +1066,7 @@ impl Inner {
                 .map(|n| (n, DelayResult::failed(DelayError::NoCore, now_unix())))
                 .collect();
         };
-        let mut results = test_many(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS).await;
+        let mut results = test_many(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, timeout_ms).await;
         {
             let eng = self.engine.lock().await;
             self.sync_delay_contexts(&eng.model);
@@ -1086,6 +1136,7 @@ impl Runtime {
             tailscale_exit_retrying: HashMap::new(),
             core_stop_reason: None,
             core_recovering: false,
+            monitor: MonitorStatus::default(),
         };
         let inner = Inner {
             store,
@@ -1103,6 +1154,7 @@ impl Runtime {
             }),
             model: Mutex::new(model),
             status: Mutex::new(status),
+            monitor: Mutex::new(MonitorRun::default()),
             live: Mutex::new(Live::default()),
             traffic: Mutex::new(TrafficAggregator::new(totals)),
             tailscale: Mutex::new(TailscaleTrack::default()),
@@ -1414,6 +1466,11 @@ impl Runtime {
     /// Without a running core every result is `ms: None` and nothing is recorded.
     pub async fn test_delays(&self, names: Vec<String>) -> Vec<(String, DelayResult)> {
         self.inner.test_delays(names).await
+    }
+
+    /// Asks the node monitor to run a round now (ignoring the interval).
+    pub fn monitor_probe_now(&self) {
+        self.inner.monitor.lock().unwrap().force = true;
     }
 
     /// Reloads the config so every Tailscale instance restarts and applies

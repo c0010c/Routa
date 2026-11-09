@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::NodeRef;
 
+/// Probe timeout for one monitor round, in milliseconds.
+pub const MONITOR_TIMEOUT_MS: u32 = 5000;
+
 /// One path to probe, as expanded from the settings.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
 pub struct TargetSpec {
