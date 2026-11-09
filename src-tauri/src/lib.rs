@@ -3,7 +3,9 @@ pub mod config_gen;
 pub mod core;
 pub mod desktop;
 pub mod model;
+pub mod monitor;
 pub mod netif;
+pub mod notify;
 pub mod procroute;
 pub mod relaunch;
 pub mod runtime;
@@ -94,6 +96,10 @@ fn build_runtime(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<Arc<Runtim
                 }
                 RuntimeEvent::Traffic(t) => handle.emit("traffic", t),
                 RuntimeEvent::TrafficSnapshot(t) => handle.emit("traffic-snapshot", t),
+                RuntimeEvent::Notify(n) => {
+                    notify::show(&handle, n);
+                    Ok(())
+                }
             };
             if let Err(e) = res {
                 eprintln!("emit event failed: {e}");
@@ -139,6 +145,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::refresh_subscription,
             commands::select_group_member,
             commands::test_delays,
+            commands::monitor_probe_now,
+            commands::monitor_in_use_nodes,
             commands::save_settings,
             commands::save_manual_node,
             commands::delete_manual_node,
@@ -191,6 +199,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
         ])
         // Payload of the "procroute-flows" event (not returned by any command).
         .typ::<routa_procsvc_proto::Flow>()
+        .typ::<crate::model::NodeMonitorSettings>()
+        .typ::<crate::monitor::InUseNodes>()
+        .typ::<crate::monitor::MonitorStatus>()
+        .typ::<crate::monitor::MonitorNotice>()
 }
 
 /// Writes `src/bindings.ts` (debug builds do this at every start).
@@ -237,6 +249,11 @@ pub fn run() {
         .setup(move |app| {
             create_main_window(app)?;
             let data_dir = app.path().app_data_dir()?;
+            // Dev builds toast as PowerShell (see notify.rs); keep their registry clean.
+            #[cfg(windows)]
+            if !cfg!(debug_assertions) {
+                notify::register_app_id(&app.config().identifier, &data_dir);
+            }
             let desktop = Arc::new(desktop::Desktop::open(data_dir.clone()).map_err(std::io::Error::other)?);
             let updater = Arc::new(updater::Updater::new(app.handle().clone(), data_dir.clone()));
             let rt = build_runtime(app.handle(), data_dir)?;

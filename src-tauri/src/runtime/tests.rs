@@ -2047,3 +2047,319 @@ async fn confirmed_rule_save_reverts_when_the_reload_fails() {
     assert!(ui.save_process_rule_confirmed(&h.rt, edited).await.is_err());
     assert_eq!(h.rt.model().process_routing.rules, vec![rule]);
 }
+
+#[tokio::test]
+async fn test_delays_with_passes_timeout() {
+    let h = harness(&model_with_listener(false));
+    h.api.set_delay("直连出口", Ok(42));
+    h.rt.start().await.unwrap();
+    h.api.delay_calls.lock().unwrap().clear();
+    h.rt.inner.test_delays_with(vec!["直连出口".into()], 5000).await;
+    let calls = h.api.delay_calls.lock().unwrap().clone();
+    assert_eq!(calls[0].2, 5000);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test]
+async fn status_has_default_monitor() {
+    let h = harness(&model_with_listener(false));
+    assert_eq!(h.rt.status().monitor, crate::monitor::MonitorStatus::default());
+}
+
+/// Node `m1`'s own proxy: what the monitor probes for it.
+const MON_PROXY: &str = "手动/节点1";
+
+/// `model_with_node` with exit `直连出口` switched to node `m1` (so it is in
+/// use) and no scheduled delay test to muddy `delay_calls`.
+fn monitored_model() -> Model {
+    let mut m = model_with_node();
+    m.exits[0].kind = ExitKind::Node { node: m1_ref() };
+    m.settings.delay_test_interval_mins = None;
+    m
+}
+
+async fn set_monitor(h: &Harness, enabled: bool, interval_secs: u32) {
+    let mut s = h.rt.model().settings;
+    s.node_monitor.enabled = enabled;
+    s.node_monitor.members = vec![ExitMember::Node(m1_ref())];
+    s.node_monitor.interval_secs = interval_secs;
+    h.rt.save_settings(s, |_| Ok(())).await.unwrap();
+}
+
+/// Timeouts of the monitor probes so far.
+fn monitor_calls(api: &FakeApi) -> Vec<u32> {
+    api.delay_calls.lock().unwrap().iter().filter(|c| c.0 == MON_PROXY).map(|c| c.2).collect()
+}
+
+async fn wait_secs(s: u64) {
+    tokio::time::sleep(Duration::from_secs(s)).await;
+}
+
+#[tokio::test]
+async fn monitor_in_use_nodes_lists_the_exit_node() {
+    let h = harness(&monitored_model());
+    assert_eq!(
+        h.rt.monitor_in_use_nodes(),
+        crate::monitor::InUseNodes { nodes: vec![m1_ref()], auto_exits: vec![] }
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_probes_immediately_when_enabled_then_on_interval() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 10).await;
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api), vec![crate::monitor::MONITOR_TIMEOUT_MS]);
+    let st = h.rt.status().monitor;
+    assert_eq!(st.targets.len(), 1);
+    assert!(st.targets[0].probed);
+    assert!(!st.probing);
+    assert_eq!(st.next_run, st.last_run.map(|t| t + 10));
+    wait_secs(5).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    wait_secs(6).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_sends_notify_after_threshold() {
+    let mut h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Err(crate::core::api::ApiError::Rejected { status: 504, message: "timeout".into() }));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 10).await;
+    wait_secs(2).await;
+    wait_secs(10).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    let notices: Vec<_> = drain(&mut h.events)
+        .into_iter()
+        .filter_map(|e| match e {
+            RuntimeEvent::Notify(n) => Some(n),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].title.starts_with("节点不可用："), "{}", notices[0].title);
+    assert!(h.rt.status().monitor.targets[0].down);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_skips_when_core_not_running() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    h.rt.stop_core().await;
+    h.api.delay_calls.lock().unwrap().clear();
+    set_monitor(&h, true, 10).await;
+    wait_secs(30).await;
+    assert!(h.api.delay_calls.lock().unwrap().is_empty());
+    assert_eq!(h.rt.status().monitor.paused_reason, Some(crate::monitor::MonitorPause::CoreNotRunning));
+
+    // Back to running: the pause clears and the first round runs.
+    h.rt.restart_core().await;
+    wait_secs(2).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, None);
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_pauses_while_the_new_config_is_not_applied() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 300).await;
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+
+    h.api.reload_results.lock().unwrap().push_back(Err(crate::core::api::ApiError::Rejected { status: 400, message: "bad".into() }));
+    // Adding a listener is rejected without touching the running ones.
+    let out = h
+        .rt
+        .mutate(|m| {
+            let mut l = Listener::new_default("L2".into(), 7892);
+            l.exit = m.listeners[0].exit.clone();
+            m.listeners.push(l);
+        })
+        .await
+        .unwrap();
+    assert!(matches!(out, ApplyOutcome::FailedKeptPrevious { .. }), "{out:?}");
+    wait_secs(10).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, Some(crate::monitor::MonitorPause::ConfigNotApplied));
+    h.rt.monitor_probe_now();
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+
+    // Applied again: the pause clears and a round runs right away.
+    let out = h.rt.mutate(|m| { m.listeners.pop(); }).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::Reloaded { .. }), "{out:?}");
+    wait_secs(2).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, None);
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_probes_right_after_core_restart() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 300).await;
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+
+    h.rt.stop_core().await;
+    wait_secs(10).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, Some(crate::monitor::MonitorPause::CoreNotRunning));
+
+    // Far inside the 300 s interval, but the core just came back: probe now.
+    h.rt.restart_core().await;
+    wait_secs(2).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, None);
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_rounds_never_overlap() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *h.api.delay_gate.lock().unwrap() = Some((entered.clone(), release.clone()));
+    set_monitor(&h, true, 10).await;
+    wait_secs(60).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    assert!(h.rt.status().monitor.probing);
+    release.notify_one();
+    wait_secs(11).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_probe_now_runs_without_waiting() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 300).await;
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    h.rt.monitor_probe_now();
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_disabling_clears_targets() {
+    let mut h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Err(crate::core::api::ApiError::Rejected { status: 504, message: "timeout".into() }));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 10).await;
+    wait_secs(2).await;
+    assert_eq!(h.rt.status().monitor.targets.len(), 1);
+    drain(&mut h.events);
+    set_monitor(&h, false, 10).await;
+    wait_secs(2).await;
+    let st = h.rt.status().monitor;
+    assert!(st.targets.is_empty());
+    assert_eq!((st.last_run, st.next_run), (None, None));
+    assert!(!drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::Notify(_))));
+    wait_secs(30).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_settings_change_does_not_reapply() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    let reloads = h.api.reloads.lock().unwrap().len();
+    let config = last_reload(&h.api);
+    set_monitor(&h, true, 10).await;
+    wait_secs(2).await;
+    set_monitor(&h, true, 30).await;
+    wait_secs(2).await;
+    assert_eq!(h.api.reloads.lock().unwrap().len(), reloads);
+    assert_eq!(last_reload(&h.api), config);
+    // The interval change probes again right away.
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_round_in_flight_is_dropped_when_monitoring_is_turned_off() {
+    let mut h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Err(crate::core::api::ApiError::Rejected { status: 504, message: "timeout".into() }));
+    h.rt.start().await.unwrap();
+    let mut s = h.rt.model().settings;
+    s.node_monitor.fail_threshold = 1; // the held round alone would notify
+    h.rt.save_settings(s, |_| Ok(())).await.unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *h.api.delay_gate.lock().unwrap() = Some((entered.clone(), release.clone()));
+    set_monitor(&h, true, 10).await;
+    entered.notified().await;
+    set_monitor(&h, false, 10).await;
+    release.notify_one();
+    wait_secs(2).await;
+    assert!(!drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::Notify(_))));
+    let st = h.rt.status().monitor;
+    assert!(st.targets.is_empty());
+    assert!(!st.probing);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_round_in_flight_is_dropped_when_the_interval_changes() {
+    let mut h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Err(crate::core::api::ApiError::Rejected { status: 504, message: "timeout".into() }));
+    h.rt.start().await.unwrap();
+    let mut s = h.rt.model().settings;
+    s.node_monitor.fail_threshold = 1;
+    h.rt.save_settings(s, |_| Ok(())).await.unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *h.api.delay_gate.lock().unwrap() = Some((entered.clone(), release.clone()));
+    set_monitor(&h, true, 10).await;
+    entered.notified().await;
+    set_monitor(&h, true, 30).await;
+    h.api.set_delay(MON_PROXY, Ok(42));
+    release.notify_one(); // the held probe still answers 504
+    // The held round was not judged; the next tick probes for the new settings.
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    assert!(!drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::Notify(_))));
+    assert!(!h.rt.status().monitor.targets[0].down);
+    assert_eq!(h.rt.status().monitor.next_run, h.rt.status().monitor.last_run.map(|t| t + 30));
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_voided_round_retries_soon_instead_of_waiting_the_interval() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Err(crate::core::api::ApiError::Unreachable("core gone".into())));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 3600).await;
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    let st = h.rt.status().monitor;
+    assert_eq!((st.last_run, st.probing), (None, false));
+    // Backoff, not a probe every tick.
+    wait_secs(5).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+    h.api.set_delay(MON_PROXY, Ok(42));
+    wait_secs(6).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    assert!(h.rt.status().monitor.last_run.is_some());
+    // A completed round goes back to the interval.
+    wait_secs(60).await;
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}

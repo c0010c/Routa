@@ -4,6 +4,7 @@ import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import PowerSettingsNewOutlined from "@mui/icons-material/PowerSettingsNewOutlined";
 import { Link, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
+import { useMonitorFocusNavigation } from "./Layout";
 import { UpdateNotice } from "./UpdateNotice";
 
 const NAV = [
@@ -14,6 +15,7 @@ const NAV = [
 
 export function SimpleLayout({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
+  useMonitorFocusNavigation();
   return (
     <Stack
       sx={{

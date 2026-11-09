@@ -4,7 +4,7 @@ import { NodeCard } from "../components/NodeCard";
 import { FixedCardGrid } from "../components/FixedCardGrid";
 import { SearchField } from "../components/SearchField";
 import { BatchNodeDialog } from "./BatchNodeDialog";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import NetworkCheck from "@mui/icons-material/NetworkCheck";
@@ -36,16 +36,23 @@ import {
 } from "../api/client";
 import type { ManualNode, NodeGroup, NodeRef, Subscription } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { MonitorMark } from "../components/MonitorMark";
+import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { RowActions } from "../components/RowActions";
 import { TailscaleStateChip } from "../components/TailscaleState";
 import { useInterface } from "../components/InterfaceProvider";
 import { desktopApi, useDesktopMutation } from "../api/desktop";
 import { nodeKey, expandMembers } from "../lib/refs";
+import { clearMonitorFocus, useMonitorFocus } from "../api/monitorFocus";
+import { useSettingsSave, settingsSaveMessage } from "../api/settings";
+import { EMPTY_MONITOR_STATUS, fetchInUseNodes, skippedMessage, targetsForNode, withNode, withoutNode } from "../lib/monitor";
 import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
 import { ManualNodeDialog, newManualNode } from "./ManualNodeDialog";
 import { NodeGroupDialog, newNodeGroup } from "./NodeGroupDialog";
 import { TailscaleDialog, newTailscaleNode } from "./TailscaleDialog";
 import { ListenerDialog, newListener } from "./ListenerDialog";
+
+const FOCUS_MS = 3000;
 
 export function ResourceCenter({
   subscriptionsOnly = false,
@@ -69,6 +76,34 @@ export function ResourceCenter({
   const [openOverride, setOpenOverride] = useState<Map<string, boolean>>(new Map());
   // Open state chosen while searching; only applies to the query it was made under, so clearing the search restores openOverride.
   const [searchOverride, setSearchOverride] = useState<{ query: string; open: Map<string, boolean> }>({ query: "", open: new Map() });
+  const saveSettings = useSettingsSave();
+  const apply = useApplyResult();
+  const focus = useMonitorFocus();
+  // The node a toast click pointed at. Its sections stay open until the user toggles one;
+  // the card is outlined for FOCUS_MS.
+  const [highlight, setHighlight] = useState<{ key: string; lit: boolean; seq: number } | null>(null);
+  const focusSeq = useRef(0);
+  const loaded = !!model.data && !!runtime.data;
+  useEffect(() => {
+    if (subscriptionsOnly || !focus || typeof focus !== "object") return;
+    // Clear whatever could hide the card.
+    setSearch("");
+    if (params.has("source")) setParams({});
+    setHighlight({ key: nodeKey(focus.Node), lit: true, seq: ++focusSeq.current });
+    clearMonitorFocus();
+  }, [focus, subscriptionsOnly, params, setParams]);
+  useEffect(() => {
+    if (!highlight || !loaded) return;
+    const card = Array.from(document.querySelectorAll<HTMLElement>("[data-grid-key]")).find(
+      (el) => el.dataset.gridKey === highlight.key,
+    );
+    card?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlight?.seq, loaded]);
+  useEffect(() => {
+    if (!highlight?.lit) return;
+    const timer = setTimeout(() => setHighlight({ ...highlight, lit: false }), FOCUS_MS);
+    return () => clearTimeout(timer);
+  }, [highlight]);
   const [newMenu, setNewMenu] = useState<HTMLElement | null>(null);
   const [sub, setSub] = useState<Subscription | null>(null),
     [manual, setManual] = useState<ManualNode | null>(null),
@@ -83,6 +118,22 @@ export function ResourceCenter({
     return <Typography>正在加载资源…</Typography>;
   const m = model.data,
     st = runtime.data;
+  const monitor = st.monitor ?? EMPTY_MONITOR_STATUS;
+  const toggleMonitor = async (ref: NodeRef, watched: boolean) => {
+    const nm = m.settings.node_monitor;
+    let settings;
+    if (watched) settings = withoutNode(nm, m, ref);
+    else {
+      // Turning monitoring on from a card: the nodes in use come along, as in settings.
+      const inUse = !nm.enabled && nm.members.length === 0 ? await fetchInUseNodes() : { nodes: [], auto_exits: [] };
+      if (inUse.auto_exits.length) apply.showMessage(skippedMessage(inUse.auto_exits), "info");
+      settings = withNode(nm, ref, inUse.nodes);
+    }
+    saveSettings.mutate(
+      { node_monitor: settings },
+      { onError: (e) => apply.showMessage(settingsSaveMessage(e), "error") },
+    );
+  };
   const source = params.get("source");
   const nodes = [
     ...m.subscriptions.flatMap((s) =>
@@ -159,12 +210,18 @@ export function ResourceCenter({
   const defaultOpen = (id: string) => !id.startsWith("subscription:") || !!source;
   // A search opens every matching section unless the user collapsed it during this same search.
   const searchOpen = searchOverride.query === q ? searchOverride.open : new Map<string, boolean>();
+  const focusedSections = new Set(
+    highlight ? grouped.filter((g) => g.nodes.some((n) => nodeKey(n.ref) === highlight.key)).map((g) => g.id) : [],
+  );
   const isOpen = (id: string) =>
-    q ? searchOpen.get(id) ?? true : openOverride.get(id) ?? defaultOpen(id);
-  const setOpen = (entries: [string, boolean][]) =>
-    q
+    focusedSections.has(id) ||
+    (q ? searchOpen.get(id) ?? true : openOverride.get(id) ?? defaultOpen(id));
+  const setOpen = (entries: [string, boolean][]) => {
+    setHighlight(null);
+    return q
       ? setSearchOverride({ query: q, open: new Map([...searchOpen, ...entries]) })
       : setOpenOverride((old) => new Map([...old, ...entries]));
+  };
   const sections = grouped.flatMap((g) => {
     let shown = g.nodes.filter(
       (n) =>
@@ -460,63 +517,81 @@ export function ResourceCenter({
                   {open && (
                     <>
                       <FixedCardGrid width={220} stretch animate sx={{ p: 1.5, gap: 1.5 }}>
-                        {shown.map((n) => (
-                          <NodeCard
-                            key={nodeKey(n.ref)}
-                            name={n.name}
-                            source={n.source}
-                            protocol={n.type}
-                            delay={st.delays[n.proxy]}
-                            gridKey={nodeKey(n.ref)}
-                            testTarget={n.proxy}
-                            testUrl={m.settings.delay_test_url}
-                            running={st.core === "Running"}
-                            pending={test.isPending && !!test.variables?.[0]?.includes(n.proxy)}
-                            status={
-                              n.manual && "Tailscale" in n.manual.kind ? (
-                                <TailscaleStateChip node={n.manual} compact />
-                              ) : undefined
-                            }
-                            actions={[
-                              {
-                                label: simple ? "使用此节点" : "用于新代理",
-                                onClick: () =>
-                                  simple
-                                    ? choose.mutate(n.ref)
-                                    : setProxy(n.ref),
-                              },
-                              {
-                                label: "测延迟",
-                                disabled: test.isPending,
-                                onClick: () => test.mutate([n.proxy]),
-                              },
-                              ...(n.manual
-                                ? [
-                                    {
-                                      label:
-                                        "Tailscale" in n.manual.kind
-                                          ? "登录与出口设置"
-                                          : "编辑",
-                                      onClick: () =>
-                                        "Tailscale" in n.manual!.kind
-                                          ? setTs(n.manual!)
-                                          : setManual(n.manual!),
-                                    },
-                                    {
-                                      label: "删除",
-                                      danger: true,
-                                      onClick: () =>
-                                        setDeleting({
-                                          name: n.name,
-                                          run: () =>
-                                            delNode.mutateAsync(n.manual!.id),
-                                        }),
-                                    },
-                                  ]
-                                : []),
-                            ]}
-                          />
-                        ))}
+                        {shown.map((n) => {
+                          const mt = targetsForNode(monitor, n.ref);
+                          return (
+                            <NodeCard
+                              key={nodeKey(n.ref)}
+                              name={n.name}
+                              source={n.source}
+                              protocol={n.type}
+                              delay={st.delays[n.proxy]}
+                              gridKey={nodeKey(n.ref)}
+                              testTarget={n.proxy}
+                              testUrl={m.settings.delay_test_url}
+                              running={st.core === "Running"}
+                              pending={test.isPending && !!test.variables?.[0]?.includes(n.proxy)}
+                              monitorFocus={!!highlight?.lit && highlight.key === nodeKey(n.ref)}
+                              status={
+                                // One mark slot: a down node outranks the Tailscale state.
+                                mt.some((t) => t.down) ? (
+                                  <MonitorMark targets={mt} />
+                                ) : n.manual && "Tailscale" in n.manual.kind ? (
+                                  <TailscaleStateChip node={n.manual} compact />
+                                ) : mt.length ? (
+                                  <MonitorMark targets={mt} />
+                                ) : undefined
+                              }
+                              actions={[
+                                {
+                                  label: simple ? "使用此节点" : "用于新代理",
+                                  onClick: () =>
+                                    simple
+                                      ? choose.mutate(n.ref)
+                                      : setProxy(n.ref),
+                                },
+                                {
+                                  label: "测延迟",
+                                  disabled: test.isPending,
+                                  onClick: () => test.mutate([n.proxy]),
+                                },
+                                ...(n.manual
+                                  ? [
+                                      {
+                                        label:
+                                          "Tailscale" in n.manual.kind
+                                            ? "登录与出口设置"
+                                            : "编辑",
+                                        onClick: () =>
+                                          "Tailscale" in n.manual!.kind
+                                            ? setTs(n.manual!)
+                                            : setManual(n.manual!),
+                                      },
+                                      {
+                                        label: "删除",
+                                        danger: true,
+                                        onClick: () =>
+                                          setDeleting({
+                                            name: n.name,
+                                            run: () =>
+                                              delNode.mutateAsync(n.manual!.id),
+                                          }),
+                                      },
+                                    ]
+                                  : []),
+                                ...(simple
+                                  ? []
+                                  : [
+                                      {
+                                        label: mt.length ? "移出监测" : "加入监测",
+                                        disabled: saveSettings.isPending,
+                                        onClick: () => void toggleMonitor(n.ref, mt.length > 0),
+                                      },
+                                    ]),
+                              ]}
+                            />
+                          );
+                        })}
                       </FixedCardGrid>
                       {!shown.length && (
                         <Typography

@@ -62,6 +62,7 @@ const initialModel: Model = {
     controller_port: 19097,
     delay_test_interval_mins: 10,
     delay_test_url: "u",
+    node_monitor: { enabled: false, members: [], interval_secs: 300, fail_threshold: 2, latency_limit_ms: 1000, notify_recovery: true },
   },
   manual_nodes: [
     { id: "n1", name: "新加坡01", groups: [], kind: { Proxy: { raw: {} } } },
@@ -93,7 +94,7 @@ const initialStatus: RuntimeStatus = {
   tailscale_exit_errors: {},
   tailscale_exit_retrying: {},
   core_stop_reason: null,
-  core_recovering: false,
+  core_recovering: false, monitor: { last_run: null, next_run: null, probing: false, paused_reason: null, network_down: false, targets: [] },
   traffic: {
     total_rate: { up: 1024, down: 2048 },
     per_listener_rate: {},
