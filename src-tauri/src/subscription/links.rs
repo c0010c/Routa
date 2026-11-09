@@ -280,13 +280,15 @@ fn parse_vless(line: &str) -> Option<Value> {
         m.insert("skip-cert-verify".into(), json!(true));
     }
     if security == "reality" {
-        m.insert(
-            "reality-opts".into(),
-            json!({
-                "public-key": non_empty(q, "pbk").unwrap_or_default(),
-                "short-id": non_empty(q, "sid").unwrap_or_default(),
-            }),
-        );
+        let mut opts = json!({
+            "public-key": non_empty(q, "pbk").unwrap_or_default(),
+            "short-id": non_empty(q, "sid").unwrap_or_default(),
+        });
+        // mihomo's own link converter honours this (non-Xray) parameter only when present.
+        if let Some(v) = non_empty(q, "support-x25519mlkem768") {
+            opts["support-x25519mlkem768"] = json!(truthy(Some(&v.to_string())));
+        }
+        m.insert("reality-opts".into(), opts);
     }
     // Unlike trojan, vless always states its network ("tcp" by default).
     m.insert("network".into(), json!(non_empty(q, "type").unwrap_or("tcp")));
