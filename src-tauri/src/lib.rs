@@ -146,6 +146,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::delete_node_group,
             commands::parse_proxy_yaml,
             commands::parse_proxy_yaml_batch,
+            commands::parse_share_link,
             commands::save_manual_nodes,
             commands::group_now,
             commands::reset_traffic,
