@@ -5,6 +5,7 @@ pub mod desktop;
 pub mod model;
 pub mod monitor;
 pub mod netif;
+pub mod notify;
 pub mod procroute;
 pub mod relaunch;
 pub mod runtime;
@@ -95,9 +96,8 @@ fn build_runtime(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<Arc<Runtim
                 }
                 RuntimeEvent::Traffic(t) => handle.emit("traffic", t),
                 RuntimeEvent::TrafficSnapshot(t) => handle.emit("traffic-snapshot", t),
-                // Task 5 turns this into a real toast; log only for now.
                 RuntimeEvent::Notify(n) => {
-                    eprintln!("monitor notice: {} - {}", n.title, n.body);
+                    notify::show(&handle, n);
                     Ok(())
                 }
             };
