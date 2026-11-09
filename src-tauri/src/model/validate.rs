@@ -135,6 +135,24 @@ fn check_interval(field: String, v: Option<u32>, errors: &mut Vec<ValidationErro
     }
 }
 
+/// 监测成员引用不存在的节点不算错误（订阅更新后节点可能消失），只校验数值范围。
+fn check_node_monitor(m: &NodeMonitorSettings, errors: &mut Vec<ValidationError>) {
+    let mut bad = |field: &str, value: u32| {
+        errors.push(ValidationError::IntervalOutOfRange { field: field.to_string(), value })
+    };
+    if !MONITOR_INTERVALS.contains(&m.interval_secs) {
+        bad("node_monitor.interval_secs", m.interval_secs);
+    }
+    if !MONITOR_THRESHOLDS.contains(&m.fail_threshold) {
+        bad("node_monitor.fail_threshold", m.fail_threshold);
+    }
+    if let Some(v) = m.latency_limit_ms {
+        if !(1..=60_000).contains(&v) {
+            bad("node_monitor.latency_limit_ms", v);
+        }
+    }
+}
+
 fn check_name(name: &str, forbid_slash: bool, errors: &mut Vec<ValidationError>) {
     let mut invalid = |reason: &str| {
         errors.push(ValidationError::InvalidName {
@@ -374,6 +392,7 @@ pub fn validate(model: &Model) -> Result<(), Vec<ValidationError>> {
             &mut errors,
         );
     }
+    check_node_monitor(&model.settings.node_monitor, &mut errors);
 
     // 引用的出口必须存在（节点缺失不是校验错误，而是健康状态）
     let exit_ids: std::collections::HashSet<&ExitId> = model.exits.iter().map(|e| &e.id).collect();
@@ -728,6 +747,42 @@ mod tests {
                 .count();
             assert_eq!(empty, 3, "{n:?} {e:?}");
         }
+    }
+
+    #[test]
+    fn validate_rejects_bad_monitor_values() {
+        type Edit = fn(&mut NodeMonitorSettings);
+        let cases: [(Edit, &str, u32); 4] = [
+            (|n| n.interval_secs = 5, "node_monitor.interval_secs", 5),
+            (|n| n.fail_threshold = 4, "node_monitor.fail_threshold", 4),
+            (|n| n.latency_limit_ms = Some(0), "node_monitor.latency_limit_ms", 0),
+            (|n| n.latency_limit_ms = Some(60001), "node_monitor.latency_limit_ms", 60001),
+        ];
+        for (edit, field, value) in cases {
+            let mut m = Model::default();
+            edit(&mut m.settings.node_monitor);
+            let e = errs(&m);
+            assert!(
+                e.contains(&ValidationError::IntervalOutOfRange { field: field.into(), value }),
+                "{field} {e:?}"
+            );
+        }
+        for v in [None, Some(60000)] {
+            let mut m = Model::default();
+            m.settings.node_monitor.latency_limit_ms = v;
+            assert!(validate(&m).is_ok(), "{v:?}");
+        }
+    }
+
+    #[test]
+    fn validate_ignores_missing_monitor_members() {
+        let mut m = Model::default();
+        m.settings.node_monitor.scope = MonitorScope::Custom;
+        m.settings.node_monitor.members = vec![
+            ExitMember::Node(NodeRef::Subscription { subscription_id: SubscriptionId("gone".into()), name: "n".into() }),
+            ExitMember::Node(mref("zz")),
+        ];
+        assert!(validate(&m).is_ok());
     }
 
     #[test]

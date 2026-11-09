@@ -238,6 +238,7 @@ pub struct Settings {
     pub controller_port: u16,
     pub delay_test_interval_mins: Option<u32>,
     pub delay_test_url: String,
+    pub node_monitor: NodeMonitorSettings,
 }
 
 impl Default for Settings {
@@ -248,6 +249,47 @@ impl Default for Settings {
             controller_port: 19097,
             delay_test_interval_mins: Some(10),
             delay_test_url: "https://www.gstatic.com/generate_204".to_string(),
+            node_monitor: NodeMonitorSettings::default(),
+        }
+    }
+}
+
+/// 节点监测的范围：正在使用的节点，或用户自选的成员。
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, specta::Type)]
+pub enum MonitorScope {
+    #[default]
+    InUse,
+    Custom,
+}
+
+/// 允许的监测间隔（秒）。
+pub const MONITOR_INTERVALS: [u32; 8] = [10, 30, 60, 180, 300, 600, 1800, 3600];
+/// 允许的连续失败阈值。
+pub const MONITOR_THRESHOLDS: [u32; 4] = [1, 2, 3, 5];
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+#[serde(default)]
+pub struct NodeMonitorSettings {
+    pub enabled: bool,
+    pub scope: MonitorScope,
+    pub members: Vec<ExitMember>,
+    pub interval_secs: u32,
+    pub fail_threshold: u32,
+    /// None = 不限
+    pub latency_limit_ms: Option<u32>,
+    pub notify_recovery: bool,
+}
+
+impl Default for NodeMonitorSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scope: MonitorScope::InUse,
+            members: vec![],
+            interval_secs: 300,
+            fail_threshold: 2,
+            latency_limit_ms: Some(1000),
+            notify_recovery: true,
         }
     }
 }
@@ -419,6 +461,25 @@ impl Default for ProcessRouting {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_monitor_defaults() {
+        let m = Settings::default().node_monitor;
+        assert!(!m.enabled);
+        assert_eq!(m.scope, MonitorScope::InUse);
+        assert!(m.members.is_empty());
+        assert_eq!(m.interval_secs, 300);
+        assert_eq!(m.fail_threshold, 2);
+        assert_eq!(m.latency_limit_ms, Some(1000));
+        assert!(m.notify_recovery);
+    }
+
+    #[test]
+    fn old_state_without_node_monitor_loads_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"autostart":true,"controller_port":19097}"#).unwrap();
+        assert!(s.autostart);
+        assert_eq!(s.node_monitor, NodeMonitorSettings::default());
+    }
 
     #[test]
     fn entries_round_trip() {
