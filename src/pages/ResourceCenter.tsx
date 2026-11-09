@@ -512,75 +512,78 @@ export function ResourceCenter({
                   {open && (
                     <>
                       <FixedCardGrid width={220} stretch animate sx={{ p: 1.5, gap: 1.5 }}>
-                        {shown.map((n) => (
-                          <NodeCard
-                            key={nodeKey(n.ref)}
-                            name={n.name}
-                            source={n.source}
-                            protocol={n.type}
-                            delay={st.delays[n.proxy]}
-                            gridKey={nodeKey(n.ref)}
-                            testTarget={n.proxy}
-                            testUrl={m.settings.delay_test_url}
-                            running={st.core === "Running"}
-                            pending={test.isPending && !!test.variables?.[0]?.includes(n.proxy)}
-                            monitorFocus={!!highlight?.lit && highlight.key === nodeKey(n.ref)}
-                            status={
-                              n.manual && "Tailscale" in n.manual.kind ? (
-                                <TailscaleStateChip node={n.manual} compact />
-                              ) : (
-                                <MonitorMark targets={targetsForNode(monitor, n.ref)} />
-                              )
-                            }
-                            actions={[
-                              {
-                                label: simple ? "使用此节点" : "用于新代理",
-                                onClick: () =>
-                                  simple
-                                    ? choose.mutate(n.ref)
-                                    : setProxy(n.ref),
-                              },
-                              {
-                                label: "测延迟",
-                                disabled: test.isPending,
-                                onClick: () => test.mutate([n.proxy]),
-                              },
-                              ...(n.manual
-                                ? [
-                                    {
-                                      label:
-                                        "Tailscale" in n.manual.kind
-                                          ? "登录与出口设置"
-                                          : "编辑",
-                                      onClick: () =>
-                                        "Tailscale" in n.manual!.kind
-                                          ? setTs(n.manual!)
-                                          : setManual(n.manual!),
-                                    },
-                                    {
-                                      label: "删除",
-                                      danger: true,
-                                      onClick: () =>
-                                        setDeleting({
-                                          name: n.name,
-                                          run: () =>
-                                            delNode.mutateAsync(n.manual!.id),
-                                        }),
-                                    },
-                                  ]
-                                : []),
-                              ...(simple
-                                ? []
-                                : [
-                                    {
-                                      label: targetsForNode(monitor, n.ref).length ? "移出监测" : "加入监测",
-                                      disabled: saveSettings.isPending,
-                                      onClick: () => toggleMonitor(n.ref, targetsForNode(monitor, n.ref).length > 0),
-                                    },
-                                  ]),
-                            ]}
-                          />
-                        ))}
+                        {shown.map((n) => {
+                          const mt = targetsForNode(monitor, n.ref);
+                          return (
+                            <NodeCard
+                              key={nodeKey(n.ref)}
+                              name={n.name}
+                              source={n.source}
+                              protocol={n.type}
+                              delay={st.delays[n.proxy]}
+                              gridKey={nodeKey(n.ref)}
+                              testTarget={n.proxy}
+                              testUrl={m.settings.delay_test_url}
+                              running={st.core === "Running"}
+                              pending={test.isPending && !!test.variables?.[0]?.includes(n.proxy)}
+                              monitorFocus={!!highlight?.lit && highlight.key === nodeKey(n.ref)}
+                              status={
+                                n.manual && "Tailscale" in n.manual.kind ? (
+                                  <TailscaleStateChip node={n.manual} compact />
+                                ) : mt.length ? (
+                                  <MonitorMark targets={mt} />
+                                ) : undefined
+                              }
+                              actions={[
+                                {
+                                  label: simple ? "使用此节点" : "用于新代理",
+                                  onClick: () =>
+                                    simple
+                                      ? choose.mutate(n.ref)
+                                      : setProxy(n.ref),
+                                },
+                                {
+                                  label: "测延迟",
+                                  disabled: test.isPending,
+                                  onClick: () => test.mutate([n.proxy]),
+                                },
+                                ...(n.manual
+                                  ? [
+                                      {
+                                        label:
+                                          "Tailscale" in n.manual.kind
+                                            ? "登录与出口设置"
+                                            : "编辑",
+                                        onClick: () =>
+                                          "Tailscale" in n.manual!.kind
+                                            ? setTs(n.manual!)
+                                            : setManual(n.manual!),
+                                      },
+                                      {
+                                        label: "删除",
+                                        danger: true,
+                                        onClick: () =>
+                                          setDeleting({
+                                            name: n.name,
+                                            run: () =>
+                                              delNode.mutateAsync(n.manual!.id),
+                                          }),
+                                      },
+                                    ]
+                                  : []),
+                                ...(simple
+                                  ? []
+                                  : [
+                                      {
+                                        label: mt.length ? "移出监测" : "加入监测",
+                                        disabled: saveSettings.isPending,
+                                        onClick: () => toggleMonitor(n.ref, mt.length > 0),
+                                      },
+                                    ]),
+                              ]}
+                            />
+                          );
+                        })}
                       </FixedCardGrid>
                       {!shown.length && (
                         <Typography

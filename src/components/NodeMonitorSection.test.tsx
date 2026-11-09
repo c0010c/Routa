@@ -127,6 +127,37 @@ describe("NodeMonitorSection", () => {
     await waitFor(() => expect(commands.monitorProbeNow).toHaveBeenCalled());
   });
 
+  it("footer counts only probed healthy targets as normal", async () => {
+    renderSection({ enabled: true }, monitor({
+      last_run: 1_700_000_000,
+      next_run: 1_700_000_300,
+      targets: [
+        target("A"),
+        target("B", { down: true, fails: 2, last_failure: "Timeout" }),
+        target("C", { probed: false, last_ms: null }),
+        target("D", { not_applied: true }),
+        target("E", { fails: 1, last_failure: "Timeout" }),
+      ],
+    }));
+    expect(await screen.findByText(/· 1 正常$/)).toBeInTheDocument();
+    expect(screen.getByText(/1 不可用/)).toBeInTheDocument();
+  });
+
+  it("network down footer line", async () => {
+    renderSection({ enabled: true }, monitor({
+      last_run: 1_700_000_000,
+      network_down: true,
+      targets: [target("A"), target("B")],
+    }));
+    expect(await screen.findByText("网络可能不可用，节点状态暂不更新")).toBeInTheDocument();
+  });
+
+  it("no network down line normally", async () => {
+    renderSection({ enabled: true }, monitor({ last_run: 1_700_000_000, targets: [target("A")] }));
+    await screen.findByText(/· 1 正常$/);
+    expect(screen.queryByText("网络可能不可用，节点状态暂不更新")).not.toBeInTheDocument();
+  });
+
   it("paused footer", async () => {
     renderSection({ enabled: true }, monitor({ paused_reason: "CoreNotRunning", targets: [target("A")] }));
     expect(await screen.findByText("内核未运行，监测已暂停")).toBeInTheDocument();
