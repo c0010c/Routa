@@ -146,6 +146,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::select_group_member,
             commands::test_delays,
             commands::monitor_probe_now,
+            commands::monitor_in_use_nodes,
             commands::save_settings,
             commands::save_manual_node,
             commands::delete_manual_node,
@@ -198,7 +199,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         // Payload of the "procroute-flows" event (not returned by any command).
         .typ::<routa_procsvc_proto::Flow>()
         .typ::<crate::model::NodeMonitorSettings>()
-        .typ::<crate::model::MonitorScope>()
+        .typ::<crate::monitor::InUseNodes>()
         .typ::<crate::monitor::MonitorStatus>()
         .typ::<crate::monitor::MonitorNotice>()
 }

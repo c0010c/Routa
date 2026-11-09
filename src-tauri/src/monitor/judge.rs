@@ -19,7 +19,8 @@ pub struct MonitorBook {
 
 pub enum RoundOutcome {
     Applied(Vec<MonitorNotice>),
-    /// The core failed mid-round; nothing changed.
+    /// The core failed mid-round, or every result went stale (the config
+    /// was re-applied meanwhile); nothing changed.
     Voided,
 }
 
@@ -122,10 +123,31 @@ impl MonitorBook {
         true
     }
 
-    /// Judges one round of results keyed by proxy name (spec §4). Results
-    /// for proxies not in the set are ignored.
+    /// `apply_round_with` when the OS cannot say whether it is online.
     pub fn apply_round(&mut self, results: &[(String, DelayResult)], cfg: &NodeMonitorSettings, now: i64) -> RoundOutcome {
+        self.apply_round_with(results, cfg, now, None)
+    }
+
+    /// Judges one round of results keyed by proxy name (spec §4). Results
+    /// for proxies not in the set are ignored. `internet` is the OS's own
+    /// verdict: with it, a round is "network down" only when Windows sees no
+    /// internet and nothing answered, so several nodes failing together while
+    /// online count as node failures. Without it (`None`), every one of ≥2
+    /// results failing to answer is taken as the network.
+    pub fn apply_round_with(
+        &mut self,
+        results: &[(String, DelayResult)],
+        cfg: &NodeMonitorSettings,
+        now: i64,
+        internet: Option<bool>,
+    ) -> RoundOutcome {
         if results.iter().any(|(_, r)| matches!(r.error, Some(DelayError::NoCore | DelayError::CoreUnreachable(_)))) {
+            return RoundOutcome::Voided;
+        }
+        // Every result for our targets is stale: nothing measured the current
+        // config, so retry soon instead of counting the round as done.
+        let mut ours = results.iter().filter(|(p, _)| self.targets.iter().any(|t| &t.proxy == p)).peekable();
+        if ours.peek().is_some() && ours.all(|(_, r)| r.stale) {
             return RoundOutcome::Voided;
         }
 
@@ -151,29 +173,34 @@ impl MonitorBook {
 
         let mut notices = Vec::new();
         let all_no_latency = verdicts.iter().all(|(_, v)| v.no_latency());
-        if verdicts.len() >= 2 && all_no_latency {
+        let network_round = !verdicts.is_empty()
+            && all_no_latency
+            && match internet {
+                Some(online) => !online,
+                None => verdicts.len() >= 2,
+            };
+        if network_round {
             self.network_fails += 1;
             if self.network_fails >= cfg.fail_threshold && !self.network_down {
                 self.network_down = true;
-                notices.push(MonitorNotice {
-                    title: "网络可能不可用".into(),
-                    body: format!("{} 个监测节点同时探测失败，请检查本机网络。", verdicts.len()),
-                    focus: MonitorFocus::Settings,
-                });
+                let body = if internet == Some(false) {
+                    "Windows 显示本机未连接互联网，节点状态暂不更新。".to_string()
+                } else {
+                    format!("{} 个监测节点同时探测失败，请检查本机网络。", verdicts.len())
+                };
+                notices.push(MonitorNotice { title: "网络可能不可用".into(), body, focus: MonitorFocus::Settings });
             }
             return RoundOutcome::Applied(notices);
         }
-        // Nothing usable, or too few results to tell the network is back
-        // (a lone failure is still "all failed"): leave every state as is.
-        if verdicts.is_empty() || (self.network_down && all_no_latency) {
+        // Nothing usable, or (without the OS verdict) too few results to tell
+        // the network is back (a lone failure is still "all failed"): leave
+        // every state as is.
+        if verdicts.is_empty() || (self.network_down && all_no_latency && internet != Some(true)) {
             return RoundOutcome::Applied(notices);
         }
         if self.network_down && cfg.notify_recovery {
-            notices.push(MonitorNotice {
-                title: "网络已恢复".into(),
-                body: "监测节点重新可以连通。".into(),
-                focus: MonitorFocus::Settings,
-            });
+            let body = if all_no_latency { "本机已重新连上互联网。" } else { "监测节点重新可以连通。" };
+            notices.push(MonitorNotice { title: "网络已恢复".into(), body: body.into(), focus: MonitorFocus::Settings });
         }
         self.network_down = false;
         self.network_fails = 0;
@@ -227,6 +254,10 @@ impl MonitorBook {
     /// Monitoring turned off: forget everything, no notices.
     pub fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.targets.is_empty()
     }
 
     pub fn targets(&self) -> Vec<MonitorTarget> {
@@ -427,6 +458,51 @@ mod tests {
     }
 
     #[test]
+    fn online_os_turns_a_shared_outage_into_node_downs() {
+        let s: Vec<_> = ["甲", "乙"].map(spec).into();
+        let mut b = book(&s);
+        let r = all(&s, err(DelayError::Timeout));
+        b.apply_round_with(&r, &cfg(), 0, Some(true));
+        let n = notices(b.apply_round_with(&r, &cfg(), 0, Some(true)));
+        assert!(!b.network_down());
+        assert_eq!(n.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["节点不可用：甲", "节点不可用：乙"]);
+    }
+
+    #[test]
+    fn offline_os_is_network_down_even_for_one_target() {
+        let s = vec![spec("甲")];
+        let mut b = book(&s);
+        let r = all(&s, err(DelayError::Failed));
+        b.apply_round_with(&r, &cfg(), 0, Some(false));
+        let n = notices(b.apply_round_with(&r, &cfg(), 0, Some(false)));
+        assert_eq!(
+            n,
+            vec![MonitorNotice {
+                title: "网络可能不可用".into(),
+                body: "Windows 显示本机未连接互联网，节点状态暂不更新。".into(),
+                focus: MonitorFocus::Settings,
+            }]
+        );
+        assert_eq!(b.targets()[0].fails, 0);
+
+        // Back online while the node still fails: the network recovers and the node starts counting.
+        let n = notices(b.apply_round_with(&r, &cfg(), 0, Some(true)));
+        assert_eq!(n[0], MonitorNotice { title: "网络已恢复".into(), body: "本机已重新连上互联网。".into(), focus: MonitorFocus::Settings });
+        assert!(!b.network_down());
+        assert_eq!(b.targets()[0].fails, 1);
+    }
+
+    #[test]
+    fn offline_os_but_a_node_answers_is_not_network_down() {
+        let s: Vec<_> = ["甲", "乙"].map(spec).into();
+        let mut b = book(&s);
+        let r = vec![(s[0].proxy.clone(), ok(30)), (s[1].proxy.clone(), err(DelayError::Timeout))];
+        b.apply_round_with(&r, &cfg(), 0, Some(false));
+        assert!(!b.network_down());
+        assert_eq!(b.targets()[1].fails, 1);
+    }
+
+    #[test]
     fn single_target_has_no_network_detection() {
         let s = vec![spec("甲")];
         let mut b = book(&s);
@@ -487,6 +563,18 @@ mod tests {
         let t = b.targets();
         assert!(!t[0].probed && t[0].fails == 0 && t[0].last_failure.is_none());
         assert!(t[1].probed);
+    }
+
+    #[test]
+    fn all_stale_round_is_voided() {
+        let s: Vec<_> = ["甲", "乙"].map(spec).into();
+        let mut b = book(&s);
+        let stale = DelayResult { stale: true, ..err(DelayError::Timeout) };
+        // A result for a proxy outside the set does not count either way.
+        let mut r = all(&s, stale);
+        r.push(("其它".into(), ok(10)));
+        assert!(matches!(b.apply_round(&r, &cfg(), 0), RoundOutcome::Voided));
+        assert!(b.targets().iter().all(|t| !t.probed && t.fails == 0));
     }
 
     #[test]

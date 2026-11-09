@@ -444,6 +444,12 @@ pub async fn monitor_probe_now(rt: Rt<'_>) -> Result<(), ()> {
 
 #[tauri::command]
 #[specta::specta]
+pub async fn monitor_in_use_nodes(rt: Rt<'_>) -> Result<crate::monitor::InUseNodes, ()> {
+    Ok(rt.monitor_in_use_nodes())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn save_settings(app: AppHandle, rt: Rt<'_>, s: Settings) -> Result<ApplyOutcome, SettingsSaveError> {
     rt.save_settings(s, |enabled| {
         let mgr = app.autolaunch();

@@ -10,7 +10,7 @@ const model: Model = {
   subscriptions: [],
   exits: [{ id: "e1", name: "默认", interface: null, kind: { Node: { node: { manual_id: "n1" } } } }],
   listeners: [{ id: "l1", name: "默认", listener_type: "Mixed", listen: "127.0.0.1", port: 7881, auth: null, exit: "e1", user_enabled: true }],
-  settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: null, delay_test_url: "u", node_monitor: { enabled: false, scope: "InUse", members: [], interval_secs: 300, fail_threshold: 2, latency_limit_ms: 1000, notify_recovery: true } },
+  settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: null, delay_test_url: "u", node_monitor: { enabled: false, members: [], interval_secs: 300, fail_threshold: 2, latency_limit_ms: 1000, notify_recovery: true } },
   manual_nodes: [{ id: "n1", name: "香港 01", groups: [], kind: { Proxy: { raw: {} } } }],
   node_groups: [],
   process_routing: { enabled: false, rules: [], exit_prompt: true },

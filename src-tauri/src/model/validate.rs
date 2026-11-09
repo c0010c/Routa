@@ -777,7 +777,6 @@ mod tests {
     #[test]
     fn validate_ignores_missing_monitor_members() {
         let mut m = Model::default();
-        m.settings.node_monitor.scope = MonitorScope::Custom;
         m.settings.node_monitor.members = vec![
             ExitMember::Node(NodeRef::Subscription { subscription_id: SubscriptionId("gone".into()), name: "n".into() }),
             ExitMember::Node(mref("zz")),

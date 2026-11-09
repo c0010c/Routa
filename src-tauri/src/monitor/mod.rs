@@ -5,7 +5,7 @@ mod judge;
 mod targets;
 
 pub use judge::{format_down_for, MonitorBook, RoundOutcome};
-pub use targets::monitor_targets;
+pub use targets::{in_use_nodes, monitor_targets, InUseNodes};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ pub struct TargetSpec {
     /// `None` when the target is an auto-selecting group exit.
     pub node: Option<NodeRef>,
     pub label: String,
-    /// Who uses this path (InUse scope only).
+    /// Listeners / process rules routing through this node right now.
     pub used_by: Vec<String>,
 }
 
@@ -37,6 +37,8 @@ pub enum MonitorFailure {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
 pub enum MonitorPause {
     CoreNotRunning,
+    /// The last apply failed and the core kept the previous config.
+    ConfigNotApplied,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]

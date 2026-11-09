@@ -254,14 +254,6 @@ impl Default for Settings {
     }
 }
 
-/// 节点监测的范围：正在使用的节点，或用户自选的成员。
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, specta::Type)]
-pub enum MonitorScope {
-    #[default]
-    InUse,
-    Custom,
-}
-
 /// 允许的监测间隔（秒）。
 pub const MONITOR_INTERVALS: [u32; 8] = [10, 30, 60, 180, 300, 600, 1800, 3600];
 /// 允许的连续失败阈值。
@@ -271,7 +263,7 @@ pub const MONITOR_THRESHOLDS: [u32; 4] = [1, 2, 3, 5];
 #[serde(default)]
 pub struct NodeMonitorSettings {
     pub enabled: bool,
-    pub scope: MonitorScope,
+    /// 监测的节点或整组；首次开启时前端用当前正在使用的节点预填。
     pub members: Vec<ExitMember>,
     pub interval_secs: u32,
     pub fail_threshold: u32,
@@ -284,7 +276,6 @@ impl Default for NodeMonitorSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            scope: MonitorScope::InUse,
             members: vec![],
             interval_secs: 300,
             fail_threshold: 2,
@@ -466,7 +457,6 @@ mod tests {
     fn node_monitor_defaults() {
         let m = Settings::default().node_monitor;
         assert!(!m.enabled);
-        assert_eq!(m.scope, MonitorScope::InUse);
         assert!(m.members.is_empty());
         assert_eq!(m.interval_secs, 300);
         assert_eq!(m.fail_threshold, 2);

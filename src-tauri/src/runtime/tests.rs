@@ -2066,10 +2066,11 @@ async fn status_has_default_monitor() {
     assert_eq!(h.rt.status().monitor, crate::monitor::MonitorStatus::default());
 }
 
-const MON_PROXY: &str = "直连出口";
+/// Node `m1`'s own proxy: what the monitor probes for it.
+const MON_PROXY: &str = "手动/节点1";
 
-/// `model_with_node` with exit `直连出口` switched to node `m1` (so InUse
-/// monitors it) and no scheduled delay test to muddy `delay_calls`.
+/// `model_with_node` with exit `直连出口` switched to node `m1` (so it is in
+/// use) and no scheduled delay test to muddy `delay_calls`.
 fn monitored_model() -> Model {
     let mut m = model_with_node();
     m.exits[0].kind = ExitKind::Node { node: m1_ref() };
@@ -2080,7 +2081,7 @@ fn monitored_model() -> Model {
 async fn set_monitor(h: &Harness, enabled: bool, interval_secs: u32) {
     let mut s = h.rt.model().settings;
     s.node_monitor.enabled = enabled;
-    s.node_monitor.scope = MonitorScope::InUse;
+    s.node_monitor.members = vec![ExitMember::Node(m1_ref())];
     s.node_monitor.interval_secs = interval_secs;
     h.rt.save_settings(s, |_| Ok(())).await.unwrap();
 }
@@ -2092,6 +2093,15 @@ fn monitor_calls(api: &FakeApi) -> Vec<u32> {
 
 async fn wait_secs(s: u64) {
     tokio::time::sleep(Duration::from_secs(s)).await;
+}
+
+#[tokio::test]
+async fn monitor_in_use_nodes_lists_the_exit_node() {
+    let h = harness(&monitored_model());
+    assert_eq!(
+        h.rt.monitor_in_use_nodes(),
+        crate::monitor::InUseNodes { nodes: vec![m1_ref()], auto_exits: vec![] }
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -2153,6 +2163,42 @@ async fn monitor_skips_when_core_not_running() {
     wait_secs(2).await;
     assert_eq!(h.rt.status().monitor.paused_reason, None);
     assert_eq!(monitor_calls(&h.api).len(), 1);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn monitor_pauses_while_the_new_config_is_not_applied() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 300).await;
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+
+    h.api.reload_results.lock().unwrap().push_back(Err(crate::core::api::ApiError::Rejected { status: 400, message: "bad".into() }));
+    // Adding a listener is rejected without touching the running ones.
+    let out = h
+        .rt
+        .mutate(|m| {
+            let mut l = Listener::new_default("L2".into(), 7892);
+            l.exit = m.listeners[0].exit.clone();
+            m.listeners.push(l);
+        })
+        .await
+        .unwrap();
+    assert!(matches!(out, ApplyOutcome::FailedKeptPrevious { .. }), "{out:?}");
+    wait_secs(10).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, Some(crate::monitor::MonitorPause::ConfigNotApplied));
+    h.rt.monitor_probe_now();
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+
+    // Applied again: the pause clears and a round runs right away.
+    let out = h.rt.mutate(|m| { m.listeners.pop(); }).await.unwrap();
+    assert!(matches!(out, ApplyOutcome::Reloaded { .. }), "{out:?}");
+    wait_secs(2).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, None);
+    assert_eq!(monitor_calls(&h.api).len(), 2);
     h.rt.shutdown().await;
 }
 

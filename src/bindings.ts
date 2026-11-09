@@ -99,6 +99,14 @@ async monitorProbeNow() : Promise<Result<null, null>> {
     else return { status: "error", error: e  as any };
 }
 },
+async monitorInUseNodes() : Promise<Result<InUseNodes, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("monitor_in_use_nodes") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async saveSettings(s: Settings) : Promise<Result<ApplyOutcome, SettingsSaveError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_settings", { s }) };
@@ -627,6 +635,18 @@ export type GroupRef = { Subscription: SubscriptionId } | { Custom: NodeGroupId 
 export type GroupStrategy = "UrlTest" | "Fallback" | "LoadBalance" | "Select"
 export type Health = { exits: Partial<{ [key in ExitId]: ExitHealth }>; listeners: Partial<{ [key in ListenerId]: ListenerStatus }> }
 /**
+ * What proxies and process routing use right now: the default monitor members.
+ */
+export type InUseNodes = { 
+/**
+ * Nodes in listener then process-rule order, without duplicates.
+ */
+nodes: NodeRef[]; 
+/**
+ * Auto-selecting group exits in use: they have no single node to monitor.
+ */
+auto_exits: string[] }
+/**
  * Windows 网卡标识（GUID）。
  */
 export type InterfaceGuid = string
@@ -661,11 +681,11 @@ export type MonitorFailure = "Timeout" | "Failed" | { OverLimit: number }
  */
 export type MonitorFocus = { Node: NodeRef } | "Listeners" | "Settings"
 export type MonitorNotice = { title: string; body: string; focus: MonitorFocus }
-export type MonitorPause = "CoreNotRunning"
+export type MonitorPause = "CoreNotRunning" | 
 /**
- * 节点监测的范围：正在使用的节点，或用户自选的成员。
+ * The last apply failed and the core kept the previous config.
  */
-export type MonitorScope = "InUse" | "Custom"
+"ConfigNotApplied"
 export type MonitorStatus = { last_run: number | null; next_run: number | null; probing: boolean; paused_reason: MonitorPause | null; network_down: boolean; targets: MonitorTarget[] }
 export type MonitorTarget = { proxy: string; node: NodeRef | null; label: string; used_by: string[]; 
 /**
@@ -705,7 +725,11 @@ export type Node = { name: string; proxy_type: string; server: string;
 raw: JsonValue }
 export type NodeGroup = { id: NodeGroupId; name: string; members?: NodeRef[] }
 export type NodeGroupId = string
-export type NodeMonitorSettings = { enabled: boolean; scope: MonitorScope; members: ExitMember[]; interval_secs: number; fail_threshold: number; 
+export type NodeMonitorSettings = { enabled: boolean; 
+/**
+ * 监测的节点或整组；首次开启时前端用当前正在使用的节点预填。
+ */
+members: ExitMember[]; interval_secs: number; fail_threshold: number; 
 /**
  * None = 不限
  */

@@ -4,6 +4,8 @@
 状态：待确认
 交互原型：`designs/node-monitor-v1/`（开发服务器：`node <repo>/node_modules/vite/bin/vite.js --config designs/node-monitor-v1/vite.config.mts`，打开 `http://localhost:1437/designs/node-monitor-v1/`），或单文件 `designs/node-monitor-v1/prototype.html`（`node designs/node-monitor-v1/build-static.mjs` 生成）。原型用真实的 Layout / 设置页 / 节点页组件加示例数据，**界面和交互以原型为准，文案以本文为准**。用户已看过原型并确认（2026-11-09）。
 
+> **修订（2026-11-09，审查后）：去掉「监测范围」，只保留「指定节点」。** 监测列表 `members` 是唯一来源；首次打开监测（或从节点卡片「加入监测」而列表为空）时，用当前正在使用的节点预填（算法见 §5，只用来预填和填写「正在被…使用」）。自动选择组出口没有固定节点，预填时跳过并 Snackbar 提示「自动选择的出口「…」没有固定节点，未加入监测」。全部节点都按自己的代理名探测，不再经过出口网卡，也不再有「经 {网卡}」的多路径 target。「移出监测」只改原列表：删掉对应的单节点成员；节点只在某个整组里时，只把那一组展开后去掉它，其余成员不动。设置里新增按钮「加入正在使用的节点」（只追加缺少的）。下文凡与此冲突的描述（范围 Select、InUse、按出口路径探测、自动组本身作为 target）以本段为准。
+
 注意：全局 gitignore（`~/.gitignore_global` 的 `**/docs/`）会忽略 `docs/`，提交本文与计划时需 `git add -f`。
 
 ## 1. 为什么做
@@ -98,7 +100,7 @@ Windows 原生 toast，应用名 Routa、Routa 图标。文案：
 
 **与自动测速的关系**：两者独立运行，监测结果同样写入 DelayBook（卡片延迟随之更新）。
 
-## 5.「正在使用的节点」怎么算
+## 5.「正在使用的节点」怎么算（修订后只用于预填和「正在被…使用」）
 
 被引用的出口来自：`user_enabled` 的可见监听器的 `exit`，以及 `process_routing.enabled` 时 `user_enabled` 的进程分流规则所使用的（隐藏）出口。对每个被引用的出口：
 
@@ -124,14 +126,12 @@ Windows 原生 toast，应用名 Routa、Routa 图标。文案：
 ```rust
 pub struct NodeMonitorSettings {
     pub enabled: bool,                 // false
-    pub scope: MonitorScope,           // InUse
-    pub members: Vec<ExitMember>,      // 指定节点时使用；InUse 时保留不清空
+    pub members: Vec<ExitMember>,      // 监测的节点或整组；首次开启时预填正在使用的节点
     pub interval_secs: u32,            // 300；取值 10/30/60/180/300/600/1800/3600，校验最低 10
     pub fail_threshold: u32,           // 2，1..=5
     pub latency_limit_ms: Option<u32>, // Some(1000)，1..=60000；None = 不限
     pub notify_recovery: bool,         // true
 }
-pub enum MonitorScope { InUse, Custom }
 ```
 
 旧 state.json 没有该字段时取默认值。校验放在现有 `validate` 里（非法值拒绝保存并返回字段错误）。`members` 里引用到已删除节点的条目：保存时不报错，展开时跳过（与出口成员的「已失效」处理一致）。

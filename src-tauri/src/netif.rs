@@ -48,6 +48,12 @@ fn is_routable_v6(a: Ipv6Addr) -> bool {
 
 pub trait InterfaceSource: Send + Sync {
     fn list(&self) -> Vec<NetInterface>;
+
+    /// Whether Windows itself sees internet access (the taskbar network
+    /// icon's verdict); `None` when it cannot tell.
+    fn internet_access(&self) -> Option<bool> {
+        None
+    }
 }
 
 /// In-memory source for tests.
@@ -65,6 +71,15 @@ pub struct WindowsInterfaces;
 
 #[cfg(windows)]
 impl InterfaceSource for WindowsInterfaces {
+    fn internet_access(&self) -> Option<bool> {
+        use windows::Networking::Connectivity::{NetworkConnectivityLevel, NetworkInformation};
+        // No profile (every adapter down) also comes back as an error; that and
+        // any real failure mean "cannot tell", so the caller's own rule decides.
+        let profile = NetworkInformation::GetInternetConnectionProfile().ok()?;
+        let level = profile.GetNetworkConnectivityLevel().ok()?;
+        Some(level == NetworkConnectivityLevel::InternetAccess)
+    }
+
     fn list(&self) -> Vec<NetInterface> {
         use ipconfig::{IfType, OperStatus};
         use std::net::IpAddr;
