@@ -147,6 +147,14 @@ async parseProxyYamlBatch(text: string) : Promise<Result<ParsedProxy[], string>>
     else return { status: "error", error: e  as any };
 }
 },
+async parseShareLink(text: string) : Promise<Result<ParsedProxy, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("parse_share_link", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async saveManualNodes(nodes: ManualNode[]) : Promise<Result<ApplyOutcome, ValidationError[]>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_manual_nodes", { nodes }) };
