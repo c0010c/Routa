@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect } from "react";
-import type { Flow, ProcRouteStatus, RuntimeStatus, TrafficTick, UpdateView } from "../bindings";
+import type { Flow, MonitorFocus, ProcRouteStatus, RuntimeStatus, TrafficTick, UpdateView } from "../bindings";
+import { setMonitorFocus } from "./monitorFocus";
 import { setFlows } from "./procroute";
 import { setTraffic } from "./trafficStore";
 
@@ -28,6 +29,7 @@ export function useRuntimeEvents(): void {
     reg(listen<ProcRouteStatus>("procroute-status", (e) => qc.setQueryData(["procroute"], e.payload)));
     reg(listen<UpdateView>("update-status", (e) => qc.setQueryData(["update"], e.payload)));
     reg(listen("ui-preferences-changed", () => void qc.invalidateQueries({ queryKey: ["desktop"] })));
+    reg(listen<MonitorFocus>("monitor-focus", (e) => setMonitorFocus(e.payload)));
     reg(listen<Flow[]>("procroute-flows", (e) => setFlows(e.payload)));
 
     return () => {

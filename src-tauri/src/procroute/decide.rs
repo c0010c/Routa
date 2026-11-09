@@ -192,6 +192,7 @@ mod tests {
             tailscale_exit_retrying: HashMap::new(),
             core_stop_reason: None,
             core_recovering: false,
+            monitor: Default::default(),
         }
     }
 

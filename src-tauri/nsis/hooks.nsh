@@ -182,3 +182,12 @@
     Pop $0
   ${EndIf}
 !macroend
+
+; 通知用的 AppUserModelID（notify.rs 的 register_app_id 每次启动写入 HKCU）。
+; 安装为当前用户模式，卸载程序以该用户身份运行，HKCU 就是写入时的那个用户。
+; 覆盖安装时删掉也无妨：新版本启动时会重新写入。键名须与 tauri.conf.json 的 identifier 一致。
+!define ROUTA_AUMID_KEY "Software\Classes\AppUserModelId\dev.routa"
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  DeleteRegKey HKCU "${ROUTA_AUMID_KEY}"
+!macroend
