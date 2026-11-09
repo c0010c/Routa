@@ -247,6 +247,11 @@ pub fn run() {
         .setup(move |app| {
             create_main_window(app)?;
             let data_dir = app.path().app_data_dir()?;
+            // Dev builds toast as PowerShell (see notify.rs); keep their registry clean.
+            #[cfg(windows)]
+            if !cfg!(debug_assertions) {
+                notify::register_app_id(&app.config().identifier, &data_dir);
+            }
             let desktop = Arc::new(desktop::Desktop::open(data_dir.clone()).map_err(std::io::Error::other)?);
             let updater = Arc::new(updater::Updater::new(app.handle().clone(), data_dir.clone()));
             let rt = build_runtime(app.handle(), data_dir)?;
