@@ -6,11 +6,18 @@ import {
   within,
   waitFor,
 } from "@testing-library/react";
+import { act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { ApplyResultProvider } from "../components/ApplyResultSnackbar";
+import { clearMonitorFocus, setMonitorFocus } from "../api/monitorFocus";
+const mode = vi.hoisted(() => ({ value: "Full" }));
+vi.mock("../components/InterfaceProvider", () => ({
+  useInterface: () => ({ state: { preferences: { mode: mode.value } } }),
+}));
 import { ResourceCenter } from "./ResourceCenter";
-import type { Model, RuntimeStatus } from "../bindings";
+import type { Model, MonitorTarget, NodeRef, RuntimeStatus } from "../bindings";
 vi.mock("../bindings", () => ({
-  commands: { getModel: vi.fn(), getStatus: vi.fn(), testDelays: vi.fn() },
+  commands: { getModel: vi.fn(), getStatus: vi.fn(), testDelays: vi.fn(), saveSettings: vi.fn() },
 }));
 import { commands } from "../bindings";
 const model: Model = {
@@ -63,18 +70,22 @@ function setup(
   subscriptionsOnly = false,
   path = "/nodes",
   data: Model = model,
+  monitorTargets: MonitorTarget[] = [],
 ) {
   vi.mocked(commands.getModel).mockResolvedValue(data);
   vi.mocked(commands.getStatus).mockResolvedValue({
     delays: {},
     interfaces: [],
+    monitor: { last_run: null, next_run: null, probing: false, paused_reason: null, network_down: false, targets: monitorTargets },
   } as unknown as RuntimeStatus);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[path]}>
-        <ResourceCenter subscriptionsOnly={subscriptionsOnly} />
-      </MemoryRouter>
+      <ApplyResultProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <ResourceCenter subscriptionsOnly={subscriptionsOnly} />
+        </MemoryRouter>
+      </ApplyResultProvider>
     </QueryClientProvider>,
   );
 }
@@ -302,4 +313,91 @@ it("opens proxy creation from the node context menu without submitting it", asyn
     await screen.findByRole("dialog", { name: "新增代理" }),
   ).toBeInTheDocument();
   expect(screen.getByLabelText("名称")).toHaveValue("订阅节点");
+});
+
+const subRef: NodeRef = { subscription_id: "s1", name: "订阅节点" };
+const target = (over: Partial<MonitorTarget> = {}): MonitorTarget => ({
+  proxy: "来源甲/订阅节点", node: subRef, label: "订阅节点", used_by: ["工作代理 :7890"],
+  fails: 0, down: false, down_since: null, last_ms: 48, last_failure: null, probed: true, not_applied: false,
+  ...over,
+});
+
+describe("node monitor on cards", () => {
+  beforeEach(() => {
+    mode.value = "Full";
+    clearMonitorFocus();
+    vi.mocked(commands.saveSettings).mockResolvedValue({ status: "ok", data: { Reloaded: { cut: 0, uncut: 0, failed_listeners: [] } } });
+  });
+
+  it("monitored node shows mark", async () => {
+    setup(false, "/nodes", model, [target()]);
+    const card = await screen.findByRole("article", { name: "订阅节点" });
+    expect(within(card).getByLabelText("监测中")).toBeInTheDocument();
+    expect(within(screen.getByRole("article", { name: "手动节点甲" })).queryByLabelText("监测中")).not.toBeInTheDocument();
+  });
+
+  it("keeps the Tailscale mark instead of the monitor mark", async () => {
+    const ts = { id: "t1", name: "TS", groups: [], kind: { Tailscale: { exit: null } } };
+    const data = { ...model, manual_nodes: [...model.manual_nodes, ts] } as unknown as Model;
+    setup(false, "/nodes", data, [target({ proxy: "手动/TS", node: { manual_id: "t1" }, label: "TS" })]);
+    const card = await screen.findByRole("article", { name: "TS" });
+    expect(within(card).queryByLabelText("监测中")).not.toBeInTheDocument();
+  });
+
+  it("menu adds node to monitor", async () => {
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "操作 订阅节点" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "加入监测 订阅节点" }));
+    await waitFor(() => expect(commands.saveSettings).toHaveBeenCalled());
+    expect(vi.mocked(commands.saveSettings).mock.calls[0][0].node_monitor).toEqual({
+      ...model.settings.node_monitor, enabled: true, scope: "Custom", members: [subRef],
+    });
+  });
+
+  it("menu removes node and reports dropped auto group", async () => {
+    const data = { ...model, settings: { ...model.settings, node_monitor: { ...model.settings.node_monitor, enabled: true } } };
+    setup(false, "/nodes", data, [
+      target(),
+      target({ proxy: "出口/工作", node: null, label: "工作出口" }),
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: "操作 订阅节点" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "移出监测 订阅节点" }));
+    await waitFor(() => expect(commands.saveSettings).toHaveBeenCalled());
+    const saved = vi.mocked(commands.saveSettings).mock.calls[0][0].node_monitor;
+    expect(saved.members).toEqual([]);
+    expect(saved.scope).toBe("Custom");
+    expect(await screen.findByText("自动选择的出口「工作出口」不能加入指定节点，已不再监测")).toBeInTheDocument();
+  });
+
+  it("simple mode has no monitor menu item", async () => {
+    mode.value = "Simple";
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "操作 订阅节点" }));
+    await screen.findByRole("menuitem", { name: "使用此节点 订阅节点" });
+    expect(screen.queryByRole("menuitem", { name: /监测/ })).not.toBeInTheDocument();
+  });
+
+  describe("toast focus", () => {
+    const scrollIntoView = vi.fn();
+    beforeEach(() => {
+      scrollIntoView.mockClear();
+      Element.prototype.scrollIntoView = scrollIntoView;
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("monitor_focus_navigates_and_highlights_node", async () => {
+      setup(false, "/nodes", { ...model, node_groups: [] });
+      // 来源甲 starts collapsed.
+      expect(await screen.findByRole("button", { name: "▸ 来源甲 · 1" })).toBeInTheDocument();
+      vi.useFakeTimers();
+      act(() => setMonitorFocus({ Node: subRef }));
+      const card = screen.getByRole("article", { name: "订阅节点" });
+      expect(card).toHaveAttribute("data-monitor-focus", "true");
+      expect(scrollIntoView).toHaveBeenCalled();
+      act(() => { vi.advanceTimersByTime(3100); });
+      expect(screen.getByRole("article", { name: "订阅节点" })).not.toHaveAttribute("data-monitor-focus");
+      // The section stays open after the outline is gone.
+      expect(screen.getByRole("button", { name: "▾ 来源甲 · 1" })).toBeInTheDocument();
+    });
+  });
 });

@@ -9,18 +9,19 @@ import type { RowAction } from "./RowActions";
 export function NodeCard({
   name, source, protocol, delay, status, actions, selected = false, current = false,
   onSelect, onSelectionKeyDown, selectionTabIndex, disabled = false, pending = false,
-  running = true, gridKey,
+  running = true, gridKey, monitorFocus = false,
 }: {
   name: string; source: string; protocol: string; delay?: DelayResult; status?: ReactNode;
   actions: RowAction[]; selected?: boolean; current?: boolean; onSelect?: () => void;
   onSelectionKeyDown?: KeyboardEventHandler<HTMLButtonElement>; selectionTabIndex?: number;
   disabled?: boolean; pending?: boolean; running?: boolean; testTarget?: string; testUrl?: string; gridKey?: string;
+  monitorFocus?: boolean;
 }) {
   const menuId = useId();
   const [menu, setMenu] = useState<{ anchor?: HTMLElement; position?: { top: number; left: number } } | null>(null);
   const hasMark = selected || current || !!status;
   return <>
-    <Paper component="article" aria-label={name} data-grid-key={gridKey} tabIndex={-1}
+    <Paper component="article" aria-label={name} data-grid-key={gridKey} data-monitor-focus={monitorFocus || undefined} tabIndex={-1}
       onContextMenu={(e) => {
         if (!actions.length || disabled) return;
         e.preventDefault(); e.stopPropagation(); e.currentTarget.focus();
@@ -41,6 +42,7 @@ export function NodeCard({
           transition: "background-color 120ms ease, border-color 120ms ease",
           "&:hover": { bgcolor: selected ? tint(0.13) : "action.hover", borderColor: selected ? tint(0.35) : "action.disabled" },
           "&::before": selected ? { content: '\"\"', position: "absolute", left: 0, top: 8, bottom: 8, width: 3, bgcolor: "primary.main", borderRadius: "0 2px 2px 0", pointerEvents: "none" } : {},
+          "&[data-monitor-focus]": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 },
           "&:focus-visible, &:has(:focus-visible)": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 },
           "@media (prefers-reduced-motion: reduce)": { transition: "none" },
         };

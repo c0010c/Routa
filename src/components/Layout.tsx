@@ -14,11 +14,12 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import type { ReactNode } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useEffect, type ReactNode } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { BrandLockup } from "./BrandLockup";
 import { UpdateNavButton } from "./UpdateNavButton";
 import { UpdateNotice } from "./UpdateNotice";
+import { clearMonitorFocus, useMonitorFocus } from "../api/monitorFocus";
 import pkg from "../../package.json";
 
 const DRAWER_WIDTH = 184;
@@ -38,8 +39,24 @@ function isCurrent(path: string, current: string): boolean {
     : current === path || current.startsWith(`${path}/`);
 }
 
+/**
+ * Routes a toast click to its page. A node focus is left in the store for the node page to
+ * highlight (it may mount only after this navigation); the other targets have nothing to consume it.
+ */
+export function useMonitorFocusNavigation() {
+  const focus = useMonitorFocus();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!focus) return;
+    if (typeof focus === "object") return void navigate("/nodes");
+    navigate(focus === "Listeners" ? "/listeners" : "/settings?tab=network");
+    clearMonitorFocus();
+  }, [focus, navigate]);
+}
+
 export function Layout({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
+  useMonitorFocusNavigation();
   return (
     <Box
       sx={{

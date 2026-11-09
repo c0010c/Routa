@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { useRuntimeEvents } from "./events";
 import { useTraffic, useTrafficHistory } from "./client";
 import { resetTrafficStore } from "./trafficStore";
+import { clearMonitorFocus, useMonitorFocus } from "./monitorFocus";
 
 function Probe() {
   useRuntimeEvents();
@@ -21,7 +22,7 @@ function Probe() {
   return <output data-testid="traffic">{JSON.stringify({ traffic, history })}</output>;
 }
 
-function emit(name: string, payload: TrafficTick) {
+function emit(name: string, payload: unknown) {
   act(() => handlers.get(name)!({ payload }));
 }
 
@@ -49,5 +50,21 @@ describe("traffic event synchronization", () => {
     expect(snapshot().history).toEqual({ up: [5, 1], down: [7, 2] });
     // Let pending registrations settle before React runs effect cleanup.
     await act(async () => {});
+  });
+});
+
+describe("monitor-focus event", () => {
+  beforeEach(() => { handlers.clear(); clearMonitorFocus(); });
+
+  it("stores the focus payload for consumers", async () => {
+    function FocusProbe() {
+      useRuntimeEvents();
+      return <output data-testid="focus">{JSON.stringify(useMonitorFocus())}</output>;
+    }
+    render(<QueryClientProvider client={new QueryClient()}><FocusProbe /></QueryClientProvider>);
+    await act(async () => {});
+    expect(screen.getByTestId("focus")).toHaveTextContent("null");
+    emit("monitor-focus", { Node: { manual_id: "m1" } });
+    expect(JSON.parse(screen.getByTestId("focus").textContent!)).toEqual({ Node: { manual_id: "m1" } });
   });
 });
