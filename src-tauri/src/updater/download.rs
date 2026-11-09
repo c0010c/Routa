@@ -8,7 +8,7 @@ use tauri_plugin_updater::Update;
 use url::Url;
 
 /// GitHub download mirrors, tried in this order before GitHub itself.
-pub const MIRRORS: [&str; 2] = ["https://update.hwdns.net/", "https://gh-proxy.org/"];
+pub const MIRRORS: [&str; 2] = ["https://gh-proxy.org/", "https://ghfast.top/"];
 
 /// Minimum bytes per window: first a throughput floor, then only a stall check
 /// so a link that is slow everywhere still finishes.
@@ -104,13 +104,13 @@ mod tests {
     fn sources_start_with_given_url_then_other_mirror_then_github() {
         let gh =
             "https://github.com/c0010c/Routa/releases/download/v0.4.0/routa_0.4.0_x64-setup.exe";
-        let u = url::Url::parse(&format!("https://update.hwdns.net/{gh}")).unwrap();
+        let u = url::Url::parse(&format!("https://gh-proxy.org/{gh}")).unwrap();
         let got: Vec<String> = sources(&u).iter().map(|u| u.to_string()).collect();
         assert_eq!(
             got,
             vec![
-                format!("https://update.hwdns.net/{gh}"),
                 format!("https://gh-proxy.org/{gh}"),
+                format!("https://ghfast.top/{gh}"),
                 gh.to_string(),
             ]
         );

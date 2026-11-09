@@ -1,10 +1,17 @@
-import { writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+// Writes the updater manifests (latest.json, latest-proxy.json) next to the release assets.
+// release.yml uploads them to the version's own (draft) release; clients read them through
+// https://github.com/<repo>/releases/latest/download/..., which only resolves to a release
+// once it is published and not a pre-release.
+//
+// Usage: node scripts/updater-manifest.mjs <assets-dir>
+// Env:   GITHUB_REPOSITORY, GITHUB_REF_NAME (the tag), RELEASE_NOTES_FILE (optional)
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
-const MIRROR = "https://update.hwdns.net/";
-const UPDATER_TAG = "updater";
+// Prefix for latest-proxy.json. The client also rotates through the other mirrors and
+// GitHub itself if this one fails (src-tauri/src/updater/download.rs).
+const MIRROR = "https://gh-proxy.org/";
 
 export function buildManifest({ tag, notes, publishedAt, setupUrl, signature }, mirrorPrefix = "") {
   const platform = { url: mirrorPrefix + setupUrl, signature };
@@ -19,59 +26,34 @@ export function buildManifest({ tag, notes, publishedAt, setupUrl, signature }, 
   };
 }
 
-export function pickAssets(release) {
-  const assets = release?.assets ?? [];
-  const setup = assets.find((a) => a.name.endsWith("_x64-setup.exe"));
-  if (!setup) throw new Error(`Release ${release?.tag_name ?? ""} 中找不到 _x64-setup.exe 安装包`);
-  const sig = assets.find((a) => a.name === `${setup.name}.sig`);
-  if (!sig) throw new Error(`Release ${release.tag_name} 中找不到 ${setup.name}.sig 签名文件`);
+/** Picks the updater installer and its exact .sig from asset names. */
+export function pickAssets(tag, names) {
+  const setup = names.find((n) => n.endsWith("_x64-setup.exe"));
+  if (!setup) throw new Error(`${tag} 的发布文件中找不到 _x64-setup.exe 安装包`);
+  const sig = names.find((n) => n === `${setup}.sig`);
+  if (!sig) throw new Error(`${tag} 的发布文件中找不到 ${setup}.sig 签名文件`);
   return { setup, sig };
 }
 
-async function api(path, token, init = {}) {
-  return fetch(`https://api.github.com${path}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", ...init.headers },
-  });
-}
-
-async function main() {
-  const token = process.env.GITHUB_TOKEN;
+function main() {
+  const dir = process.argv[2];
   const repo = process.env.GITHUB_REPOSITORY;
-  if (!token || !repo) throw new Error("缺少环境变量 GITHUB_TOKEN 或 GITHUB_REPOSITORY");
+  const tag = process.env.GITHUB_REF_NAME;
+  if (!dir || !repo || !tag) throw new Error("用法：node scripts/updater-manifest.mjs <assets-dir>，并设置 GITHUB_REPOSITORY 和 GITHUB_REF_NAME");
 
-  const res = await api(`/repos/${repo}/releases/latest`, token);
-  if (!res.ok) throw new Error(`获取最新 Release 失败：HTTP ${res.status}`);
-  const release = await res.json();
-  const { setup, sig } = pickAssets(release);
-
-  const sigRes = await fetch(sig.browser_download_url);
-  if (!sigRes.ok) throw new Error(`下载签名文件失败：HTTP ${sigRes.status}`);
-  const signature = (await sigRes.text()).trim();
-
+  const { setup, sig } = pickAssets(tag, readdirSync(dir));
+  const notesFile = process.env.RELEASE_NOTES_FILE;
   const input = {
-    tag: release.tag_name,
-    notes: release.body ?? "",
-    publishedAt: release.published_at,
-    setupUrl: setup.browser_download_url,
-    signature,
+    tag,
+    notes: notesFile ? readFileSync(notesFile, "utf8").trim() : "",
+    publishedAt: new Date().toISOString(),
+    setupUrl: `https://github.com/${repo}/releases/download/${tag}/${setup}`,
+    signature: readFileSync(join(dir, sig), "utf8").trim(),
   };
-  writeFileSync("latest.json", JSON.stringify(buildManifest(input), null, 2));
-  writeFileSync("latest-proxy.json", JSON.stringify(buildManifest(input, MIRROR), null, 2));
-
-  const env = { ...process.env, GH_TOKEN: token };
-  const exists = await api(`/repos/${repo}/releases/tags/${UPDATER_TAG}`, token);
-  if (exists.status === 404) {
-    // Non-draft prerelease so it never becomes "latest".
-    execFileSync("gh", ["release", "create", UPDATER_TAG, "--repo", repo, "--title", UPDATER_TAG,
-      "--notes", "Auto-update manifests (maintained by CI).", "--prerelease", "--latest=false"], { stdio: "inherit", env });
-  } else if (!exists.ok) {
-    throw new Error(`查询 ${UPDATER_TAG} Release 失败：HTTP ${exists.status}`);
-  }
-  execFileSync("gh", ["release", "upload", UPDATER_TAG, "latest.json", "latest-proxy.json", "--clobber", "--repo", repo],
-    { stdio: "inherit", env });
+  writeFileSync(join(dir, "latest.json"), JSON.stringify(buildManifest(input), null, 2));
+  writeFileSync(join(dir, "latest-proxy.json"), JSON.stringify(buildManifest(input, MIRROR), null, 2));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  main().catch((e) => { console.error(e.message); process.exit(1); });
+  try { main(); } catch (e) { console.error(e.message); process.exit(1); }
 }

@@ -115,3 +115,20 @@ jobs:
           if ($env:GITHUB_REF_NAME -match '-') { $ghArgs += '--prerelease' }
           gh release create @ghArgs
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+      # The manifests live in this version's own release. Clients read them through
+      # releases/latest/download/, so they take effect only when this release is published
+      # (and never for pre-releases). Notes are the generated ones; edits made to the draft
+      # afterwards don't reach the manifests.
+      - name: Upload updater manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --json body --jq .body |
+            Set-Content -Encoding utf8 release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "gh release view failed" }
+          $env:RELEASE_NOTES_FILE = "$PWD/release-notes.md"
+          node scripts/updater-manifest.mjs release-assets
+          if ($LASTEXITCODE -ne 0) { throw "updater-manifest.mjs failed" }
+          Get-Content release-assets/latest.json
+          gh release upload $env:GITHUB_REF_NAME release-assets/latest.json release-assets/latest-proxy.json --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
