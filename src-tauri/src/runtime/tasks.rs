@@ -219,7 +219,14 @@ async fn monitor_tick(inner: &Arc<Inner>) {
         }
         return;
     }
-    changed |= set_monitor_pause(inner, None);
+    if set_monitor_pause(inner, None) {
+        // The core just came back (the only pause reason): its nodes have not
+        // been checked since it went away, so the next round is due now.
+        let mut m = inner.monitor.lock().unwrap();
+        m.last_end = None;
+        m.retry_at = None;
+        changed = true;
+    }
 
     let key = monitor_key(&cfg);
     let interval = Duration::from_secs(u64::from(cfg.interval_secs));

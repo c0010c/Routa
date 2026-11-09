@@ -2157,6 +2157,27 @@ async fn monitor_skips_when_core_not_running() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn monitor_probes_right_after_core_restart() {
+    let h = harness(&monitored_model());
+    h.api.set_delay(MON_PROXY, Ok(42));
+    h.rt.start().await.unwrap();
+    set_monitor(&h, true, 300).await;
+    wait_secs(2).await;
+    assert_eq!(monitor_calls(&h.api).len(), 1);
+
+    h.rt.stop_core().await;
+    wait_secs(10).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, Some(crate::monitor::MonitorPause::CoreNotRunning));
+
+    // Far inside the 300 s interval, but the core just came back: probe now.
+    h.rt.restart_core().await;
+    wait_secs(2).await;
+    assert_eq!(h.rt.status().monitor.paused_reason, None);
+    assert_eq!(monitor_calls(&h.api).len(), 2);
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn monitor_rounds_never_overlap() {
     let h = harness(&monitored_model());
     h.api.set_delay(MON_PROXY, Ok(42));
