@@ -54,6 +54,7 @@ pub fn format_down_for(secs: i64) -> String {
     match mins {
         0 => "不到 1 分钟".into(),
         1..=59 => format!("约 {mins} 分钟"),
+        _ if mins % 60 == 0 => format!("约 {} 小时", mins / 60),
         _ => format!("约 {} 小时 {} 分钟", mins / 60, mins % 60),
     }
 }
@@ -78,8 +79,9 @@ fn merged_down_notice(downs: &[&MonitorTarget]) -> MonitorNotice {
 }
 
 impl MonitorBook {
-    /// Replaces the target set with `specs` (in their order). Kept targets
-    /// keep their counters; removed ones are dropped silently. Returns
+    /// Replaces the target set with `specs` (in their order). A target is kept
+    /// (with its counters) only when both proxy and node match; anything else
+    /// is a new target. Removed ones are dropped silently. Returns
     /// whether the set, its order or any metadata changed.
     pub fn reconcile(&mut self, specs: &[TargetSpec]) -> bool {
         let same = self.targets.len() == specs.len()
@@ -91,7 +93,7 @@ impl MonitorBook {
         }
         let mut old = std::mem::take(&mut self.targets);
         for s in specs {
-            let t = match old.iter().position(|t| t.proxy == s.proxy) {
+            let t = match old.iter().position(|t| t.proxy == s.proxy && t.node == s.node) {
                 Some(j) => {
                     let mut t = old.swap_remove(j);
                     t.node = s.node.clone();
@@ -514,6 +516,29 @@ mod tests {
     }
 
     #[test]
+    fn repointed_exit_starts_fresh() {
+        // A Node exit keeps its proxy name (exit.name) but now points at another node.
+        let s = vec![TargetSpec { proxy: "出口".into(), ..spec("甲") }];
+        let mut b = book(&s);
+        let fail = all(&s, err(DelayError::Timeout));
+        b.apply_round(&fail, &cfg(), 0);
+        b.apply_round(&fail, &cfg(), 0);
+        assert!(b.targets()[0].down);
+
+        let moved = vec![TargetSpec { proxy: "出口".into(), ..spec("乙") }];
+        assert!(b.reconcile(&moved));
+        let t = &b.targets()[0];
+        assert!(!t.down && t.fails == 0 && !t.probed && t.down_since.is_none());
+        assert!(notices(b.apply_round(&all(&moved, ok(48)), &cfg(), 900)).is_empty());
+
+        // Becoming an auto group under the same name also starts fresh.
+        b.apply_round(&all(&moved, err(DelayError::Timeout)), &cfg(), 0);
+        let auto = vec![TargetSpec { node: None, label: "出口".into(), ..moved[0].clone() }];
+        assert!(b.reconcile(&auto));
+        assert_eq!(b.targets()[0].fails, 0);
+    }
+
+    #[test]
     fn threshold_change_applies_next_round() {
         let s = vec![spec("甲")];
         let mut b = book(&s);
@@ -544,6 +569,8 @@ mod tests {
         assert_eq!(format_down_for(30), "不到 1 分钟");
         assert_eq!(format_down_for(900), "约 15 分钟");
         assert_eq!(format_down_for(7500), "约 2 小时 5 分钟");
+        assert_eq!(format_down_for(3600), "约 1 小时");
+        assert_eq!(format_down_for(7200), "约 2 小时");
     }
 
     #[test]
