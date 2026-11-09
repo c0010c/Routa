@@ -71,7 +71,9 @@ export function Layout({ children }: { children: ReactNode }) {
     <Box
       sx={{
         display: "flex",
-        minHeight: "100vh",
+        // Fixed to the window so only <main> scrolls: the scrollbar stays inside
+        // the content column instead of running down the window edge.
+        height: "100vh",
         bgcolor: "background.default",
       }}
     >
@@ -140,7 +142,10 @@ export function Layout({ children }: { children: ReactNode }) {
           v{pkg.version}
         </Typography>
       </Drawer>
-      <Box component="main" sx={{ flexGrow: 1, p: 3, minWidth: 0 }}>
+      <Box
+        component="main"
+        sx={{ flexGrow: 1, p: 3, minWidth: 0, overflowY: "auto", scrollbarGutter: "stable" }}
+      >
         {children}
       </Box>
       <UpdateNotice />
