@@ -188,6 +188,8 @@ struct MonitorRun {
     force: bool,
     probing: bool,
     last_end: Option<Instant>,
+    /// After a voided round: no new round before this, whatever is due.
+    retry_at: Option<Instant>,
     last_run: Option<i64>,
     /// Settings the current book was built for.
     settings_key: Option<crate::model::NodeMonitorSettings>,
