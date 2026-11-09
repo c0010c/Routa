@@ -38,6 +38,7 @@ import { applyOutcomeMessages } from "../lib/format";
 import { UpdatePanel } from "../components/UpdatePanel";
 import { UiPreferencesPanel } from "../components/UiPreferencesPanel";
 import { Row, Section } from "../components/SettingsSection";
+import { NodeMonitorSection } from "../components/NodeMonitorSection";
 import { PROJECT_LINKS, ProjectLinkRow } from "../components/ProjectLinkRow";
 
 const TABS = [
@@ -214,6 +215,7 @@ function SettingsForm({
             </Row>,
           ]}
         </Section>
+        <NodeMonitorSection />
         <Section title="内核" footer={
           <Stack
             role="group"
