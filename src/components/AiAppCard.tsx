@@ -12,17 +12,36 @@ import { NodePickerDialog } from "./NodePickerDialog";
 
 const FADED = { filter: "grayscale(1)", opacity: 0.55 } as const;
 
-function StatusDot({ app, paused }: { app: AiAppView; paused: boolean }) {
+const DOT_SX = { position: "absolute", top: 10, right: 10, width: 8, height: 8, borderRadius: "50%" } as const;
+
+function StatusDot({ app, paused, busy, onTransfer }: { app: AiAppView; paused: boolean; busy: boolean; onTransfer(): void }) {
   const status = useProcRouteStatus();
   const view = app.rule_id ? status.data?.actions[app.rule_id] : undefined;
   const live = app.enabled && !paused;
   // "Pending" (waiting for the service to confirm) carries a reason too, but is not a failure.
   const failed = live && view?.action !== "Pending" && !!view?.reason;
-  const state = live && view?.action === "Proxy" ? "green" : failed ? "red" : "gray";
-  const color = { green: "success.main", red: "error.main", gray: "action.disabled" }[state];
+  // Some of the app's processes are still routed by a manual rule (skipped when the catalog grew).
+  const held = live && !failed && app.held.length > 0;
+  const state = failed ? "red" : held ? "yellow" : live && view?.action === "Proxy" ? "green" : "gray";
+  const color = { green: "success.main", red: "error.main", yellow: "warning.main", gray: "action.disabled" }[state];
+  if (held) {
+    const lines = app.held.map((h) => `${h.process} 由进程分流规则「${h.rule_name}」管理`);
+    return (
+      <Tooltip title={<Box sx={{ whiteSpace: "pre-line" }}>{[...lines, "点击移交给 AI 应用"].join("\n")}</Box>}>
+        <ButtonBase
+          aria-label={`把 ${app.name} 的进程移交给 AI 应用`}
+          data-testid="ai-dot"
+          data-state={state}
+          disabled={busy}
+          onClick={onTransfer}
+          sx={{ ...DOT_SX, bgcolor: color }}
+        />
+      </Tooltip>
+    );
+  }
   return (
     <Tooltip title={live && view?.reason ? view.reason : ""}>
-      <Box component="span" data-testid="ai-dot" data-state={state} sx={{ position: "absolute", top: 10, right: 10, width: 8, height: 8, borderRadius: "50%", bgcolor: color }} />
+      <Box component="span" data-testid="ai-dot" data-state={state} sx={{ ...DOT_SX, bgcolor: color }} />
     </Tooltip>
   );
 }
@@ -35,6 +54,7 @@ export function AiAppCard({
   onToggle,
   onLaunch,
   onPickNode,
+  onTransfer,
 }: {
   app: AiAppView;
   model: Model;
@@ -44,6 +64,8 @@ export function AiAppCard({
   onToggle(on: boolean): void;
   onLaunch(): void;
   onPickNode(node: NodeRef): void;
+  /** Hand the app's processes still held by manual rules over to the AI rule. */
+  onTransfer(): void;
 }) {
   const [picking, setPicking] = useState(false);
   const { showError } = useApplyResult();
@@ -90,7 +112,7 @@ export function AiAppCard({
       <Box sx={{ display: "flex", ...fade }}>
         <img src={app.icon} alt="" width={48} height={48} />
       </Box>
-      <StatusDot app={app} paused={paused} />
+      <StatusDot app={app} paused={paused} busy={busy} onTransfer={onTransfer} />
       <Typography variant="subtitle2">{app.name}</Typography>
       <Box sx={{ ...fade, display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5 }}>
         <Button size="small" variant="outlined" color="inherit" disabled={busy} onClick={() => setPicking(true)} sx={{ textTransform: "none", maxWidth: "100%" }}>

@@ -29,6 +29,8 @@ pub struct AiAppView {
     pub rule_id: Option<ProcessRuleId>,
     pub enabled: bool,
     pub node: Option<NodeRef>,
+    /// 开关开着时，列表里这个应用的进程中仍由手动规则管着的那些（列表更新新增、同步时跳过的）。
+    pub held: Vec<AiAppConflict>,
 }
 
 /// 每个列表应用一项，按列表顺序；`enabled` 只看 AI 规则自身的开关（总开关由"启动"打开）。
@@ -43,6 +45,7 @@ pub(crate) fn build_views(
         .iter()
         .map(|a| {
             let rule = rules::ai_rule(&model.process_routing, &a.id);
+            let enabled = rule.is_some_and(|r| r.user_enabled);
             AiAppView {
                 id: a.id.clone(),
                 name: a.name.clone(),
@@ -51,8 +54,9 @@ pub(crate) fn build_views(
                 installed: installed(a),
                 running: running(a),
                 rule_id: rule.map(|r| r.id.clone()),
-                enabled: rule.is_some_and(|r| r.user_enabled),
+                enabled,
                 node: rule.and_then(|r| r.node.clone()),
+                held: if enabled { rules::conflicts(&model.process_routing, a) } else { vec![] },
             }
         })
         .collect()
@@ -210,6 +214,40 @@ mod tests {
         assert!(!none.enabled && !none.installed);
         assert_eq!(none.rule_id, None);
         assert_eq!(none.node, None);
+    }
+
+    #[test]
+    fn view_lists_processes_held_by_manual_rules_only_when_enabled() {
+        let mut on = app("on");
+        on.processes.push("extra.exe".into());
+        let mut off = app("off");
+        off.processes.push("extra2.exe".into());
+        let catalog = Catalog { schema_version: 1, apps: vec![on, off] };
+        let mut model = Model::default();
+        let manual = |id: &str, name: &str, procs: &[&str]| ProcessRule {
+            id: ProcessRuleId(id.into()),
+            name: name.into(),
+            processes: procs.iter().map(|p| ProcessEntry::name(*p)).collect(),
+            ..Default::default()
+        };
+        model.process_routing.rules = vec![
+            ai_rule("r-on", "on", true),
+            ai_rule("r-off", "off", false),
+            manual("m1", "工作软件", &["EXTRA.exe", "notepad.exe"]),
+            manual("m2", "", &["extra2.exe"]),
+        ];
+        let views = build_views(&catalog, &model, |_| true, |_| false);
+        assert_eq!(
+            views[0].held,
+            vec![AiAppConflict {
+                rule_id: ProcessRuleId("m1".into()),
+                rule_name: "工作软件".into(),
+                process: "EXTRA.exe".into(),
+                removes_rule: false,
+            }]
+        );
+        // 开关关着：开启时会走冲突确认，不算"被占用"
+        assert!(views[1].held.is_empty());
     }
 
     #[test]

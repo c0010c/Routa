@@ -100,6 +100,11 @@ function useAiAppFlow() {
     nodeOf,
     isBusy: (app: AiAppView) => busy.has(app.id),
     dialogs: dialog,
+    /** Yellow dot: move the processes still held by manual rules into the AI rule (same confirmations as enabling). */
+    transfer: (app: AiAppView) =>
+      guarded(app, async () => {
+        await enableFlow(app);
+      }),
     toggle: (app: AiAppView, on: boolean) =>
       guarded(app, async () => {
         if (on) {
@@ -155,6 +160,7 @@ export function AiAppsPage() {
             onToggle={(v) => void flow.toggle(app, v)}
             onLaunch={() => void flow.launch(app)}
             onPickNode={(n) => void flow.changeNode(app, n)}
+            onTransfer={() => void flow.transfer(app)}
           />
         ))}
       </Box>

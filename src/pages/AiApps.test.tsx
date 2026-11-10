@@ -47,6 +47,7 @@ const app = (over: Partial<AiAppView>): AiAppView => ({
   rule_id: null,
   enabled: false,
   node: null,
+  held: [],
   ...over,
 });
 
@@ -143,6 +144,37 @@ describe("AiAppsPage", () => {
     paused.unmount();
     renderPage([a], true, { r1: { action: "Failed", reason: "出错了" } });
     await waitFor(() => expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "red"));
+  });
+
+  it("有进程被手动规则占着时小圆点为黄色，悬停说明，点击走冲突确认后移交", async () => {
+    const held = [conflict({ process: "Codex.exe" })];
+    vi.mocked(commands.aiAppConflicts).mockResolvedValue(ok(held));
+    const a = app({ enabled: true, rule_id: "r1", node: tokyo, held });
+    renderPage([a], true, { r1: { action: "Proxy", reason: "" } });
+    const dot = await screen.findByRole("button", { name: "把 Claude 的进程移交给 AI 应用" });
+    await waitFor(() => expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "yellow"));
+    fireEvent.mouseOver(dot);
+    expect(await screen.findByText(/Codex\.exe 由进程分流规则「工作软件」管理/)).toBeInTheDocument();
+    expect(screen.getByText(/点击移交给 AI 应用/)).toBeInTheDocument();
+    fireEvent.click(dot);
+    fireEvent.click(await screen.findByRole("button", { name: "移除并开启" }));
+    await waitFor(() => expect(commands.enableAiApp).toHaveBeenCalledWith("claude", tokyo));
+  });
+
+  it("黄色小圆点：取消冲突确认则不移交；暂停时不显示黄色", async () => {
+    const held = [conflict({ process: "Codex.exe" })];
+    vi.mocked(commands.aiAppConflicts).mockResolvedValue(ok(held));
+    const a = app({ enabled: true, rule_id: "r1", node: tokyo, held });
+    const view = renderPage([a], true, { r1: { action: "Proxy", reason: "" } });
+    fireEvent.click(await screen.findByRole("button", { name: "把 Claude 的进程移交给 AI 应用" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "移除并开启" })).toBeNull());
+    expect(commands.enableAiApp).not.toHaveBeenCalled();
+    view.unmount();
+    renderPage([a], false, { r1: { action: "Proxy", reason: "" } });
+    await screen.findByRole("switch", { name: "Claude 代理开关" });
+    expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "gray");
+    expect(screen.queryByRole("button", { name: "把 Claude 的进程移交给 AI 应用" })).toBeNull();
   });
 
   it("等待服务确认时小圆点为灰色", async () => {
