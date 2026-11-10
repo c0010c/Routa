@@ -35,6 +35,7 @@ import {
 import { commands, type Exit, type Listener, type Model } from "../bindings";
 import { useInterface } from "../components/InterfaceProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { BusyLabel } from "../components/BusyLabel";
 import { AdminRelaunchDialog } from "../components/AdminRelaunchDialog";
 import { Onboarding } from "../components/Onboarding";
 import { ListenerDialog, newListener } from "./ListenerDialog";
@@ -622,10 +623,11 @@ export function RuntimeSummary() {
                       }
                       onClick={() => void changeCapture(mode)}
                     >
-                      {connect.isPending &&
-                      connect.variables === (closing ? null : mode)
-                        ? `正在${closing ? "关闭" : "开启"}${name}…`
-                        : `${closing ? "关闭" : "开启"}${mode === "Tun" ? " TUN" : name}`}
+                      <BusyLabel
+                        busy={connect.isPending && connect.variables === (closing ? null : mode)}
+                        idle={`${closing ? "关闭" : "开启"}${mode === "Tun" ? " TUN" : name}`}
+                        pending={`正在${closing ? "关闭" : "开启"}${name}…`}
+                      />
                     </Button>
                   </span>
                 </Tooltip>

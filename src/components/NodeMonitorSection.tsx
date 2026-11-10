@@ -10,6 +10,7 @@ import {
 import { useApplyResult } from "./ApplyResultSnackbar";
 import { memberKey, nodeKey } from "../lib/refs";
 import { MemberPicker } from "./MemberPicker";
+import { BusyLabel } from "./BusyLabel";
 import { SaveFeedback, useSaveFeedback } from "./SaveFeedback";
 import { Row, Section } from "./SettingsSection";
 
@@ -236,7 +237,7 @@ export function NodeMonitorSection() {
           disabled={paused || probing || targets.length === 0}
           onClick={() => void probeNow()}
         >
-          {probing ? "探测中…" : "立即探测"}
+          <BusyLabel busy={probing} idle="立即探测" pending="探测中…" />
         </Button>
       </Stack>
       {!paused && status.network_down && (

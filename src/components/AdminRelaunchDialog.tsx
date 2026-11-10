@@ -11,6 +11,7 @@ import {
 } from "@mui/material";
 import { errorMessage } from "../api/client";
 import { desktopApi } from "../api/desktop";
+import { BusyLabel } from "./BusyLabel";
 
 export function AdminRelaunchDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -46,7 +47,7 @@ export function AdminRelaunchDialog({ onClose }: { onClose: () => void }) {
             }
           }}
         >
-          {busy ? "正在重启…" : "以管理员身份重启"}
+          <BusyLabel busy={busy} idle="以管理员身份重启" pending="正在重启…" />
         </Button>
       </DialogActions>
     </Dialog>

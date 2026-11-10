@@ -44,7 +44,8 @@ export function ConfirmDeleteDialog({ text, onConfirm, onClose, title = "确认�
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>取消</Button>
-        <Button color="error" variant="contained" disabled={busy} onClick={() => void confirm()}>
+        {/* `loading` keeps the label's width and overlays a spinner, so the actions don't shift while it runs. */}
+        <Button color="error" variant="contained" loading={busy} onClick={() => void confirm()}>
           {confirmLabel}
         </Button>
       </DialogActions>

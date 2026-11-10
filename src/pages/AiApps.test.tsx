@@ -216,6 +216,10 @@ describe("AiAppsPage", () => {
     expect(screen.getByRole("switch", { name: "Claude 代理开关" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "东京" })).toBeDisabled();
     expect(commands.launchAiApp).toHaveBeenCalledTimes(1);
+    // The spinner overlays the kept label instead of adding a start icon that would widen the button.
+    expect(main).toHaveAccessibleName("启动");
+    expect(main.querySelector(".MuiButton-startIcon")).toBeNull();
+    expect(main.querySelector(".MuiButton-loadingIndicator [role=progressbar]")).not.toBeNull();
     finish();
     await waitFor(() => expect(main).toBeEnabled());
     expect(commands.launchAiApp).toHaveBeenCalledTimes(1);

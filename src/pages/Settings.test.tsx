@@ -484,7 +484,19 @@ describe("Settings", () => {
     expect(within(component).getByRole("button", { name: "卸载组件" })).toBeEnabled();
     fireEvent.click(within(component).getByRole("button", { name: "清理残留阻断规则" }));
     fireEvent.click(await screen.findByRole("button", { name: "清理" }));
-    expect(await screen.findByText("已取消")).toBeInTheDocument();
+    expect(await screen.findByText("清理失败：已取消")).toBeInTheDocument();
+    // The dialog stays open for another try.
+    expect(screen.getByRole("dialog", { name: "清理残留阻断规则" })).toBeInTheDocument();
+  });
+
+  it("reports a successful 清理残留阻断规则 and closes the dialog", async () => {
+    vi.mocked(commands.procrouteCleanup).mockResolvedValue({ status: "ok", data: null });
+    renderPage(model, false, "procroute");
+    const component = await screen.findByRole("region", { name: "分流组件" });
+    fireEvent.click(within(component).getByRole("button", { name: "清理残留阻断规则" }));
+    fireEvent.click(await screen.findByRole("button", { name: "清理" }));
+    expect(await screen.findByText("已清理残留阻断规则")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("turns the exit prompt back on (and off) from 进程分流 → 退出时提示", async () => {

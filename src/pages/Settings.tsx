@@ -15,6 +15,7 @@ import {
 import { useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  errorMessage,
   isValidationError,
   useModel,
   useOpenLogDir,
@@ -31,6 +32,7 @@ import type {
   Listener,
   Settings as SettingsModel,
 } from "../bindings";
+import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { SaveFeedback, useSaveFeedback } from "../components/SaveFeedback";
 import { IntervalInput } from "../components/IntervalInput";
@@ -291,8 +293,20 @@ function ProcessRoutingSection() {
   const model = useModel();
   const setExitPrompt = useSetExitPrompt();
   const status = useProcRouteStatus();
-  const uninstall = useProcRouteUninstall();
-  const cleanup = useProcRouteCleanup();
+  // Both report their own result (success or 「…失败：原因」) instead of the bare global error.
+  const uninstall = useProcRouteUninstall({ errorFeedback: "local" });
+  const cleanup = useProcRouteCleanup({ errorFeedback: "local" });
+  const notify = useApplyResult();
+  const withResult = (run: () => Promise<unknown>, done: string, failed: string) => async () => {
+    try {
+      await run();
+      notify.showMessage(done, "success");
+    } catch (e) {
+      notify.showError(`${failed}：${errorMessage(e)}`);
+      // Rethrown so the confirm dialog stays open for another try.
+      throw e;
+    }
+  };
   const desktop = useDesktopState();
   const savePrefs = useDesktopMutation(desktopApi.preferences);
   const [confirm, setConfirm] = useState<"uninstall" | "cleanup" | null>(null);
@@ -373,7 +387,7 @@ function ProcessRoutingSection() {
           title="卸载组件"
           confirmLabel="卸载"
           text="将停止并删除分流服务，并清除它的所有阻断规则。需要管理员授权。"
-          onConfirm={() => uninstall.mutateAsync()}
+          onConfirm={withResult(() => uninstall.mutateAsync(), "分流组件已卸载", "卸载失败")}
           onClose={() => setConfirm(null)}
         />
       )}
@@ -382,7 +396,7 @@ function ProcessRoutingSection() {
           title="清理残留阻断规则"
           confirmLabel="清理"
           text="将删除系统中所有 Routa 留下的阻断规则，被阻断的程序会直接联网。服务未运行时需要管理员授权。"
-          onConfirm={() => cleanup.mutateAsync()}
+          onConfirm={withResult(() => cleanup.mutateAsync(), "已清理残留阻断规则", "清理失败")}
           onClose={() => setConfirm(null)}
         />
       )}

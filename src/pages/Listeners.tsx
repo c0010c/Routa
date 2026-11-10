@@ -130,7 +130,7 @@ export function Listeners() {
                         onClick={() => target && void measureProxy(target.name)}
                         sx={{ ...clickFeedback, minHeight: 28, minWidth: 88, justifyContent: "flex-start", gap: 0.5 }}>
                         <DelayText {...delayProps} tooltip={false} emptyText="未测试" variant="card" />
-                        {!pending && <Refresh sx={{ fontSize: 13, color: "text.secondary" }} />}
+                        <Refresh sx={{ fontSize: 13, color: "text.secondary", visibility: pending ? "hidden" : undefined }} />
                       </ButtonBase>
                     </Box>
                   </Tooltip>

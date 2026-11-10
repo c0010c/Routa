@@ -60,6 +60,7 @@ import { nodeKey, nodeLabel, proxyNameOf } from "../lib/refs";
 import { isAiRule, ruleLabel } from "../lib/processRule";
 import { delayText, formatRate } from "../lib/format";
 import type { NodeRef } from "../bindings";
+import { BusyLabel } from "../components/BusyLabel";
 
 export function SimpleConnection() {
   const ui = useInterface()!;
@@ -589,7 +590,7 @@ export function SimpleConnection() {
                 }
               }}
             >
-              {selection.isPending ? "正在应用…" : "使用此节点"}
+              <BusyLabel busy={selection.isPending} idle="使用此节点" pending="正在应用…" />
             </Button>
           </DialogActions>
         </Dialog>
@@ -642,7 +643,7 @@ export function SimpleConnection() {
                 }
               }}
             >
-              {install.isPending ? "正在安装…" : "安装组件"}
+              <BusyLabel busy={install.isPending} idle="安装组件" pending="正在安装…" />
             </Button>
           </DialogActions>
         </Dialog>
@@ -860,7 +861,7 @@ function SimpleAppPicker({
             }
           }}
         >
-          {busy ? "正在添加…" : "添加所选应用"}
+          <BusyLabel busy={busy} idle="添加所选应用" pending="正在添加…" />
         </Button>
       </DialogActions>
     </Dialog>

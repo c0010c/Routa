@@ -10,6 +10,12 @@ import { ruleLabel } from "../lib/processRule";
 import { nodeLabel } from "../lib/refs";
 import { NodePickerDialog } from "./NodePickerDialog";
 
+/** Read out by screen readers without taking space in the row. */
+const VISUALLY_HIDDEN = {
+  position: "absolute", width: 1, height: 1, p: 0, m: "-1px", overflow: "hidden",
+  clip: "rect(0 0 0 0)", whiteSpace: "nowrap", border: 0,
+} as const;
+
 export const NODE_UNSET = "未选择节点，请选择节点";
 export const NODE_BROKEN = "节点已失效，请更换节点";
 
@@ -81,7 +87,9 @@ export function ProcessNodeSelect({
         size="small"
         variant="outlined"
         color={problem ? "error" : "inherit"}
-        disabled={save.isPending}
+        // `loading` overlays the spinner on the kept label; a status line below would grow the rule row while it applies.
+        loading={save.isPending}
+        loadingIndicator={<CircularProgress size={14} color="inherit" />}
         aria-busy={save.isPending}
         onClick={() => setPicking(true)}
         sx={{ justifyContent: "flex-start", textTransform: "none", maxWidth: "100%" }}
@@ -101,16 +109,15 @@ export function ProcessNodeSelect({
               sx={{ borderRadius: 0.5, minHeight: 28, px: 0.5, gap: 0.5, "&:hover": { bgcolor: "action.hover" } }}
             >
               <DelayText {...delayProps} tooltip={false} emptyText="未测试" variant="card" />
-              {!pending && <Refresh sx={{ fontSize: 13, color: "text.secondary" }} />}
+              <Refresh sx={{ fontSize: 13, color: "text.secondary", visibility: pending ? "hidden" : undefined }} />
             </ButtonBase>
           </Box>
         </Tooltip>
       )}
       {save.isPending && (
-        <Typography role="status" variant="caption" color="text.secondary" sx={{ display: "block" }}>
-          <CircularProgress size={10} sx={{ mr: 0.5 }} />
+        <Box component="span" role="status" sx={VISUALLY_HIDDEN}>
           正在应用…
-        </Typography>
+        </Box>
       )}
       {error && (
         <Typography

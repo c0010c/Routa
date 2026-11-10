@@ -4,6 +4,7 @@ import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import PowerSettingsNewOutlined from "@mui/icons-material/PowerSettingsNewOutlined";
 import { Link, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
+import { ReservedWidth } from "./BusyLabel";
 import { useMonitorFocusNavigation } from "./Layout";
 import { UpdateNotice } from "./UpdateNotice";
 
@@ -48,7 +49,10 @@ export function SimpleLayout({ children }: { children: ReactNode }) {
               color={current ? "primary" : "inherit"}
               sx={{ fontWeight: current ? 600 : undefined }}
             >
-              {item.label}
+              {/* Reserving the bold width keeps switching pages from nudging the other items. */}
+              <ReservedWidth reserve={item.label} bold>
+                {item.label}
+              </ReservedWidth>
             </Button>
           );
         })}

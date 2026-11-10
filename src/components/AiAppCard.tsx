@@ -128,11 +128,12 @@ export function AiAppCard({
       </Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
         {app.enabled && paused ? <Tooltip title="进程分流已关闭，开启后恢复"><span>{sw}</span></Tooltip> : sw}
+        {/* `loading` overlays the spinner on the kept label: a startIcon would widen the button and shift the centered row. */}
         <Button
           size="small"
           variant={app.running ? "outlined" : "contained"}
-          disabled={busy}
-          startIcon={busy ? <CircularProgress size={10} color="inherit" /> : undefined}
+          loading={busy}
+          loadingIndicator={<CircularProgress size={14} color="inherit" />}
           onClick={onLaunch}
         >
           {app.running ? "运行中" : "启动"}

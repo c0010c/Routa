@@ -7,6 +7,7 @@ import {
   Alert, Box, Button, ButtonBase, MenuItem, Paper, Stack, TextField, Typography,
 } from "@mui/material";
 import { SearchField } from "../components/SearchField";
+import { BusyLabel } from "../components/BusyLabel";
 import {
   filterCoreLogs, LOG_LEVEL_LABELS, logTime, parseCoreLogs,
   type CoreLogEntry, type LogFilter, type LogLevel,
@@ -88,7 +89,7 @@ export function LogsPanel({ text, loading, fetching, error, paused, onPausedChan
             title="阅读历史日志或展开详情时自动暂停更新"
             onClick={() => onPausedChange(!paused)}>{paused ? "继续更新" : "暂停更新"}</Button>
           <Button size="small" startIcon={<RefreshOutlined />} disabled={fetching} onClick={onRefresh}>
-            {fetching ? "刷新中…" : "刷新"}
+            <BusyLabel busy={fetching} idle="刷新" pending="刷新中…" />
           </Button>
         </Stack>
       </Stack>
