@@ -25,6 +25,7 @@ import {
   useProcRouteUninstall,
   useSetExitPrompt,
 } from "../api/procroute";
+import { desktopApi, useDesktopMutation, useDesktopState } from "../api/desktop";
 import { settingsSaveMessage, useSettingsSave } from "../api/settings";
 import type {
   Listener,
@@ -292,6 +293,8 @@ function ProcessRoutingSection() {
   const status = useProcRouteStatus();
   const uninstall = useProcRouteUninstall();
   const cleanup = useProcRouteCleanup();
+  const desktop = useDesktopState();
+  const savePrefs = useDesktopMutation(desktopApi.preferences);
   const [confirm, setConfirm] = useState<"uninstall" | "cleanup" | null>(null);
   const component = status.data?.component;
   const busy = uninstall.isPending || cleanup.isPending;
@@ -310,6 +313,24 @@ function ProcessRoutingSection() {
               disabled={!model.data || setExitPrompt.isPending}
               onChange={(_, value) => setExitPrompt.mutate(value)}
               slotProps={{ input: { "aria-label": "退出时提示" } }}
+            />
+          </Row>,
+        ]}
+      </Section>
+      <Section title="AI 应用">
+        {[
+          <Row
+            key="ai-reset-prompt"
+            label="AI 应用断开连接前提示"
+            description="开启、关闭代理或换节点会断开运行中 AI 应用的现有连接，操作前先询问"
+          >
+            <Switch
+              checked={!desktop.data?.preferences.skip_ai_reset_prompt}
+              disabled={!desktop.data || savePrefs.isPending}
+              onChange={(_, value) =>
+                desktop.data && savePrefs.mutate({ ...desktop.data.preferences, skip_ai_reset_prompt: !value })
+              }
+              slotProps={{ input: { "aria-label": "AI 应用断开连接前提示" } }}
             />
           </Row>,
         ]}

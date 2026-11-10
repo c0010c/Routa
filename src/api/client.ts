@@ -77,7 +77,7 @@ export function errorMessage(e: unknown): string {
   return t === "" ? "操作失败" : t;
 }
 
-function validationText(errors: ValidationError[]): string {
+export function validationText(errors: ValidationError[]): string {
   const f = fieldErrors(errors);
   return [...(f.name ? [f.name] : []), ...(f.port ? [f.port] : []), ...f.form].join("\n");
 }

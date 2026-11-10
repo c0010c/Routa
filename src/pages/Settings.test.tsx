@@ -10,6 +10,8 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import type { ApplyOutcome, Model } from "../bindings";
 
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
 vi.mock("../bindings", () => ({
   commands: {
     getModel: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock("../bindings", () => ({
   },
 }));
 
+import { invoke } from "@tauri-apps/api/core";
 import { commands } from "../bindings";
 import { ApplyResultProvider } from "../components/ApplyResultSnackbar";
 import { Settings } from "./Settings";
@@ -500,6 +503,24 @@ describe("Settings", () => {
     await waitFor(() => expect(within(exit).getByRole("switch", { name: "退出时提示" })).toBeChecked());
     fireEvent.click(within(exit).getByRole("switch", { name: "退出时提示" }));
     await waitFor(() => expect(commands.setExitPrompt).toHaveBeenCalledWith(false));
+  });
+
+  it("AI 应用断开连接前提示 开关写回 skip_ai_reset_prompt", async () => {
+    let prefs = { mode: "Advanced", skip_ai_reset_prompt: false };
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "desktop_state") return { preferences: prefs };
+      if (command === "save_ui_preferences") return (prefs = (args as { input: typeof prefs }).input);
+      return undefined;
+    });
+    renderPage(model, false, "procroute");
+    const toggle = await screen.findByRole("switch", { name: "AI 应用断开连接前提示" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_ui_preferences", { input: { mode: "Advanced", skip_ai_reset_prompt: true } }),
+    );
+    await waitFor(() => expect(screen.getByRole("switch", { name: "AI 应用断开连接前提示" })).not.toBeChecked());
   });
 
   it("links the website and GitHub from 关于 → 支持", async () => {

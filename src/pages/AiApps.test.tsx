@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import type { AiAppView, Model } from "../bindings";
+import { invoke } from "@tauri-apps/api/core";
+import type { AiAppConflict, AiAppView, Model } from "../bindings";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -69,7 +70,31 @@ function renderPage(apps: AiAppView[], enabled = true, actions: Record<string, u
   );
 }
 
+let skip = false;
+let invoked: { command: string; args: unknown }[];
+const ok = <T,>(data: T) => ({ status: "ok" as const, data });
+const tokyo = { manual_id: "m1" };
+const conflict = (over: Partial<AiAppConflict> = {}): AiAppConflict => ({
+  rule_id: "w1", rule_name: "工作软件", process: "ChatGPT.exe", removes_rule: false, ...over,
+});
+const pickTokyo = async () => fireEvent.click(await screen.findByRole("radio", { name: /东京/ }));
+
 describe("AiAppsPage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    skip = false;
+    invoked = [];
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      invoked.push({ command, args });
+      if (command === "desktop_state") return { preferences: { mode: "Simple", skip_ai_reset_prompt: skip } };
+      return undefined;
+    });
+    vi.mocked(commands.aiAppConflicts).mockResolvedValue(ok([]));
+    vi.mocked(commands.enableAiApp).mockResolvedValue(ok({ NotRunning: null }) as never);
+    vi.mocked(commands.disableAiApp).mockResolvedValue(ok({ NotRunning: null }) as never);
+    vi.mocked(commands.launchAiApp).mockResolvedValue(ok("Launched"));
+  });
+
   it("在进程分流上方显示 AI 应用菜单", () => {
     const labels = pages.map((p) => p.label);
     expect(labels.indexOf("AI 应用")).toBeGreaterThanOrEqual(0);
@@ -117,5 +142,132 @@ describe("AiAppsPage", () => {
     paused.unmount();
     renderPage([a], true, { r1: { action: "Failed", reason: "出错了" } });
     await waitFor(() => expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "red"));
+  });
+
+  it("首次开启先选节点，取消则不调用 enableAiApp", async () => {
+    renderPage([app({})]);
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    await screen.findByRole("radio", { name: /东京/ });
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("radio", { name: /东京/ })).toBeNull());
+    expect(commands.aiAppConflicts).not.toHaveBeenCalled();
+    expect(commands.enableAiApp).not.toHaveBeenCalled();
+  });
+
+  it("选好节点后调用 enableAiApp", async () => {
+    renderPage([app({})]);
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    await pickTokyo();
+    await waitFor(() => expect(commands.enableAiApp).toHaveBeenCalledWith("claude", tokyo));
+  });
+
+  it("enableAiApp 失败时显示错误文字", async () => {
+    vi.mocked(commands.enableAiApp).mockResolvedValue({ status: "error", error: "无法启用规则" });
+    renderPage([app({ rule_id: "r1", node: tokyo })]);
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    expect(await screen.findByText("无法启用规则")).toBeInTheDocument();
+  });
+
+  it("有冲突时显示冲突框，确认后才开启", async () => {
+    vi.mocked(commands.aiAppConflicts).mockResolvedValue(ok([conflict()]));
+    renderPage([app({ rule_id: "r1", node: tokyo })]);
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    expect(await screen.findByText("与进程分流规则冲突")).toBeInTheDocument();
+    expect(screen.getByText("规则「工作软件」里的 ChatGPT.exe 也在分流。")).toBeInTheDocument();
+    expect(screen.getByText("开启后会把它从该规则中移除，规则里的其他进程不受影响。")).toBeInTheDocument();
+    expect(commands.enableAiApp).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "移除并开启" }));
+    await waitFor(() => expect(commands.enableAiApp).toHaveBeenCalledWith("claude", tokyo));
+  });
+
+  it("冲突框取消则不开启", async () => {
+    vi.mocked(commands.aiAppConflicts).mockResolvedValue(ok([conflict()]));
+    renderPage([app({ rule_id: "r1", node: tokyo })]);
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByText("与进程分流规则冲突")).toBeNull());
+    expect(commands.enableAiApp).not.toHaveBeenCalled();
+  });
+
+  it("整条规则会被删除时显示 开启后会删除该规则。", async () => {
+    vi.mocked(commands.aiAppConflicts).mockResolvedValue(ok([conflict({ removes_rule: true })]));
+    renderPage([app({ rule_id: "r1", node: tokyo })]);
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    expect(await screen.findByText("开启后会删除该规则。")).toBeInTheDocument();
+    expect(screen.queryByText(/其他进程不受影响/)).toBeNull();
+  });
+
+  it("应用运行中开启时显示断开框；勾选下次不再提示后保存 skip_ai_reset_prompt=true", async () => {
+    renderPage([app({ rule_id: "r1", node: tokyo, running: true })]);
+    await waitFor(() => expect(invoked.some((c) => c.command === "desktop_state")).toBe(true));
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    expect(await screen.findByText("断开 Claude 的现有连接")).toBeInTheDocument();
+    expect(screen.getByText("会断开 Claude 已有的连接，让它重新连接。应用可能会短暂显示重连。")).toBeInTheDocument();
+    expect(commands.enableAiApp).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "下次不再提示" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await waitFor(() => expect(commands.enableAiApp).toHaveBeenCalledWith("claude", tokyo));
+    await waitFor(() =>
+      expect(invoked.find((c) => c.command === "save_ui_preferences")?.args).toEqual({
+        input: { mode: "Simple", skip_ai_reset_prompt: true },
+      }),
+    );
+  });
+
+  it("断开框取消则不开启", async () => {
+    renderPage([app({ rule_id: "r1", node: tokyo, running: true })]);
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByText("断开 Claude 的现有连接")).toBeNull());
+    expect(commands.enableAiApp).not.toHaveBeenCalled();
+  });
+
+  it("skip_ai_reset_prompt=true 时不显示断开框", async () => {
+    skip = true;
+    renderPage([app({ rule_id: "r1", node: tokyo, running: true })]);
+    await waitFor(() => expect(invoked.some((c) => c.command === "desktop_state")).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    await waitFor(() => expect(commands.enableAiApp).toHaveBeenCalledWith("claude", tokyo));
+    expect(screen.queryByText("断开 Claude 的现有连接")).toBeNull();
+  });
+
+  it("关闭开关在运行中也弹断开框", async () => {
+    renderPage([app({ rule_id: "r1", node: tokyo, enabled: true, running: true })]);
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    expect(await screen.findByText("断开 Claude 的现有连接")).toBeInTheDocument();
+    expect(commands.disableAiApp).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await waitFor(() => expect(commands.disableAiApp).toHaveBeenCalledWith("claude"));
+  });
+
+  it("换节点在运行中也弹断开框，确认后才调用 changeNode", async () => {
+    renderPage([app({ rule_id: "r1", node: tokyo, enabled: true, running: true })]);
+    fireEvent.click(await screen.findByText("东京"));
+    await pickTokyo();
+    expect(await screen.findByText("断开 Claude 的现有连接")).toBeInTheDocument();
+    expect(invoked.some((c) => c.command === "change_process_node")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await waitFor(() =>
+      expect(invoked.find((c) => c.command === "change_process_node")?.args).toEqual({ id: "r1", node: tokyo }),
+    );
+  });
+
+  it("启动：未启用时先走开启流程再调用 launchAiApp", async () => {
+    vi.mocked(commands.aiAppConflicts).mockResolvedValue(ok([conflict()]));
+    renderPage([app({ rule_id: "r1", node: tokyo })]);
+    fireEvent.click(await screen.findByRole("button", { name: "启动" }));
+    fireEvent.click(await screen.findByRole("button", { name: "移除并开启" }));
+    await waitFor(() => expect(commands.launchAiApp).toHaveBeenCalledWith("claude"));
+    expect(vi.mocked(commands.enableAiApp).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(commands.launchAiApp).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("启动：规则已启用时直接调用 launchAiApp", async () => {
+    renderPage([app({ rule_id: "r1", node: tokyo, enabled: true })]);
+    fireEvent.click(await screen.findByRole("button", { name: "启动" }));
+    await waitFor(() => expect(commands.launchAiApp).toHaveBeenCalledWith("claude"));
+    expect(commands.enableAiApp).not.toHaveBeenCalled();
   });
 });

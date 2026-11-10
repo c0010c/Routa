@@ -1,68 +1,125 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Box, Stack, Switch, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { useQueryClient } from "@tanstack/react-query";
-import type { AiAppView, NodeRef } from "../bindings";
-import { useModel } from "../api/client";
-import { desktopApi, useDesktopMutation } from "../api/desktop";
+import type { AiAppConflict, AiAppView, NodeRef } from "../bindings";
+import { errorMessage, isValidationError, useModel, validationText } from "../api/client";
+import { desktopApi, useDesktopMutation, useDesktopState } from "../api/desktop";
 import { useSaveProcessRoutingSettings } from "../api/procroute";
-import { useAiApps, useDisableAiApp, useEnableAiApp, useLaunchAiApp } from "../api/aiApps";
+import { useAiAppConflicts, useAiApps, useDisableAiApp, useEnableAiApp, useLaunchAiApp } from "../api/aiApps";
 import { AiAppCard } from "../components/AiAppCard";
+import { ConflictDialog, ResetDialog } from "../components/AiAppDialogs";
+import { useApplyResult } from "../components/ApplyResultSnackbar";
 import { NodePickerDialog } from "../components/NodePickerDialog";
 
-export function AiAppsPage() {
+/**
+ * Runs the confirmations in order (pick node -> conflicts -> disconnect warning -> backend call);
+ * cancelling any step does nothing. Backend errors are shown through the shared error feedback.
+ */
+function useAiAppFlow() {
   const qc = useQueryClient();
+  const apply = useApplyResult();
+  const prefs = useDesktopState().data?.preferences;
+  const savePrefs = useDesktopMutation(desktopApi.preferences);
+  const enable = useEnableAiApp();
+  const disable = useDisableAiApp();
+  const launchApp = useLaunchAiApp();
+  const conflicts = useAiAppConflicts();
+  const changeRuleNode = useDesktopMutation((a: [string, NodeRef]) => desktopApi.changeNode(a[0], a[1]));
+  // Nodes chosen for apps that have no rule yet; used when the app is first enabled.
+  const [picked, setPicked] = useState<Record<string, NodeRef>>({});
+  const [dialog, setDialog] = useState<ReactNode>(null);
+
+  const ask = <T,>(render: (done: (v: T) => void) => ReactNode) =>
+    new Promise<T>((resolve) =>
+      setDialog(
+        render((v) => {
+          setDialog(null);
+          resolve(v);
+        }),
+      ),
+    );
+  const nodeOf = (app: AiAppView) => app.node ?? picked[app.id] ?? null;
+  const fail = (e: unknown) => apply.showError(isValidationError(e) ? validationText(e.errors) : errorMessage(e));
+  /** Runs a flow; a thrown backend error is reported and ends the flow. */
+  const guarded = async (run: () => Promise<void>) => {
+    try {
+      await run();
+    } catch (e) {
+      fail(e);
+    } finally {
+      void qc.invalidateQueries({ queryKey: ["aiApps"] });
+    }
+  };
+
+  const pickNode = (app: AiAppView) =>
+    ask<NodeRef | null>((done) => (
+      <NodePickerDialog title={`选择节点 · ${app.name}`} value={null} onClose={() => done(null)} onPick={done} />
+    ));
+  const confirmReset = async (app: AiAppView) => {
+    if (prefs?.skip_ai_reset_prompt) return true;
+    const answer = await ask<{ dontAsk: boolean } | null>((done) => (
+      <ResetDialog appName={app.name} onCancel={() => done(null)} onConfirm={(dontAsk) => done({ dontAsk })} />
+    ));
+    if (!answer) return false;
+    if (answer.dontAsk && prefs) {
+      try {
+        await savePrefs.mutateAsync({ ...prefs, skip_ai_reset_prompt: true });
+      } catch (e) {
+        fail(e);
+      }
+    }
+    return true;
+  };
+  const confirmConflicts = (found: AiAppConflict[]) =>
+    ask<boolean>((done) => <ConflictDialog conflicts={found} onCancel={() => done(false)} onConfirm={() => done(true)} />);
+
+  /** True once the rule is enabled; false when the user cancelled a step. */
+  const enableFlow = async (app: AiAppView) => {
+    const node = nodeOf(app) ?? (await pickNode(app));
+    if (!node) return false;
+    setPicked((p) => ({ ...p, [app.id]: node }));
+    const found = await conflicts.mutateAsync(app.id);
+    if (found.length > 0 && !(await confirmConflicts(found))) return false;
+    if (app.running && !(await confirmReset(app))) return false;
+    await enable.mutateAsync(app.id, node);
+    return true;
+  };
+
+  return {
+    nodeOf,
+    dialogs: dialog,
+    toggle: (app: AiAppView, on: boolean) =>
+      guarded(async () => {
+        if (on) {
+          await enableFlow(app);
+        } else if (!app.running || (await confirmReset(app))) {
+          await disable.mutateAsync(app.id);
+        }
+      }),
+    launch: (app: AiAppView) =>
+      guarded(async () => {
+        if (!app.enabled && !(await enableFlow(app))) return;
+        await launchApp.mutateAsync(app.id);
+      }),
+    changeNode: async (app: AiAppView, node: NodeRef) => {
+      const ruleId = app.rule_id;
+      if (!ruleId) return setPicked((p) => ({ ...p, [app.id]: node }));
+      await guarded(async () => {
+        if (app.enabled && app.running && !(await confirmReset(app))) return;
+        await changeRuleNode.mutateAsync([ruleId, node]);
+      });
+    },
+  };
+}
+
+export function AiAppsPage() {
   const model = useModel().data;
   const apps = useAiApps().data;
   const settings = useSaveProcessRoutingSettings();
-  const enable = useEnableAiApp();
-  const disable = useDisableAiApp();
-  const launch = useLaunchAiApp();
-  const changeNode = useDesktopMutation((a: [string, NodeRef]) => desktopApi.changeNode(a[0], a[1]));
-  // Nodes chosen for apps that have no rule yet; used when the app is first enabled.
-  const [picked, setPicked] = useState<Record<string, NodeRef>>({});
-  // App waiting for a node before it can be launched.
-  const [launching, setLaunching] = useState<AiAppView | null>(null);
+  const flow = useAiAppFlow();
   if (!model) return null;
   const on = model.process_routing.enabled;
-  const refresh = () => void qc.invalidateQueries({ queryKey: ["aiApps"] });
-
-  // The handlers below are deliberately small: Task 8 swaps them for the dialog flow.
-  const onToggle = async (app: AiAppView, next: boolean) => {
-    try {
-      if (!next) await disable.mutateAsync(app.id);
-      else {
-        const node = app.node ?? picked[app.id];
-        if (node) await enable.mutateAsync(app.id, node);
-      }
-    } catch {
-      // reported by the shared error feedback
-    }
-    refresh();
-  };
-  const launchNow = async (app: AiAppView, node?: NodeRef) => {
-    try {
-      if (!app.enabled && node) await enable.mutateAsync(app.id, node);
-      await launch.mutateAsync(app.id);
-    } catch {
-      // reported by the shared error feedback
-    }
-    refresh();
-  };
-  const onLaunch = async (app: AiAppView) => {
-    const node = app.node ?? picked[app.id];
-    if (!app.enabled && !node) return setLaunching(app);
-    await launchNow(app, node);
-  };
-  const onPickNode = async (app: AiAppView, node: NodeRef) => {
-    if (!app.rule_id) return setPicked((p) => ({ ...p, [app.id]: node }));
-    try {
-      await changeNode.mutateAsync([app.rule_id, node]);
-    } catch {
-      // reported by the shared error feedback
-    }
-    refresh();
-  };
 
   return (
     <Box>
@@ -79,28 +136,16 @@ export function AiAppsPage() {
         {(apps ?? []).map((app) => (
           <AiAppCard
             key={app.id}
-            app={{ ...app, node: app.node ?? picked[app.id] ?? null }}
+            app={{ ...app, node: flow.nodeOf(app) }}
             model={model}
             paused={!on}
-            onToggle={(v) => void onToggle(app, v)}
-            onLaunch={() => void onLaunch(app)}
-            onPickNode={(n) => void onPickNode(app, n)}
+            onToggle={(v) => void flow.toggle(app, v)}
+            onLaunch={() => void flow.launch(app)}
+            onPickNode={(n) => void flow.changeNode(app, n)}
           />
         ))}
       </Box>
-      {launching && (
-        <NodePickerDialog
-          title={`选择节点 · ${launching.name}`}
-          value={null}
-          onClose={() => setLaunching(null)}
-          onPick={(node) => {
-            const app = launching;
-            setLaunching(null);
-            setPicked((p) => ({ ...p, [app.id]: node }));
-            void launchNow(app, node);
-          }}
-        />
-      )}
+      {flow.dialogs}
     </Box>
   );
 }
