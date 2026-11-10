@@ -17,12 +17,17 @@ pub fn ai_rule<'a>(pr: &'a ProcessRouting, app_id: &str) -> Option<&'a ProcessRu
     pr.rules.iter().find(|r| r.ai_app.as_deref() == Some(app_id))
 }
 
-fn entry_conflicts(e: &ProcessEntry, app: &CatalogApp) -> bool {
+/// 条目是否指向进程名 `process`：进程名直接比，路径比文件名；不区分大小写。
+fn entry_matches(e: &ProcessEntry, process: &str) -> bool {
     let name = match e.kind {
         ProcessKind::Name => e.value.as_str(),
         ProcessKind::Path => process_file_name(&e.value),
     };
-    app.processes.iter().any(|p| p.eq_ignore_ascii_case(name))
+    process.eq_ignore_ascii_case(name)
+}
+
+fn entry_conflicts(e: &ProcessEntry, app: &CatalogApp) -> bool {
+    app.processes.iter().any(|p| entry_matches(e, p))
 }
 
 pub fn conflicts(pr: &ProcessRouting, app: &CatalogApp) -> Vec<AiAppConflict> {
@@ -84,6 +89,8 @@ pub fn disable(pr: &mut ProcessRouting, app_id: &str) {
 }
 
 /// 让现有 AI 规则跟上列表：更新 name/processes/on_fault；删除列表里已经没有的应用的规则。返回是否有改动。
+/// 列表新增的进程若已在手动规则里（进程名或路径的文件名），先不加入，免得整次同步因校验失败作废；
+/// 用户下次开启该应用时由冲突确认移走。全被占用时保留现有进程，避免规则变空。
 pub fn sync_with_catalog(pr: &mut ProcessRouting, catalog: &Catalog) -> bool {
     let before = pr.rules.len();
     pr.rules.retain(|r| match &r.ai_app {
@@ -91,11 +98,17 @@ pub fn sync_with_catalog(pr: &mut ProcessRouting, catalog: &Catalog) -> bool {
         None => true,
     });
     let mut changed = pr.rules.len() != before;
+    let manual: Vec<ProcessEntry> =
+        pr.rules.iter().filter(|r| r.ai_app.is_none()).flat_map(|r| r.processes.iter().cloned()).collect();
     for r in pr.rules.iter_mut() {
         let Some(app) = r.ai_app.as_ref().and_then(|id| catalog.apps.iter().find(|a| &a.id == id)) else {
             continue;
         };
-        let entries = app_entries(app);
+        let free: Vec<ProcessEntry> = app_entries(app)
+            .into_iter()
+            .filter(|p| !manual.iter().any(|e| entry_matches(e, &p.value)))
+            .collect();
+        let entries = if free.is_empty() { r.processes.clone() } else { free };
         if r.name != app.name || r.processes != entries || r.on_fault != app.on_fault {
             r.name = app.name.clone();
             r.processes = entries;
@@ -242,6 +255,37 @@ mod tests {
         assert!(sync_with_catalog(&mut p, &cat(vec![])));
         assert_eq!(p.rules.len(), 1);
         assert!(p.rules[0].ai_app.is_none());
+    }
+
+    #[test]
+    fn sync_skips_processes_held_by_manual_rules_and_still_removes_gone_apps() {
+        let manual = vec![
+            rule("byname", vec![ProcessEntry::name("codex.EXE")]),
+            rule("bypath", vec![ProcessEntry::path("C:\\X\\Helper.exe")]),
+        ];
+        let mut p = pr(manual.clone());
+        enable(&mut p, &app("chatgpt", &["ChatGPT.exe"]), node("n"));
+        enable(&mut p, &app("gone", &["Gone.exe"]), node("n"));
+        let added = app("chatgpt", &["ChatGPT.exe", "Codex.exe", "helper.exe"]);
+        assert!(sync_with_catalog(&mut p, &cat(vec![added])));
+        assert_eq!(ai_rule(&p, "chatgpt").unwrap().processes, vec![ProcessEntry::name("ChatGPT.exe")]);
+        assert!(ai_rule(&p, "gone").is_none());
+        assert_eq!(p.rules.iter().filter(|r| r.ai_app.is_none()).cloned().collect::<Vec<_>>(), manual);
+        let model = crate::model::Model { process_routing: p, ..Default::default() };
+        assert_eq!(crate::model::validate::validate(&model), Ok(()));
+    }
+
+    #[test]
+    fn sync_keeps_current_processes_when_all_new_ones_are_held() {
+        let mut p = pr(vec![]);
+        enable(&mut p, &app("chatgpt", &["ChatGPT.exe"]), node("n"));
+        p.rules.push(rule("m", vec![ProcessEntry::name("Other.exe")]));
+        let mut moved = app("chatgpt", &["Other.exe"]);
+        moved.name = "Renamed".into();
+        assert!(sync_with_catalog(&mut p, &cat(vec![moved])));
+        let r = ai_rule(&p, "chatgpt").unwrap();
+        assert_eq!(r.name, "Renamed");
+        assert_eq!(r.processes, vec![ProcessEntry::name("ChatGPT.exe")]);
     }
 
     #[test]

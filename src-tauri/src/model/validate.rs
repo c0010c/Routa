@@ -51,8 +51,18 @@ pub(crate) fn process_proxy_host(listen: &str) -> Option<String> {
 
 fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
     let pr = &model.process_routing;
-    let mut seen: std::collections::HashMap<(ProcessKind, String), &ProcessRule> = std::collections::HashMap::new();
-    let mut reported = std::collections::HashSet::new();
+    // AI 规则的进程名（小写）→ AI 规则名称。
+    let ai_names: std::collections::HashMap<String, &str> = pr
+        .rules
+        .iter()
+        .filter(|r| r.ai_app.is_some())
+        .flat_map(|r| r.processes.iter().filter(|e| e.kind == ProcessKind::Name).map(move |e| (r, e)))
+        .map(|(r, e)| (normalize_exe_path(&e.value).to_lowercase(), r.name.as_str()))
+        .collect();
+    // 每个合法条目按 (类型, 小写值) 分组，按出现顺序记下所在规则与规范化后的值。
+    type Hits<'a> = Vec<(&'a ProcessRule, String)>;
+    let mut groups: Vec<((ProcessKind, String), Hits)> = Vec::new();
+    let mut index: std::collections::HashMap<(ProcessKind, String), usize> = std::collections::HashMap::new();
     for r in &pr.rules {
         if r.processes.is_empty() {
             errors.push(ValidationError::EmptyProcessRule { rule: process_rule_label(r) });
@@ -72,21 +82,30 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
             }
             // 进程名只与进程名比、路径只与路径比；按路径的规则优先，二者共存不算重复。
             let key = (entry.kind, p.to_lowercase());
-            match seen.get(&key) {
-                None => {
-                    seen.insert(key, r);
-                }
-                Some(first) => {
-                    if reported.insert(key) {
-                        // 其中一条是 AI 规则时，提示该进程由哪个 AI 应用管理。
-                        let ai = [*first, r].into_iter().find(|x| x.ai_app.is_some());
-                        errors.push(match ai {
-                            Some(a) => ValidationError::AiAppProcess { exe_path: p, app: a.name.clone() },
-                            None => ValidationError::DuplicateProcessRule { exe_path: p },
-                        });
-                    }
-                }
-            }
+            let i = *index.entry(key.clone()).or_insert_with(|| {
+                groups.push((key, Vec::new()));
+                groups.len() - 1
+            });
+            groups[i].1.push((r, p));
+        }
+    }
+    for ((kind, low), hits) in &groups {
+        let manual = hits.iter().find(|(r, _)| r.ai_app.is_none());
+        // 与 AI 规则重复，或手动规则的路径指向 AI 规则管理的进程名（服务优先按路径匹配，
+        // AI 开关会因此失效）：提示该进程由哪个 AI 应用管理。
+        let shared_ai = hits.iter().map(|(r, _)| *r).find(|r| r.ai_app.is_some() && hits.len() > 1);
+        let path_ai = || {
+            manual
+                .filter(|_| *kind == ProcessKind::Path)
+                .and_then(|_| ai_names.get(process_file_name(low)).copied())
+        };
+        match shared_ai.map(|r| r.name.as_str()).or_else(path_ai) {
+            Some(app) => errors.push(ValidationError::AiAppProcess {
+                exe_path: manual.unwrap_or_else(|| &hits[1]).1.clone(),
+                app: app.to_string(),
+            }),
+            None if hits.len() > 1 => errors.push(ValidationError::DuplicateProcessRule { exe_path: hits[1].1.clone() }),
+            None => {}
         }
     }
     // 与隐藏监听器同样按 (节点, 生效网卡) 分组；只数启用且选了节点的规则。
@@ -598,6 +617,36 @@ mod tests {
         let e = errs(&m);
         assert!(e.contains(&ValidationError::AiAppProcess { exe_path: "chatgpt.exe".into(), app: "ChatGPT".into() }), "{e:?}");
         assert!(!e.iter().any(|e| matches!(e, ValidationError::DuplicateProcessRule { .. })));
+    }
+
+    fn chatgpt_ai_rule() -> ProcessRule {
+        ProcessRule {
+            name: "ChatGPT".into(),
+            ai_app: Some("chatgpt".into()),
+            processes: vec![ProcessEntry::name("ChatGPT.exe")],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn manual_path_to_ai_process_name_reports_ai_app() {
+        let path = r"C:\Apps\chatgpt.EXE";
+        let manual = ProcessRule { processes: vec![ProcessEntry::path(path)], ..Default::default() };
+        for rules in [vec![chatgpt_ai_rule(), manual.clone()], vec![manual, chatgpt_ai_rule()]] {
+            let mut m = Model::default();
+            m.process_routing.rules = rules;
+            let e = errs(&m);
+            assert_eq!(e, vec![ValidationError::AiAppProcess { exe_path: path.into(), app: "ChatGPT".into() }]);
+        }
+    }
+
+    #[test]
+    fn ai_rule_after_two_manual_duplicates_reports_ai_app() {
+        let manual = || ProcessRule { processes: vec![ProcessEntry::name("chatgpt.exe")], ..Default::default() };
+        let mut m = Model::default();
+        m.process_routing.rules = vec![manual(), manual(), chatgpt_ai_rule()];
+        let e = errs(&m);
+        assert_eq!(e, vec![ValidationError::AiAppProcess { exe_path: "chatgpt.exe".into(), app: "ChatGPT".into() }]);
     }
 
     fn pmodel(rules: impl FnOnce(&Listener) -> Vec<ProcessRule>) -> Model {

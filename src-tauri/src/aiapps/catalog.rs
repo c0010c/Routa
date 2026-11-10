@@ -74,7 +74,7 @@ fn validate_app(a: &CatalogApp) -> Result<(), String> {
         return Err("icon 须为 data:image/ URI 且不超过 64 KiB".into());
     }
     if !is_https_url(&a.download_url) || !is_https_url(&a.test_url) {
-        return Err("download_url / test_url 须为 https://".into());
+        return Err("download_url / test_url 须为 https://，且不含 , \" ' ^ \\ ` 或空白".into());
     }
     if a.install.is_empty() {
         return Err("install 不能为空".into());
@@ -90,6 +90,10 @@ fn validate_app(a: &CatalogApp) -> Result<(), String> {
         if p.is_empty() || p.trim() != p || !routa_procsvc_proto::is_process_name(p) {
             return Err(format!("非法进程名: {p}"));
         }
+        // 与模型校验一致，否则规则写入时会被拒绝。
+        if let Some(reason) = routa_procsvc_proto::process_name_problem(p) {
+            return Err(format!("非法进程名 {p}: {reason}"));
+        }
         if !p.to_ascii_lowercase().ends_with(".exe") {
             return Err(format!("进程名须以 .exe 结尾: {p}"));
         }
@@ -100,8 +104,11 @@ fn validate_app(a: &CatalogApp) -> Result<(), String> {
     Ok(())
 }
 
+/// 下载页经 explorer.exe 打开：它按逗号拆参数、可能把引号或转义后的内容当作程序路径，
+/// 所以除 https 外还拒绝 `, " ' ^ \ `` ` `` 和空白。
 fn is_https_url(s: &str) -> bool {
-    url::Url::parse(s).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some_and(|h| !h.is_empty()))
+    !s.chars().any(|c| c.is_whitespace() || matches!(c, ',' | '"' | '\'' | '^' | '\\' | '`'))
+        && url::Url::parse(s).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some_and(|h| !h.is_empty()))
 }
 
 fn validate_install(s: &InstallSource) -> Result<(), String> {
@@ -182,6 +189,25 @@ mod tests {
         assert!(parse_catalog(&app_json(&[("download_url", r#""https://:443/p""#)])).is_err());
         assert!(parse_catalog(&app_json(&[("test_url", r#""https://""#)])).is_err());
         assert!(parse_catalog(&app_json(&[("download_url", r#""https://:443/p""#)])).is_err());
+    }
+
+    #[test]
+    fn rejects_url_chars_that_explorer_could_misread() {
+        // JSON-escaped: \" is a quote, \\ a backslash, \t a tab.
+        for c in [",", "\\\"", "'", "^", "\\\\", "`", " ", "\\t"] {
+            for field in ["download_url", "test_url"] {
+                let v = format!("\"https://x.com/a{c}b\"");
+                assert!(parse_catalog(&app_json(&[(field, &v)])).is_err(), "{field} with {c:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_process_names_the_model_rejects() {
+        for p in ["*.exe", "a?.exe", "a;b.exe", ".exe"] {
+            let v = format!("[\"{p}\"]");
+            assert!(parse_catalog(&app_json(&[("processes", &v)])).is_err(), "{p}");
+        }
     }
 
     #[test]
