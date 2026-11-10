@@ -1116,9 +1116,11 @@ impl Desktop {
     /// `rules::enable` and waits for the service to confirm; on failure the
     /// whole process routing is restored.
     pub async fn enable_ai_app(&self, rt: &Runtime, app: &CatalogApp, node: NodeRef) -> Result<(), String> {
-        let _guard = self.operation.lock().await;
+        // Outside the lock: a UAC prompt and the waits must not block the
+        // proxy monitor or exit. Both are idempotent and touch no Desktop state.
         ensure_core(rt).await?;
         ensure_component().await?;
+        let _guard = self.operation.lock().await;
         let mut deleted = vec![];
         apply_confirmed(rt, |pr| deleted = ai_rules::enable(pr, app, node), "AI 应用代理").await?;
         if deleted.is_empty() {
@@ -1141,22 +1143,25 @@ impl Desktop {
     /// Before "启动": the core, the component and the process routing switch.
     /// The app's AI rule must already be enabled.
     pub async fn prepare_ai_app(&self, rt: &Runtime, app_id: &str) -> Result<(), String> {
-        let _guard = self.operation.lock().await;
-        if !ai_rules::ai_rule(&rt.model().process_routing, app_id).is_some_and(|r| r.user_enabled) {
+        let ai_enabled = || ai_rules::ai_rule(&rt.model().process_routing, app_id).is_some_and(|r| r.user_enabled);
+        if !ai_enabled() {
             return Err("请先选择节点".into());
         }
+        // Outside the lock, as in `enable_ai_app`.
         ensure_core(rt).await?;
-        let component_was_running = procroute_running();
         ensure_component().await?;
+        let _guard = self.operation.lock().await;
+        if !ai_enabled() {
+            return Err("请先选择节点".into());
+        }
         if !rt.model().process_routing.enabled {
             return apply_confirmed(rt, |pr| pr.enabled = true, "进程分流总开关").await;
         }
-        // A component that just came up must pick up the rules before the app connects.
-        if !component_was_running {
-            crate::procroute::client::runtime_changed();
-            if !wait_until(CONFIRM_WAIT, || crate::procroute::client::current_rules_confirmed(rt)).await {
-                return Err("应用规则未确认生效，请检查组件状态后重试".into());
-            }
+        // A core or component that just came up: the service may still hold
+        // fallback targets. Returns at once when already confirmed.
+        crate::procroute::client::runtime_changed();
+        if !wait_until(CONFIRM_WAIT, || crate::procroute::client::current_rules_confirmed(rt)).await {
+            return Err("规则未确认生效，请检查组件状态后重试".into());
         }
         Ok(())
     }
@@ -1305,6 +1310,27 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, "内核未能启动，请查看日志");
         assert_eq!(rt.model().process_routing, before);
+    }
+    #[tokio::test]
+    async fn prepare_requires_an_enabled_ai_rule() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = crate::commands::tests::runtime(&td);
+        let dt = Desktop::open(td.path().into()).unwrap();
+        assert_eq!(dt.prepare_ai_app(&rt, "chatgpt").await.unwrap_err(), "请先选择节点");
+        // A disabled AI rule (no node needed while it is off).
+        rt.mutate_process_routing(|pr| {
+            pr.enabled = true;
+            pr.rules.push(ProcessRule {
+                ai_app: Some("chatgpt".into()),
+                processes: vec![ProcessEntry::name("ChatGPT.exe")],
+                user_enabled: false,
+                ..Default::default()
+            });
+        })
+        .await
+        .unwrap();
+        assert!(crate::aiapps::rules::ai_rule(&rt.model().process_routing, "chatgpt").is_some());
+        assert_eq!(dt.prepare_ai_app(&rt, "chatgpt").await.unwrap_err(), "请先选择节点");
     }
     #[test]
     fn prune_simple_ids_removes_deleted_rules() {

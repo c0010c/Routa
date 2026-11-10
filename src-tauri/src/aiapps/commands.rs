@@ -94,7 +94,10 @@ pub async fn ai_apps_list(app: AppHandle) -> Vec<AiAppView> {
         build_views(&catalog, &model, |a| detect::detect(a).is_some(), |a| detect::running(a, &procs))
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_else(|e| {
+        eprintln!("aiapps: listing apps failed: {e}");
+        Vec::new()
+    })
 }
 
 #[tauri::command]
