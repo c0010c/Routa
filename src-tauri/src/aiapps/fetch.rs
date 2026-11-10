@@ -30,22 +30,27 @@ pub fn choose(remote: Option<&str>, cached: Option<&str>) -> (Catalog, Option<St
     (bundled(), None)
 }
 
-/// 依次尝试 sources()，每个 10 秒超时，HTTP 200 才返回正文。
+/// 单个来源的验收：HTTP 200 且正文通过 parse_catalog 才算数。
+fn accept(status: reqwest::StatusCode, body: String) -> Option<String> {
+    (status == reqwest::StatusCode::OK && parse_catalog(&body).is_ok()).then_some(body)
+}
+
+/// 依次尝试 sources()，每个 10 秒超时；只返回 200 且通过校验的正文。
 pub async fn fetch_remote(client: &reqwest::Client) -> Option<String> {
     for url in sources() {
         let resp = match client.get(&url).timeout(FETCH_TIMEOUT).send().await {
-            Ok(r) if r.status() == reqwest::StatusCode::OK => r,
-            Ok(r) => {
-                eprintln!("aiapps: {url} -> HTTP {}", r.status());
-                continue;
-            }
+            Ok(r) => r,
             Err(e) => {
                 eprintln!("aiapps: {url} failed: {e}");
                 continue;
             }
         };
+        let status = resp.status();
         match resp.text().await {
-            Ok(t) => return Some(t),
+            Ok(t) => match accept(status, t) {
+                Some(t) => return Some(t),
+                None => eprintln!("aiapps: {url} rejected (HTTP {status} or invalid catalog)"),
+            },
             Err(e) => eprintln!("aiapps: reading {url} failed: {e}"),
         }
     }
@@ -99,6 +104,15 @@ mod tests {
         let mut c = bundled();
         c.apps[0].name = name.into();
         serde_json::to_string(&c).unwrap()
+    }
+
+    #[test]
+    fn accept_requires_200_and_valid_catalog() {
+        use reqwest::StatusCode;
+        let ok = valid("A");
+        assert_eq!(accept(StatusCode::OK, ok.clone()), Some(ok.clone()));
+        assert!(accept(StatusCode::OK, "<html>captive</html>".into()).is_none());
+        assert!(accept(StatusCode::NOT_FOUND, ok).is_none());
     }
 
     #[test]

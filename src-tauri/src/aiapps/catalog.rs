@@ -73,7 +73,7 @@ fn validate_app(a: &CatalogApp) -> Result<(), String> {
     if !a.icon.starts_with("data:image/") || a.icon.len() > MAX_ICON_LEN {
         return Err("icon 须为 data:image/ URI 且不超过 64 KiB".into());
     }
-    if !a.download_url.starts_with("https://") || !a.test_url.starts_with("https://") {
+    if !is_https_url(&a.download_url) || !is_https_url(&a.test_url) {
         return Err("download_url / test_url 须为 https://".into());
     }
     if a.install.is_empty() {
@@ -100,6 +100,10 @@ fn validate_app(a: &CatalogApp) -> Result<(), String> {
     Ok(())
 }
 
+fn is_https_url(s: &str) -> bool {
+    url::Url::parse(s).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some_and(|h| !h.is_empty()))
+}
+
 fn validate_install(s: &InstallSource) -> Result<(), String> {
     match s {
         InstallSource::Store { family, app_id } => {
@@ -111,7 +115,12 @@ fn validate_install(s: &InstallSource) -> Result<(), String> {
         InstallSource::Exe { path } => {
             let rooted = EXE_ROOTS
                 .iter()
-                .any(|r| path.len() > r.len() && path.is_char_boundary(r.len()) && path[..r.len()].eq_ignore_ascii_case(r));
+                .any(|r| {
+                    path.len() > r.len() + 1
+                        && path.is_char_boundary(r.len())
+                        && path[..r.len()].eq_ignore_ascii_case(r)
+                        && path.as_bytes()[r.len()] == b'\\'
+                });
             if !rooted || !path.to_ascii_lowercase().ends_with(".exe") || path.contains("..") {
                 return Err(format!("exe 路径非法: {path}"));
             }
@@ -169,6 +178,10 @@ mod tests {
     fn rejects_http_urls() {
         assert!(parse_catalog(&app_json(&[("download_url", r#""http://x.com""#)])).is_err());
         assert!(parse_catalog(&app_json(&[("test_url", r#""http://x.com""#)])).is_err());
+        assert!(parse_catalog(&app_json(&[("test_url", r#""https://""#)])).is_err());
+        assert!(parse_catalog(&app_json(&[("download_url", r#""https://:443/p""#)])).is_err());
+        assert!(parse_catalog(&app_json(&[("test_url", r#""https://""#)])).is_err());
+        assert!(parse_catalog(&app_json(&[("download_url", r#""https://:443/p""#)])).is_err());
     }
 
     #[test]
@@ -188,6 +201,8 @@ mod tests {
         assert!(bad(r"C:\\Windows\\cmd.exe"));
         assert!(bad(r"%LOCALAPPDATA%\\..\\x.exe"));
         assert!(bad(r"%LOCALAPPDATA%\\x.dll"));
+        assert!(bad(r"%LOCALAPPDATA%x.exe"));
+        assert!(bad(r"%PROGRAMFILES%Foo\\x.exe"));
     }
 
     #[test]
