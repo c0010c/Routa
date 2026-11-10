@@ -15,10 +15,11 @@ function StatusDot({ app, paused }: { app: AiAppView; paused: boolean }) {
   const status = useProcRouteStatus();
   const view = app.rule_id ? status.data?.actions[app.rule_id] : undefined;
   const live = app.enabled && !paused;
-  const color = live && view?.action === "Proxy" ? "success.main" : live && view?.reason ? "error.main" : "action.disabled";
+  const state = live && view?.action === "Proxy" ? "green" : live && view?.reason ? "red" : "gray";
+  const color = { green: "success.main", red: "error.main", gray: "action.disabled" }[state];
   return (
     <Tooltip title={live && view?.reason ? view.reason : ""}>
-      <Box component="span" data-testid="status-dot" sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: color, flexShrink: 0 }} />
+      <Box component="span" data-testid="ai-dot" data-state={state} sx={{ position: "absolute", top: 10, right: 10, width: 8, height: 8, borderRadius: "50%", bgcolor: color }} />
     </Tooltip>
   );
 }
@@ -43,7 +44,7 @@ export function AiAppCard({
   const proxyName = rule ? ruleExit(model, rule)?.name : undefined;
   const delay = useAiAppDelay(app.id, proxyName);
   const cardSx = {
-    p: 2, display: "flex", flexDirection: "column", alignItems: "center", gap: 1,
+    position: "relative", p: 2, display: "flex", flexDirection: "column", alignItems: "center", gap: 1,
     border: 1, borderColor: "divider", borderRadius: 2, bgcolor: "background.paper",
   } as const;
 
@@ -74,10 +75,8 @@ export function AiAppCard({
       <Box sx={{ display: "flex", ...fade }}>
         <img src={app.icon} alt="" width={48} height={48} />
       </Box>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-        <StatusDot app={app} paused={paused} />
-        <Typography variant="subtitle2">{app.name}</Typography>
-      </Box>
+      <StatusDot app={app} paused={paused} />
+      <Typography variant="subtitle2">{app.name}</Typography>
       <Box sx={{ ...fade, display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5 }}>
         <Button size="small" variant="outlined" color="inherit" onClick={() => setPicking(true)} sx={{ textTransform: "none", maxWidth: "100%" }}>
           <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis" }}>

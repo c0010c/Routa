@@ -49,14 +49,14 @@ const app = (over: Partial<AiAppView>): AiAppView => ({
   ...over,
 });
 
-function renderPage(apps: AiAppView[], enabled = true) {
+function renderPage(apps: AiAppView[], enabled = true, actions: Record<string, unknown> = {}) {
   vi.mocked(commands.getModel).mockResolvedValue({
     ...model,
     process_routing: { ...model.process_routing, enabled },
   });
   vi.mocked(commands.aiAppsList).mockResolvedValue(apps);
   vi.mocked(commands.getStatus).mockResolvedValue({ core: "Running", delays: {}, interfaces: [] } as never);
-  vi.mocked(commands.procrouteStatus).mockResolvedValue({ actions: {} } as never);
+  vi.mocked(commands.procrouteStatus).mockResolvedValue({ actions } as never);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -104,5 +104,18 @@ describe("AiAppsPage", () => {
     renderPage([app({})], true);
     fireEvent.click(await screen.findByRole("switch", { name: "进程分流总开关" }));
     await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(false));
+  });
+
+  it("右上角小圆点：生效为绿色，暂停为灰色，失败为红色", async () => {
+    const a = app({ enabled: true, rule_id: "r1", node: { manual_id: "m1" } });
+    const view = renderPage([a], true, { r1: { action: "Proxy", reason: "" } });
+    await waitFor(() => expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "green"));
+    view.unmount();
+    const paused = renderPage([a], false, { r1: { action: "Proxy", reason: "" } });
+    await screen.findByRole("switch", { name: "Claude 代理开关" });
+    expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "gray");
+    paused.unmount();
+    renderPage([a], true, { r1: { action: "Failed", reason: "出错了" } });
+    await waitFor(() => expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "red"));
   });
 });
