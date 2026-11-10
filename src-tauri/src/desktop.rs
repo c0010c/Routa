@@ -1116,11 +1116,19 @@ impl Desktop {
     /// `rules::enable` and waits for the service to confirm; on failure the
     /// whole process routing is restored.
     pub async fn enable_ai_app(&self, rt: &Runtime, app: &CatalogApp, node: NodeRef) -> Result<(), String> {
+        let node_ok = || resolve(&rt.model(), &node).is_some();
+        // Checked first so a stale node fails before any UAC prompt or wait.
+        if !node_ok() {
+            return Err("节点已失效，请重新选择".into());
+        }
         // Outside the lock: a UAC prompt and the waits must not block the
         // proxy monitor or exit. Both are idempotent and touch no Desktop state.
         ensure_core(rt).await?;
         ensure_component().await?;
         let _guard = self.operation.lock().await;
+        if !node_ok() {
+            return Err("节点已失效，请重新选择".into());
+        }
         let mut deleted = vec![];
         apply_confirmed(rt, |pr| deleted = ai_rules::enable(pr, app, node), "AI 应用代理").await?;
         if deleted.is_empty() {
@@ -1299,10 +1307,33 @@ mod tests {
         assert_eq!(elsewhere, expected);
     }
     #[tokio::test]
+    async fn enable_rejects_a_missing_node_and_leaves_routing_unchanged() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = crate::commands::tests::runtime(&td);
+        let dt = Desktop::open(td.path().into()).unwrap();
+        let before = rt.model().process_routing;
+        let err = dt
+            .enable_ai_app(&rt, &ai_app("chatgpt", &["ChatGPT.exe"]), manual_node())
+            .await
+            .unwrap_err();
+        assert_eq!(err, "节点已失效，请重新选择");
+        assert_eq!(rt.model().process_routing, before);
+    }
+    #[tokio::test]
     async fn enable_fails_without_core_and_leaves_routing_unchanged() {
         let td = tempfile::tempdir().unwrap();
         let rt = crate::commands::tests::runtime(&td);
         let dt = Desktop::open(td.path().into()).unwrap();
+        rt.mutate(|m| {
+            m.manual_nodes.push(ManualNode {
+                id: ManualNodeId("n".into()),
+                name: "n".into(),
+                groups: vec![],
+                kind: ManualNodeKind::Proxy { raw: serde_json::json!({"type": "ss", "name": "n"}) },
+            })
+        })
+        .await
+        .unwrap();
         let before = rt.model().process_routing;
         let err = dt
             .enable_ai_app(&rt, &ai_app("chatgpt", &["ChatGPT.exe"]), manual_node())

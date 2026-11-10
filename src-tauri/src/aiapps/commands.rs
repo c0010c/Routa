@@ -120,16 +120,27 @@ pub async fn test_ai_app_delay(
     Ok(rt.test_delay_at(proxy_name, app.test_url).await)
 }
 
+/// "运行中"且代理开关关着时只置前（不启动内核 / 组件，也不要求选好节点）；其余情况先 prepare。
+pub(crate) fn needs_prepare(running: bool, ai_enabled: bool) -> bool {
+    !running || ai_enabled
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn launch_ai_app(apps: Apps<'_>, dt: Dt<'_>, rt: Rt<'_>, app_id: String) -> Result<LaunchOutcome, String> {
     let app = find_app(&apps, &app_id)?;
     let probe = app.clone();
-    let target = tauri::async_runtime::spawn_blocking(move || detect::detect(&probe))
-        .await
-        .map_err(|e| format!("检测安装失败：{e}"))?
-        .ok_or("未安装")?;
-    dt.prepare_ai_app(&rt, &app_id).await?;
+    let (target, running) = tauri::async_runtime::spawn_blocking(move || {
+        let procs = crate::procroute::processes::running_processes();
+        (detect::detect(&probe), detect::running(&probe, &procs))
+    })
+    .await
+    .map_err(|e| format!("检测安装失败：{e}"))?;
+    let target = target.ok_or("未安装")?;
+    let ai_enabled = rules::ai_rule(&rt.model().process_routing, &app_id).is_some_and(|r| r.user_enabled);
+    if needs_prepare(running, ai_enabled) {
+        dt.prepare_ai_app(&rt, &app_id).await?;
+    }
     tauri::async_runtime::spawn_blocking(move || super::launch::focus_or_launch(&app, &target))
         .await
         .map_err(|e| format!("启动失败：{e}"))?
@@ -140,8 +151,10 @@ pub async fn launch_ai_app(apps: Apps<'_>, dt: Dt<'_>, rt: Rt<'_>, app_id: Strin
 #[specta::specta]
 pub fn open_ai_app_download(apps: Apps<'_>, app_id: String) -> Result<(), String> {
     let app = find_app(&apps, &app_id)?;
+    // 列表校验已拒绝会被 explorer 误读的字符；这里再交出规范化后的 URL。
+    let url = url::Url::parse(&app.download_url).map_err(|e| format!("下载地址无效: {e}"))?;
     std::process::Command::new("explorer.exe")
-        .arg(&app.download_url)
+        .arg(url.as_str())
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("无法打开浏览器: {e}"))
@@ -197,6 +210,14 @@ mod tests {
         assert!(!none.enabled && !none.installed);
         assert_eq!(none.rule_id, None);
         assert_eq!(none.node, None);
+    }
+
+    #[test]
+    fn running_app_with_switch_off_is_only_focused() {
+        assert!(!needs_prepare(true, false));
+        assert!(needs_prepare(true, true));
+        assert!(needs_prepare(false, false));
+        assert!(needs_prepare(false, true));
     }
 
     #[test]
