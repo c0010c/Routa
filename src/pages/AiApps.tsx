@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Box, Stack, Switch, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { useQueryClient } from "@tanstack/react-query";
@@ -18,6 +18,8 @@ import { NodePickerDialog } from "../components/NodePickerDialog";
  */
 function useAiAppFlow() {
   const qc = useQueryClient();
+  // With the master switch off nothing reaches the service, so no connection gets reset.
+  const paused = !useModel().data?.process_routing.enabled;
   const apply = useApplyResult();
   const prefs = useDesktopState().data?.preferences;
   const savePrefs = useDesktopMutation(desktopApi.preferences);
@@ -29,6 +31,9 @@ function useAiAppFlow() {
   // Nodes chosen for apps that have no rule yet; used when the app is first enabled.
   const [picked, setPicked] = useState<Record<string, NodeRef>>({});
   const [dialog, setDialog] = useState<ReactNode>(null);
+  // Apps with a running flow: the ref guards re-entry at once, the state drives the card.
+  const inFlight = useRef(new Set<string>());
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
 
   const ask = <T,>(render: (done: (v: T) => void) => ReactNode) =>
     new Promise<T>((resolve) =>
@@ -41,13 +46,18 @@ function useAiAppFlow() {
     );
   const nodeOf = (app: AiAppView) => app.node ?? picked[app.id] ?? null;
   const fail = (e: unknown) => apply.showError(isValidationError(e) ? validationText(e.errors) : errorMessage(e));
-  /** Runs a flow; a thrown backend error is reported and ends the flow. */
-  const guarded = async (run: () => Promise<void>) => {
+  /** Runs one flow per app at a time; a thrown backend error is reported and ends the flow. */
+  const guarded = async (app: AiAppView, run: () => Promise<void>) => {
+    if (inFlight.current.has(app.id)) return;
+    inFlight.current.add(app.id);
+    setBusy(new Set(inFlight.current));
     try {
       await run();
     } catch (e) {
       fail(e);
     } finally {
+      inFlight.current.delete(app.id);
+      setBusy(new Set(inFlight.current));
       void qc.invalidateQueries({ queryKey: ["aiApps"] });
     }
   };
@@ -88,25 +98,27 @@ function useAiAppFlow() {
 
   return {
     nodeOf,
+    isBusy: (app: AiAppView) => busy.has(app.id),
     dialogs: dialog,
     toggle: (app: AiAppView, on: boolean) =>
-      guarded(async () => {
+      guarded(app, async () => {
         if (on) {
           await enableFlow(app);
-        } else if (!app.running || (await confirmReset(app))) {
+        } else if (paused || !app.running || (await confirmReset(app))) {
           await disable.mutateAsync(app.id);
         }
       }),
+    /** "运行中" only brings the window to front, whatever the switch says. */
     launch: (app: AiAppView) =>
-      guarded(async () => {
-        if (!app.enabled && !(await enableFlow(app))) return;
+      guarded(app, async () => {
+        if (!app.running && !app.enabled && !(await enableFlow(app))) return;
         await launchApp.mutateAsync(app.id);
       }),
     changeNode: async (app: AiAppView, node: NodeRef) => {
       const ruleId = app.rule_id;
       if (!ruleId) return setPicked((p) => ({ ...p, [app.id]: node }));
-      await guarded(async () => {
-        if (app.enabled && app.running && !(await confirmReset(app))) return;
+      await guarded(app, async () => {
+        if (!paused && app.enabled && app.running && !(await confirmReset(app))) return;
         await changeRuleNode.mutateAsync([ruleId, node]);
       });
     },
@@ -139,6 +151,7 @@ export function AiAppsPage() {
             app={{ ...app, node: flow.nodeOf(app) }}
             model={model}
             paused={!on}
+            busy={flow.isBusy(app)}
             onToggle={(v) => void flow.toggle(app, v)}
             onLaunch={() => void flow.launch(app)}
             onPickNode={(n) => void flow.changeNode(app, n)}

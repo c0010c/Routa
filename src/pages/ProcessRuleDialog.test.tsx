@@ -214,6 +214,8 @@ describe("ProcessRuleDialog", () => {
     expect(screen.getByRole("switch", { name: "规则变化时断开旧连接" })).not.toBeChecked();
     expect(screen.queryByText(/仅对 IPv4 TCP 连接有效/)).not.toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "阻断" })).toBeChecked();
+    fireEvent.mouseOver(screen.getByText("规则变化时断开旧连接").querySelector("svg")!);
+    expect(await screen.findByText("仅对 IPv4 TCP 连接有效；换节点、停用或删除规则时也会断开。")).toBeInTheDocument();
   });
 
   it("maps duplicate error to the process field", async () => {

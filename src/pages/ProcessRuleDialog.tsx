@@ -36,7 +36,7 @@ export const FAULT_HELP =
   "Routa 退出或尚未运行、mihomo 内核启动或被停止、内核或分流组件出故障时生效；节点失效、网卡断开时，始终阻断。\n\n" +
   "选阻断后，按进程名匹配的程序也会被阻断。程序联网时会自动记录它的位置，分流服务停止后，系统防火墙按这些位置继续阻断；还没联网过的位置除外。\n\n" +
   "其他规则用路径指定的位置不会被记录，也不会被这条规则阻断。";
-export const RESET_HINT = "仅对 IPv4 TCP 连接有效；更换代理目标不触发断开。";
+export const RESET_HINT = "仅对 IPv4 TCP 连接有效；换节点、停用或删除规则时也会断开。";
 
 interface RuleErrors {
   processes?: string;

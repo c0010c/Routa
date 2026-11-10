@@ -93,6 +93,7 @@ describe("AiAppsPage", () => {
     vi.mocked(commands.enableAiApp).mockResolvedValue(ok({ NotRunning: null }) as never);
     vi.mocked(commands.disableAiApp).mockResolvedValue(ok({ NotRunning: null }) as never);
     vi.mocked(commands.launchAiApp).mockResolvedValue(ok("Launched"));
+    vi.mocked(commands.openAiAppDownload).mockResolvedValue(ok(null));
   });
 
   it("在进程分流上方显示 AI 应用菜单", () => {
@@ -142,6 +143,62 @@ describe("AiAppsPage", () => {
     paused.unmount();
     renderPage([a], true, { r1: { action: "Failed", reason: "出错了" } });
     await waitFor(() => expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "red"));
+  });
+
+  it("等待服务确认时小圆点为灰色", async () => {
+    const a = app({ enabled: true, rule_id: "r1", node: { manual_id: "m1" } });
+    renderPage([a], true, { r1: { action: "Pending", reason: "等待服务确认当前设置" } });
+    await waitFor(() => expect(commands.procrouteStatus).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "gray");
+  });
+
+  it("打开下载页失败时显示错误文字", async () => {
+    vi.mocked(commands.openAiAppDownload).mockResolvedValue({ status: "error", error: "无法打开浏览器: x" });
+    renderPage([app({ installed: false })]);
+    fireEvent.click(await screen.findByText("未安装 · 下载"));
+    expect(await screen.findByText("无法打开浏览器: x")).toBeInTheDocument();
+  });
+
+  it("运行中：开关关着也只调用 launchAiApp，不走开启流程", async () => {
+    renderPage([app({ running: true })]);
+    fireEvent.click(await screen.findByRole("button", { name: "运行中" }));
+    await waitFor(() => expect(commands.launchAiApp).toHaveBeenCalledWith("claude"));
+    expect(commands.aiAppConflicts).not.toHaveBeenCalled();
+    expect(commands.enableAiApp).not.toHaveBeenCalled();
+    expect(screen.queryByRole("radio", { name: /东京/ })).toBeNull();
+  });
+
+  it("流程进行中禁用该卡片的开关、节点和主按钮，重复点击不会再启动一次", async () => {
+    let finish!: () => void;
+    vi.mocked(commands.launchAiApp).mockReturnValue(
+      new Promise((r) => {
+        finish = () => r(ok("Launched"));
+      }),
+    );
+    renderPage([app({ rule_id: "r1", node: tokyo, enabled: true })]);
+    const main = await screen.findByRole("button", { name: "启动" });
+    fireEvent.click(main);
+    await waitFor(() => expect(main).toBeDisabled());
+    fireEvent.click(main);
+    expect(screen.getByRole("switch", { name: "Claude 代理开关" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "东京" })).toBeDisabled();
+    expect(commands.launchAiApp).toHaveBeenCalledTimes(1);
+    finish();
+    await waitFor(() => expect(main).toBeEnabled());
+    expect(commands.launchAiApp).toHaveBeenCalledTimes(1);
+  });
+
+  it("总开关关闭时关开关、换节点都不弹断开框", async () => {
+    renderPage([app({ rule_id: "r1", node: tokyo, enabled: true, running: true })], false);
+    fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
+    await waitFor(() => expect(commands.disableAiApp).toHaveBeenCalledWith("claude"));
+    fireEvent.click(screen.getByText("东京"));
+    await pickTokyo();
+    await waitFor(() =>
+      expect(invoked.find((c) => c.command === "change_process_node")?.args).toEqual({ id: "r1", node: tokyo }),
+    );
+    expect(screen.queryByText("断开 Claude 的现有连接")).toBeNull();
   });
 
   it("首次开启先选节点，取消则不调用 enableAiApp", async () => {
