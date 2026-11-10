@@ -193,6 +193,13 @@ fn specta_builder() -> Builder<tauri::Wry> {
             desktop::save_process_rule_confirmed,
             desktop::get_connection_details,
             desktop::read_core_log,
+            desktop::enable_ai_app,
+            desktop::disable_ai_app,
+            aiapps::commands::ai_apps_list,
+            aiapps::commands::ai_app_conflicts,
+            aiapps::commands::test_ai_app_delay,
+            aiapps::commands::launch_ai_app,
+            aiapps::commands::open_ai_app_download,
             updater::update_status,
             updater::update_check,
             updater::update_install,
@@ -257,10 +264,12 @@ pub fn run() {
             }
             let desktop = Arc::new(desktop::Desktop::open(data_dir.clone()).map_err(std::io::Error::other)?);
             let updater = Arc::new(updater::Updater::new(app.handle().clone(), data_dir.clone()));
+            let ai_apps = Arc::new(aiapps::AiApps::new(data_dir.join("ai-apps.json")));
             let rt = build_runtime(app.handle(), data_dir)?;
             app.manage(desktop.clone());
             app.manage(rt.clone());
             app.manage(updater.clone());
+            app.manage(ai_apps.clone());
             tray::setup(app.handle())?;
             #[cfg(windows)]
             if let Some(status) = taskbar_status::spawn(app.handle(), rt.clone(), desktop.clone()) {
@@ -280,6 +289,12 @@ pub fn run() {
                 if let Err(e) = desktop.initialize(&rt).await {
                     eprintln!("default proxy initialization: {e}");
                 }
+                aiapps::commands::sync_rules(&rt, &ai_apps.catalog()).await;
+                let sync_rt = rt.clone();
+                aiapps::fetch::spawn_refresh(ai_apps, move |catalog| {
+                    let (rt, catalog) = (sync_rt.clone(), catalog.clone());
+                    tauri::async_runtime::spawn(async move { aiapps::commands::sync_rules(&rt, &catalog).await });
+                });
                 match rt.start().await {
                     Ok(()) => eprintln!("runtime: started"),
                     Err(e) => eprintln!("runtime: start failed: {e}"),
@@ -312,6 +327,12 @@ pub fn run() {
                     if let Err(e) = result {
                         eprintln!("auto connect: {e}");
                     }
+                }
+                // Enabled AI apps need the core whatever auto connect says.
+                if desktop::ai_needs_core(&rt.model())
+                    && matches!(rt.status().core, crate::core::process::CoreState::Stopped)
+                {
+                    rt.restart_core().await;
                 }
             });
             Ok(())

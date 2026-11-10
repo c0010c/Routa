@@ -1470,6 +1470,24 @@ impl Runtime {
         self.inner.test_delays(names).await
     }
 
+    /// Tests `name` against `url` (instead of the delay test URL). Not
+    /// recorded in `status().delays`.
+    pub async fn test_delay_at(&self, name: String, url: String) -> DelayResult {
+        // After any in-flight apply, like `test_delays`.
+        let api = {
+            let _eng = self.inner.engine.lock().await;
+            self.inner.live.lock().unwrap().api.clone()
+        };
+        let Some(api) = api.filter(|_| !self.inner.is_shut_down()) else {
+            return DelayResult::failed(DelayError::NoCore, now_unix());
+        };
+        test_many(api.as_ref(), &[name], &url, 1, DEFAULT_TIMEOUT_MS)
+            .await
+            .pop()
+            .map(|(_, r)| r)
+            .unwrap_or_else(|| DelayResult::failed(DelayError::Other("no result".into()), now_unix()))
+    }
+
     /// Nodes the listeners and process rules use now: the default monitor members.
     pub fn monitor_in_use_nodes(&self) -> crate::monitor::InUseNodes {
         crate::monitor::in_use_nodes(&self.inner.model.lock().unwrap())

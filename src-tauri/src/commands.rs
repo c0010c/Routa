@@ -741,7 +741,7 @@ mod project_link_tests {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::io;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
@@ -772,7 +772,7 @@ mod tests {
         }
     }
 
-    fn runtime(td: &tempfile::TempDir) -> Runtime {
+    pub(crate) fn runtime(td: &tempfile::TempDir) -> Runtime {
         let store = Store::open(td.path().join("data")).unwrap();
         let launcher_for: LauncherFor = Arc::new(|_s: &Settings| Arc::new(NoLauncher) as Arc<dyn CoreLauncher>);
         let api_for: ApiFor = Box::new(|_, _| Arc::new(FakeApi::new()) as Arc<dyn MihomoApi>);

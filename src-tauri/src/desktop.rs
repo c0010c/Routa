@@ -1,6 +1,7 @@
 //! Persisted presentation preferences and the single explicitly managed proxy.
 use crate::{
-    core::apply::ApplyOutcome,
+    aiapps::{rules as ai_rules, AiApps, CatalogApp},
+    core::{apply::ApplyOutcome, process::CoreState},
     model::*,
     runtime::Runtime,
     store::{read_json, write_json_atomic},
@@ -64,6 +65,8 @@ pub struct UiPreferences {
     pub managed_rules: Vec<ProcessRuleId>,
     pub selected_apps: Vec<ProcessRuleId>,
     pub taskbar_status: TaskbarStatusPrefs,
+    /// The AI apps page no longer asks before resetting an app's connections.
+    pub skip_ai_reset_prompt: bool,
 }
 #[derive(Clone, Debug, Serialize, specta::Type)]
 pub struct DesktopState {
@@ -280,6 +283,7 @@ impl Desktop {
         p.auto_connect = input.auto_connect;
         p.close_to_tray = input.close_to_tray;
         p.taskbar_status = input.taskbar_status;
+        p.skip_ai_reset_prompt = input.skip_ai_reset_prompt;
         if self.active.lock().unwrap().is_none() {
             p.capture_mode = input.capture_mode;
         }
@@ -1015,6 +1019,149 @@ impl Desktop {
     }
 }
 
+/// How long the AI apps page waits for the core / the component to come up.
+const CORE_WAIT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(10) };
+const COMPONENT_WAIT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(10) };
+/// Same bound as `confirm_or_revert`.
+const CONFIRM_WAIT: Duration = Duration::from_secs(5);
+
+/// Polls `ready` every 100 ms until it holds or `timeout` passes.
+async fn wait_until(timeout: Duration, ready: impl Fn() -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if ready() {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Undoes a whole-routing change, unless something else changed it since.
+pub(crate) fn revert_to(before: ProcessRouting, after: ProcessRouting) -> impl FnOnce(&mut ProcessRouting) {
+    move |pr| {
+        if *pr == after {
+            *pr = before;
+        }
+    }
+}
+
+/// Simple-mode ids of rules that enabling an AI app deleted.
+fn prune_simple_ids(prefs: &mut UiPreferences, deleted: &[ProcessRuleId]) {
+    prefs.managed_rules.retain(|id| !deleted.contains(id));
+    prefs.selected_apps.retain(|id| !deleted.contains(id));
+}
+
+/// At startup, an enabled AI app needs the core even without auto connect.
+pub(crate) fn ai_needs_core(model: &Model) -> bool {
+    model.process_routing.enabled
+        && model
+            .process_routing
+            .rules
+            .iter()
+            .any(|r| r.ai_app.is_some() && r.user_enabled)
+}
+
+async fn ensure_core(rt: &Runtime) -> Result<(), String> {
+    if matches!(rt.status().core, CoreState::Stopped | CoreState::Crashed { .. }) {
+        rt.restart_core().await;
+    }
+    if wait_until(CORE_WAIT, || matches!(rt.status().core, CoreState::Running)).await {
+        Ok(())
+    } else {
+        Err("内核未能启动，请查看日志".into())
+    }
+}
+
+async fn ensure_component() -> Result<(), String> {
+    use crate::procroute::client::{self, ComponentState};
+    match client::status().component {
+        ComponentState::Running => return Ok(()),
+        ComponentState::NotInstalled | ComponentState::NeedsUpdate => {
+            crate::procroute::service_command(crate::procroute::elevate::ElevatedCmd::Install).await?
+        }
+        ComponentState::Stopped => client::retry().await?,
+        ComponentState::OwnedByOtherUser => {
+            return Err("应用分流组件被其他 Windows 用户占用，请在该用户下卸载后重试".into())
+        }
+        ComponentState::Error { message } => return Err(format!("应用分流组件出错：{message}")),
+    }
+    if wait_until(COMPONENT_WAIT, procroute_running).await {
+        Ok(())
+    } else {
+        Err("应用分流组件未能启动，请在进程分流页查看组件状态".into())
+    }
+}
+
+/// Commits `f` to the process routing; a failed reload or (while the
+/// component runs) a missing confirmation restores the whole routing.
+async fn apply_confirmed(rt: &Runtime, f: impl FnOnce(&mut ProcessRouting), failed: &str) -> Result<(), String> {
+    let before = rt.model().process_routing.clone();
+    let outcome = rt.mutate_process_routing(f).await.map_err(validation)?;
+    let revert = revert_to(before, rt.model().process_routing.clone());
+    if let Err(e) = reload_ok(&outcome) {
+        let _ = rt.mutate_process_routing(revert).await;
+        return Err(e);
+    }
+    if procroute_running() && !confirm_or_revert(rt, revert).await? {
+        return Err(format!("{failed}未能确认生效，已恢复原状态，请检查组件状态后重试"));
+    }
+    Ok(())
+}
+
+impl Desktop {
+    /// Makes sure the core runs and the component is Running, then applies
+    /// `rules::enable` and waits for the service to confirm; on failure the
+    /// whole process routing is restored.
+    pub async fn enable_ai_app(&self, rt: &Runtime, app: &CatalogApp, node: NodeRef) -> Result<(), String> {
+        let _guard = self.operation.lock().await;
+        ensure_core(rt).await?;
+        ensure_component().await?;
+        let mut deleted = vec![];
+        apply_confirmed(rt, |pr| deleted = ai_rules::enable(pr, app, node), "AI 应用代理").await?;
+        if deleted.is_empty() {
+            return Ok(());
+        }
+        let mut p = self.prefs();
+        prune_simple_ids(&mut p, &deleted);
+        self.persist(p).map(|_| ())
+    }
+
+    /// `rules::disable`, then waits for the service to confirm; on failure restores.
+    pub async fn disable_ai_app(&self, rt: &Runtime, app_id: &str) -> Result<(), String> {
+        let _guard = self.operation.lock().await;
+        if ai_rules::ai_rule(&rt.model().process_routing, app_id).is_none() {
+            return Ok(());
+        }
+        apply_confirmed(rt, |pr| ai_rules::disable(pr, app_id), "AI 应用停用").await
+    }
+
+    /// Before "启动": the core, the component and the process routing switch.
+    /// The app's AI rule must already be enabled.
+    pub async fn prepare_ai_app(&self, rt: &Runtime, app_id: &str) -> Result<(), String> {
+        let _guard = self.operation.lock().await;
+        if !ai_rules::ai_rule(&rt.model().process_routing, app_id).is_some_and(|r| r.user_enabled) {
+            return Err("请先选择节点".into());
+        }
+        ensure_core(rt).await?;
+        let component_was_running = procroute_running();
+        ensure_component().await?;
+        if !rt.model().process_routing.enabled {
+            return apply_confirmed(rt, |pr| pr.enabled = true, "进程分流总开关").await;
+        }
+        // A component that just came up must pick up the rules before the app connects.
+        if !component_was_running {
+            crate::procroute::client::runtime_changed();
+            if !wait_until(CONFIRM_WAIT, || crate::procroute::client::current_rules_confirmed(rt)).await {
+                return Err("应用规则未确认生效，请检查组件状态后重试".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn change_process_node(dt: Dt<'_>, rt: Rt<'_>, id: ProcessRuleId, node: NodeRef) -> Result<(), String> {
@@ -1035,6 +1182,25 @@ pub async fn save_process_rule_confirmed(
 #[specta::specta]
 pub async fn set_process_rule_enabled(dt: Dt<'_>, rt: Rt<'_>, id: ProcessRuleId, enabled: bool) -> Result<(), String> {
     dt.set_process_rule_enabled(&rt, id, enabled).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn enable_ai_app(
+    apps: tauri::State<'_, Arc<AiApps>>,
+    dt: Dt<'_>,
+    rt: Rt<'_>,
+    app_id: String,
+    node: NodeRef,
+) -> Result<(), String> {
+    let app = crate::aiapps::commands::find_app(&apps, &app_id)?;
+    dt.enable_ai_app(&rt, &app, node).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn disable_ai_app(dt: Dt<'_>, rt: Rt<'_>, app_id: String) -> Result<(), String> {
+    dt.disable_ai_app(&rt, &app_id).await
 }
 
 #[cfg(test)]
@@ -1087,6 +1253,99 @@ mod tests {
         let dt = Desktop::open(td.path().into()).unwrap();
         assert!(!dt.taskbar_status().enabled);
         assert_eq!(dt.taskbar_status().mode, TaskbarStatusMode::Fixed(ListenerId("l1".into())));
+    }
+    fn ai_app(id: &str, procs: &[&str]) -> CatalogApp {
+        CatalogApp {
+            id: id.into(),
+            name: id.to_uppercase(),
+            icon: String::new(),
+            download_url: String::new(),
+            test_url: String::new(),
+            on_fault: FaultPolicy::Block,
+            install: vec![],
+            processes: procs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+    fn manual_node() -> NodeRef {
+        NodeRef::Manual { manual_id: ManualNodeId("n".into()) }
+    }
+    #[test]
+    fn enable_reverts_whole_routing_on_failure() {
+        let before = ProcessRouting {
+            rules: vec![ProcessRule {
+                id: ProcessRuleId("manual".into()),
+                processes: vec![ProcessEntry::name("ChatGPT.exe"), ProcessEntry::name("notepad.exe")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut after = before.clone();
+        crate::aiapps::rules::enable(&mut after, &ai_app("chatgpt", &["ChatGPT.exe"]), manual_node());
+        let mut pr = after.clone();
+        revert_to(before.clone(), after.clone())(&mut pr);
+        assert_eq!(pr, before);
+        assert!(crate::aiapps::rules::ai_rule(&pr, "chatgpt").is_none());
+        assert_eq!(pr.rules[0].processes.len(), 2);
+        // Changed elsewhere since: left alone.
+        let mut elsewhere = after.clone();
+        elsewhere.exit_prompt = !elsewhere.exit_prompt;
+        let expected = elsewhere.clone();
+        revert_to(before, after)(&mut elsewhere);
+        assert_eq!(elsewhere, expected);
+    }
+    #[tokio::test]
+    async fn enable_fails_without_core_and_leaves_routing_unchanged() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = crate::commands::tests::runtime(&td);
+        let dt = Desktop::open(td.path().into()).unwrap();
+        let before = rt.model().process_routing;
+        let err = dt
+            .enable_ai_app(&rt, &ai_app("chatgpt", &["ChatGPT.exe"]), manual_node())
+            .await
+            .unwrap_err();
+        assert_eq!(err, "内核未能启动，请查看日志");
+        assert_eq!(rt.model().process_routing, before);
+    }
+    #[test]
+    fn prune_simple_ids_removes_deleted_rules() {
+        let (a, b) = (ProcessRuleId("a".into()), ProcessRuleId("b".into()));
+        let mut p = UiPreferences {
+            managed_rules: vec![a.clone(), b.clone()],
+            selected_apps: vec![a.clone(), b.clone()],
+            ..Default::default()
+        };
+        prune_simple_ids(&mut p, std::slice::from_ref(&a));
+        assert_eq!(p.managed_rules, vec![b.clone()]);
+        assert_eq!(p.selected_apps, vec![b]);
+    }
+    #[test]
+    fn startup_core_needed_only_for_enabled_ai_rules() {
+        let rule = |ai: bool, enabled: bool| ProcessRule {
+            ai_app: ai.then(|| "chatgpt".to_string()),
+            user_enabled: enabled,
+            processes: vec![ProcessEntry::name("ChatGPT.exe")],
+            ..Default::default()
+        };
+        let model = |on: bool, r: ProcessRule| {
+            let mut m = Model::default();
+            m.process_routing.enabled = on;
+            m.process_routing.rules = vec![r];
+            m
+        };
+        assert!(ai_needs_core(&model(true, rule(true, true))));
+        assert!(!ai_needs_core(&model(false, rule(true, true))));
+        assert!(!ai_needs_core(&model(true, rule(true, false))));
+        assert!(!ai_needs_core(&model(true, rule(false, true))));
+        assert!(!ai_needs_core(&Model::default()));
+    }
+    #[tokio::test]
+    async fn ai_reset_prompt_preference_is_saved() {
+        let td = tempfile::tempdir().unwrap();
+        let dt = Desktop::open(td.path().into()).unwrap();
+        let p = UiPreferences { skip_ai_reset_prompt: true, ..dt.prefs() };
+        dt.save_preferences(p).await.unwrap();
+        let dt = Desktop::open(td.path().into()).unwrap();
+        assert!(dt.prefs().skip_ai_reset_prompt);
     }
     #[test]
     fn new_install_asks_once_and_saves_mode() {

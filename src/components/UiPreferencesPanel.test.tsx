@@ -10,7 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const preferences: UiPreferences = {
   mode: "Full", listener_id: null, exit_id: null, system_listener_id: null,
   capture_mode: "System", auto_connect: false, close_to_tray: true,
-  managed_rules: [], selected_apps: [],
+  managed_rules: [], selected_apps: [], skip_ai_reset_prompt: false,
   taskbar_status: { enabled: true, mode: "Rotate", traffic: "Values" },
 };
 const model = { listeners: [

@@ -764,6 +764,25 @@ async fn delay_test_records_results() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn delay_at_uses_given_url_and_is_not_recorded() {
+    let mut m = model_with_listener(false);
+    m.settings.delay_test_interval_mins = None;
+    let h = harness(&m);
+    assert_eq!(
+        h.rt.test_delay_at("x".into(), "https://chatgpt.com".into()).await.error,
+        Some(DelayError::NoCore)
+    );
+    h.api.set_delay("x", Ok(42));
+    h.rt.start().await.unwrap();
+    let r = h.rt.test_delay_at("x".into(), "https://chatgpt.com".into()).await;
+    assert_eq!(r.ms, Some(42));
+    let calls = h.api.delay_calls.lock().unwrap().clone();
+    assert_eq!(calls.last().unwrap().1, "https://chatgpt.com");
+    assert!(h.rt.status().delays.get("x").is_none());
+    h.rt.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn delay_results_follow_node_selection_and_nic_but_not_listener_metadata() {
     let mut m = model_with_listener(false);
     m.manual_nodes = [("node-a", "甲"), ("node-b", "乙")].iter().map(|(id, name)| ManualNode {

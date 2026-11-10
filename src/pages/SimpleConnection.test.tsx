@@ -46,7 +46,7 @@ beforeEach(() => {
     preferences: {
       mode: "Simple", listener_id: "l1", exit_id: "e1", system_listener_id: null, capture_mode: "System",
       auto_connect: false, close_to_tray: true, taskbar_status: { enabled: false, mode: "Rotate", traffic: "Values" },
-      managed_rules: [], selected_apps: [],
+      managed_rules: [], selected_apps: [], skip_ai_reset_prompt: false,
     },
     connection: null, requested: null, error: null, is_admin: false, system_listener_id: null, taskbar_status_supported: true,
   };

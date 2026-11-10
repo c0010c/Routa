@@ -483,6 +483,66 @@ async readCoreLog() : Promise<Result<string, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async enableAiApp(appId: string, node: NodeRef) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("enable_ai_app", { appId, node }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async disableAiApp(appId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("disable_ai_app", { appId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 状态参数取自 `app`，命令不借用参数，返回值不必包一层 Result。
+ */
+async aiAppsList() : Promise<AiAppView[]> {
+    return await TAURI_INVOKE("ai_apps_list");
+},
+async aiAppConflicts(appId: string) : Promise<Result<AiAppConflict[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ai_app_conflicts", { appId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 用该应用列表里的 test_url 测 `proxy_name` 的延迟（不记入延迟表）。
+ */
+async testAiAppDelay(appId: string, proxyName: string) : Promise<Result<DelayResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("test_ai_app_delay", { appId, proxyName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async launchAiApp(appId: string) : Promise<Result<LaunchOutcome, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launch_ai_app", { appId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 打开列表里该应用的下载页；不接受前端传入的 URL。
+ */
+async openAiAppDownload(appId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_ai_app_download", { appId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async updateStatus() : Promise<UpdateView> {
     return await TAURI_INVOKE("update_status");
 },
@@ -530,6 +590,8 @@ async relaunchAsAdmin(connectTun: boolean) : Promise<Result<null, string>> {
 
 /** user-defined types **/
 
+export type AiAppConflict = { rule_id: ProcessRuleId; rule_name: string; process: string; removes_rule: boolean }
+export type AiAppView = { id: string; name: string; icon: string; download_url: string; installed: boolean; running: boolean; rule_id: ProcessRuleId | null; enabled: boolean; node: NodeRef | null }
 export type ApplyOutcome = { Reloaded: { cut: number; 
 /**
  * Affected connections that could not be closed even after a retry.
@@ -661,6 +723,7 @@ export type InterfaceGuid = string
 export type InterfaceMode = "Simple" | "Full"
 export type InterruptionView = { at_unix: number; reason: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
+export type LaunchOutcome = "Launched" | "Focused"
 export type Listener = { id: ListenerId; name: string; listener_type: ListenerType; listen: string; port: number; auth: Auth | null; exit: ExitId | null; user_enabled: boolean; routing?: ListenerRouting | null; hidden?: boolean }
 export type ListenerId = string
 /**
@@ -806,7 +869,11 @@ node?: NodeRef | null;
 /**
  * 出站网卡（仅 `node` 模式使用）。
  */
-interface?: InterfaceGuid | null; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean; ai_app: string | null }
+interface?: InterfaceGuid | null; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean; 
+/**
+ * 由「AI 应用」页管理的规则所属的应用 id；进程分流页与简洁版不显示、不可编辑。
+ */
+ai_app?: string | null }
 export type ProcessRuleId = string
 /**
  * A project page linked from Settings → About; the URLs live here so the
@@ -928,7 +995,11 @@ per_listener_rate: Partial<{ [key in ListenerId]: Rate }>;
  */
 tun_rate: Rate; totals: TrafficTotals }
 export type TrafficTotals = { total: Bytes; per_listener: Partial<{ [key in ListenerId]: Bytes }> }
-export type UiPreferences = { mode: InterfaceMode | null; listener_id: ListenerId | null; exit_id: ExitId | null; system_listener_id: ListenerId | null; capture_mode: CaptureMode; auto_connect: boolean; close_to_tray: boolean; managed_rules: ProcessRuleId[]; selected_apps: ProcessRuleId[]; taskbar_status: TaskbarStatusPrefs }
+export type UiPreferences = { mode: InterfaceMode | null; listener_id: ListenerId | null; exit_id: ExitId | null; system_listener_id: ListenerId | null; capture_mode: CaptureMode; auto_connect: boolean; close_to_tray: boolean; managed_rules: ProcessRuleId[]; selected_apps: ProcessRuleId[]; taskbar_status: TaskbarStatusPrefs; 
+/**
+ * The AI apps page no longer asks before resetting an app's connections.
+ */
+skip_ai_reset_prompt: boolean }
 export type UpdateState = 
 /**
  * Not an NSIS install (dev build or unpacked exe): no updates.
@@ -955,7 +1026,11 @@ export type ValidationError = { DuplicateName: { kind: string; name: string } } 
 /**
  * 已启用规则里走代理的「节点 + 生效网卡」组合数超过上限。
  */
-{ TooManyProcessRules: { max: number } } | { EmptyProcessRule: { rule: string } } | { AiAppProcess: { exe_path: string; app: string } }
+{ TooManyProcessRules: { max: number } } | { EmptyProcessRule: { rule: string } } | 
+/**
+ * 手动规则里的进程已由 AI 应用管理；`app` 是 AI 规则的名称（应用显示名）。
+ */
+{ AiAppProcess: { exe_path: string; app: string } }
 
 /** tauri-specta globals **/
 

@@ -114,6 +114,7 @@ const initialDesktop: DesktopState = {
     taskbar_status: { enabled: true, mode: "Rotate", traffic: "Values" },
     managed_rules: [],
     selected_apps: [],
+    skip_ai_reset_prompt: false,
   },
   connection: null,
   requested: null,
