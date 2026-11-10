@@ -27,7 +27,7 @@ import { InterfacePicker } from "../components/InterfacePicker";
 import { LearnedLocations } from "../components/LearnedLocations";
 import { NodePickerDialog } from "../components/NodePickerDialog";
 import { ProcessEntriesField, type ProcessEntriesHandle } from "../components/ProcessEntriesField";
-import { fileName, newlyLearning, ruleLabel, skippedOf } from "../lib/processRule";
+import { fileName, isAiRule, newlyLearning, ruleLabel, skippedOf } from "../lib/processRule";
 import { isTailscaleRef, nodeLabel } from "../lib/refs";
 import { fieldErrors } from "../lib/validation";
 
@@ -98,7 +98,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
   const removeLearned = useRemoveLearnedPath();
   const notify = useApplyResult();
   const m = model.data;
-  const rules = m?.process_routing.rules ?? [];
+  const rules = (m?.process_routing.rules ?? []).filter((x) => !isAiRule(x));
   const routingEnabled = m?.process_routing.enabled ?? false;
   const others = rules.filter((x) => x.id !== rule?.id);
   // Mirrors `ProcessRule::default`.
@@ -114,6 +114,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
         on_fault: "Direct",
         reset_on_change: false,
         user_enabled: true,
+        ai_app: null,
       },
   );
   const [errs, setErrs] = useState<RuleErrors>({ form: [] });

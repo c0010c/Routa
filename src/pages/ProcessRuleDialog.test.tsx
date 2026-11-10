@@ -48,6 +48,7 @@ const rule: ProcessRule = {
   on_fault: "Block",
   reset_on_change: false,
   user_enabled: true,
+  ai_app: null,
 };
 
 const canaryRule: ProcessRule = {

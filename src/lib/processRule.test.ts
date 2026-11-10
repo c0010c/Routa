@@ -26,6 +26,7 @@ const rule = (over: Partial<ProcessRule>): ProcessRule => ({
   reset_on_change: false,
   learned: [],
   user_enabled: true,
+  ai_app: null,
   ...over,
 });
 

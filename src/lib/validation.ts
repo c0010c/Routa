@@ -30,6 +30,8 @@ export function fieldErrors(errors: ValidationError[]): FieldErrors {
       out.form.push(`「${e.InvalidExePath.exe_path}」无效：${e.InvalidExePath.reason}`);
     } else if ("EmptyProcessRule" in e) {
       out.form.push("至少添加一个进程");
+    } else if ("AiAppProcess" in e) {
+      out.form.push(`${e.AiAppProcess.exe_path} 已由 AI 应用「${e.AiAppProcess.app}」管理，请在 AI 应用页操作`);
     } else if ("TooManyProcessRules" in e) {
       out.form.push(`走代理的「节点 + 网卡」组合最多 ${e.TooManyProcessRules.max} 个`);
     } else {

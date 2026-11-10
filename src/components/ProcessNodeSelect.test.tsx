@@ -29,6 +29,7 @@ const rule: ProcessRule = {
   on_fault: "Direct",
   reset_on_change: false,
   user_enabled: true,
+  ai_app: null,
 };
 
 function mount(r: ProcessRule, reason?: string | null, m: Model = model, status?: unknown) {

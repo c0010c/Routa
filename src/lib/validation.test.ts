@@ -49,6 +49,12 @@ describe("fieldErrors", () => {
     ]);
   });
 
+  it("explains a process owned by an AI app", () => {
+    expect(fieldErrors([{ AiAppProcess: { exe_path: "chatgpt.exe", app: "ChatGPT" } }]).form).toEqual([
+      "chatgpt.exe 已由 AI 应用「ChatGPT」管理，请在 AI 应用页操作",
+    ]);
+  });
+
   it("puts interface mismatch and invalid proxy at form level", () => {
     expect(fieldErrors([{ InterfaceMismatch: { exit: "E", node: "ts" } }]).form).toEqual([
       "出口「E」与 Tailscale「ts」的网卡不一致",

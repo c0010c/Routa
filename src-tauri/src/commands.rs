@@ -241,8 +241,20 @@ pub mod ops {
         mut rule: ProcessRule,
         running: &[RunningProcess],
     ) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
+        let id = rule.id.clone();
+        let is_ai = |p: &ProcessRouting| p.rules.iter().any(|x| x.id == id && x.ai_app.is_some());
+        if is_ai(&rt.model().process_routing) {
+            return Err(vec![ValidationError::InvalidName {
+                name: rule.name,
+                reason: "AI 应用的规则请在 AI 应用页修改".into(),
+            }]);
+        }
+        // AI 规则只由 AI 应用页创建，这里保存的一律是手动规则。
+        rule.ai_app = None;
         rt.mutate_process_routing(|p| {
-            let id = rule.id.clone();
+            if is_ai(p) {
+                return;
+            }
             let snapshot = Model { process_routing: p.clone(), ..Model::default() };
             let before = p.rules.iter().find(|x| x.id == id);
             // `learned` belongs to the service: a dialog may hold a stale copy.
@@ -269,7 +281,7 @@ pub mod ops {
     }
 
     pub async fn delete_process_rule(rt: &Runtime, id: ProcessRuleId) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
-        rt.mutate_process_routing(|p| p.rules.retain(|r| r.id != id)).await
+        rt.mutate_process_routing(|p| p.rules.retain(|r| r.id != id || r.ai_app.is_some())).await
     }
 
     pub async fn save_process_routing_settings(
@@ -857,6 +869,37 @@ mod tests {
 
         ops::delete_process_rule(&rt, rule.id).await.unwrap();
         assert!(rt.model().process_routing.rules.is_empty());
+    }
+
+    #[tokio::test]
+    async fn save_rule_cannot_touch_ai_rule() {
+        let td = tempfile::tempdir().unwrap();
+        let rt = runtime(&td);
+        let ai = ProcessRule {
+            name: "ChatGPT".into(),
+            ai_app: Some("chatgpt".into()),
+            processes: vec![ProcessEntry::name("chatgpt.exe")],
+            ..ProcessRule::default()
+        };
+        rt.mutate_process_routing(|p| p.rules.push(ai.clone())).await.unwrap();
+
+        let hijack = ProcessRule { ai_app: None, reset_on_change: true, ..ai.clone() };
+        assert!(ops::save_process_rule(&rt, hijack).await.is_err());
+        assert_eq!(rt.model().process_routing.rules, vec![ai.clone()], "model unchanged");
+
+        // delete_process_rule leaves AI rules alone.
+        ops::delete_process_rule(&rt, ai.id.clone()).await.unwrap();
+        assert_eq!(rt.model().process_routing.rules, vec![ai.clone()]);
+
+        // A new rule cannot claim to be an AI rule.
+        let sneaky = ProcessRule {
+            ai_app: Some("x".into()),
+            processes: vec![ProcessEntry::name("other.exe")],
+            ..ProcessRule::default()
+        };
+        ops::save_process_rule(&rt, sneaky.clone()).await.unwrap();
+        let stored = rt.model().process_routing.rules.into_iter().find(|r| r.id == sneaky.id).unwrap();
+        assert_eq!(stored.ai_app, None);
     }
 
     #[tokio::test]

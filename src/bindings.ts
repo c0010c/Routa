@@ -806,7 +806,7 @@ node?: NodeRef | null;
 /**
  * 出站网卡（仅 `node` 模式使用）。
  */
-interface?: InterfaceGuid | null; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean }
+interface?: InterfaceGuid | null; on_fault: FaultPolicy; reset_on_change: boolean; user_enabled: boolean; ai_app: string | null }
 export type ProcessRuleId = string
 /**
  * A project page linked from Settings → About; the URLs live here so the
@@ -955,7 +955,7 @@ export type ValidationError = { DuplicateName: { kind: string; name: string } } 
 /**
  * 已启用规则里走代理的「节点 + 生效网卡」组合数超过上限。
  */
-{ TooManyProcessRules: { max: number } } | { EmptyProcessRule: { rule: string } }
+{ TooManyProcessRules: { max: number } } | { EmptyProcessRule: { rule: string } } | { AiAppProcess: { exe_path: string; app: string } }
 
 /** tauri-specta globals **/
 

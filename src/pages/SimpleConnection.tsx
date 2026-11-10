@@ -57,7 +57,7 @@ import { NodePicker } from "../components/NodePicker";
 import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
 import { ManualNodeDialog, newManualNode } from "./ManualNodeDialog";
 import { nodeKey, nodeLabel, proxyNameOf } from "../lib/refs";
-import { ruleLabel } from "../lib/processRule";
+import { isAiRule, ruleLabel } from "../lib/processRule";
 import { delayText, formatRate } from "../lib/format";
 import type { NodeRef } from "../bindings";
 
@@ -136,7 +136,7 @@ export function SimpleConnection() {
     preference.isPending ||
     binding.isPending;
   const rules = m.process_routing.rules.filter((r) =>
-    p.managed_rules.includes(r.id),
+    !isAiRule(r) && p.managed_rules.includes(r.id),
   );
   const componentReady = routing.data?.component === "Running";
   const onError = (e: unknown) => setError(errorMessage(e));
@@ -510,7 +510,7 @@ export function SimpleConnection() {
       )}
       {(visibleListeners(m).some((l) => l.id !== p.listener_id && l.user_enabled) ||
         m.process_routing.rules.some(
-          (r) => !p.managed_rules.includes(r.id) && r.user_enabled,
+          (r) => !isAiRule(r) && !p.managed_rules.includes(r.id) && r.user_enabled,
         ) ||
         (!requested &&
           m.process_routing.enabled &&

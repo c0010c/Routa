@@ -44,7 +44,7 @@ const model: Model = {
   process_routing: {
     enabled: true,
     rules: [
-      { id: "r1", name: "", processes: [N("curl.exe")], learned: [], node: { manual_id: "m1" }, on_fault: "Direct", reset_on_change: false, user_enabled: true },
+      { id: "r1", name: "", processes: [N("curl.exe")], learned: [], node: { manual_id: "m1" }, on_fault: "Direct", reset_on_change: false, user_enabled: true, ai_app: null },
       {
         id: "r2",
         name: "AI 工具",
@@ -54,6 +54,7 @@ const model: Model = {
         on_fault: "Direct",
         reset_on_change: false,
         user_enabled: true,
+        ai_app: null,
       },
     ],
     exit_prompt: true,
@@ -162,6 +163,18 @@ describe("ProcessRoutingPage", () => {
     act(() => qc.setQueryData(["procroute"], { ...base, last_interruption: interruption }));
     expect(await screen.findByText(/最近一次中断：/)).toHaveTextContent(interruption.reason);
     expect(screen.getByRole("button", { name: "关闭中断提示" })).toBeInTheDocument();
+  });
+
+  it("does not list rules owned by an AI app", async () => {
+    const ai: ProcessRule = {
+      id: "r3", name: "ChatGPT 应用", processes: [N("chatgpt-ai.exe")], learned: [],
+      node: { manual_id: "m1" }, interface: null, on_fault: "Direct", reset_on_change: false,
+      user_enabled: true, ai_app: "chatgpt",
+    };
+    renderPage(base, withRules(...model.process_routing.rules, ai));
+    expect((await screen.findAllByText("curl.exe")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("ChatGPT 应用")).not.toBeInTheDocument();
+    expect(screen.queryByText("chatgpt-ai.exe")).not.toBeInTheDocument();
   });
 
   it("blocked rule shows reason chip", async () => {

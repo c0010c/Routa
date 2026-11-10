@@ -5,6 +5,9 @@ export function fileName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
 }
 
+/** 由「AI 应用」页管理的规则：进程分流页与简洁版不显示、不可编辑。 */
+export const isAiRule = (r: ProcessRule) => r.ai_app != null;
+
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 /** 输入框里的原始文本 -> 条目值：去引号、`/` 换成 `\`、去首尾空白。 */

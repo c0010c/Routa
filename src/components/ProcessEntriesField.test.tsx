@@ -23,6 +23,7 @@ const other = (id: string, name: string, processes: ProcessEntry[]): ProcessRule
   on_fault: "Direct",
   reset_on_change: false,
   user_enabled: true,
+  ai_app: null,
 });
 
 function Harness({ initial = [], others = [] }: { initial?: ProcessEntry[]; others?: ProcessRule[] }) {

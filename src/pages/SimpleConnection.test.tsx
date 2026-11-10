@@ -118,7 +118,7 @@ it("lets the user get back from the nodes and subscriptions pages", async () => 
 
 it("hints when an app rule uses another node than the simple node", async () => {
   model.process_routing.rules = [
-    { id: "r1", name: "浏览器", processes: [{ kind: "Name", value: "chrome.exe" }], learned: [], node: { manual_id: "other" }, on_fault: "Direct", reset_on_change: false, user_enabled: true },
+    { id: "r1", name: "浏览器", processes: [{ kind: "Name", value: "chrome.exe" }], learned: [], node: { manual_id: "other" }, on_fault: "Direct", reset_on_change: false, user_enabled: true, ai_app: null },
   ];
   desktop.preferences.capture_mode = "Apps";
   desktop.preferences.managed_rules = ["r1"];

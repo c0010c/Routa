@@ -146,6 +146,7 @@ mod tests {
             on_fault,
             reset_on_change: true,
             user_enabled: true,
+            ai_app: None,
         }
     }
 

@@ -43,7 +43,7 @@ import { EmptyState } from "../components/EmptyState";
 import { LearnedLocations } from "../components/LearnedLocations";
 import { RowActions } from "../components/RowActions";
 import { formatBytes, type Label } from "../lib/format";
-import { chipLabel, fileName, groupsOf, learningNames, ruleLabel, type ProcessGroup } from "../lib/processRule";
+import { chipLabel, fileName, groupsOf, isAiRule, learningNames, ruleLabel, type ProcessGroup } from "../lib/processRule";
 import { ProcessRuleDialog } from "./ProcessRuleDialog";
 import { ProcessNodeSelect } from "../components/ProcessNodeSelect";
 import { desktopApi, useDesktopMutation } from "../api/desktop";
@@ -425,9 +425,10 @@ export function ProcessRoutingPage() {
   const q = search.trim().toLowerCase();
   const shown = pr.rules.filter(
     (r) =>
-      !q ||
+      !isAiRule(r) &&
+      (!q ||
       ruleLabel(r).toLowerCase().includes(q) ||
-      r.processes.some((p) => p.value.toLowerCase().includes(q)),
+      r.processes.some((p) => p.value.toLowerCase().includes(q))),
   );
 
   return (

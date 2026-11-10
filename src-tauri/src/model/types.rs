@@ -403,6 +403,9 @@ pub struct ProcessRule {
     pub on_fault: FaultPolicy,
     pub reset_on_change: bool,
     pub user_enabled: bool,
+    /// 由「AI 应用」页管理的规则所属的应用 id；进程分流页与简洁版不显示、不可编辑。
+    #[serde(default)]
+    pub ai_app: Option<String>,
 }
 
 #[cfg(test)]
@@ -430,6 +433,7 @@ impl Default for ProcessRule {
             on_fault: FaultPolicy::Direct,
             reset_on_change: false,
             user_enabled: true,
+            ai_app: None,
         }
     }
 }

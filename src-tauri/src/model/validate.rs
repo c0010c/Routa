@@ -19,6 +19,8 @@ pub enum ValidationError {
     /// 已启用规则里走代理的「节点 + 生效网卡」组合数超过上限。
     TooManyProcessRules { max: u32 },
     EmptyProcessRule { rule: String },
+    /// 手动规则里的进程已由 AI 应用管理；`app` 是 AI 规则的名称（应用显示名）。
+    AiAppProcess { exe_path: String, app: String },
 }
 
 /// 已启用规则里不同「节点 + 生效网卡」组合的上限（每个组合对应一个代理配置，与服务端一致）。
@@ -49,7 +51,7 @@ pub(crate) fn process_proxy_host(listen: &str) -> Option<String> {
 
 fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
     let pr = &model.process_routing;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen: std::collections::HashMap<(ProcessKind, String), &ProcessRule> = std::collections::HashMap::new();
     let mut reported = std::collections::HashSet::new();
     for r in &pr.rules {
         if r.processes.is_empty() {
@@ -70,8 +72,20 @@ fn validate_process_routing(model: &Model, errors: &mut Vec<ValidationError>) {
             }
             // 进程名只与进程名比、路径只与路径比；按路径的规则优先，二者共存不算重复。
             let key = (entry.kind, p.to_lowercase());
-            if !seen.insert(key.clone()) && reported.insert(key) {
-                errors.push(ValidationError::DuplicateProcessRule { exe_path: p });
+            match seen.get(&key) {
+                None => {
+                    seen.insert(key, r);
+                }
+                Some(first) => {
+                    if reported.insert(key) {
+                        // 其中一条是 AI 规则时，提示该进程由哪个 AI 应用管理。
+                        let ai = [*first, r].into_iter().find(|x| x.ai_app.is_some());
+                        errors.push(match ai {
+                            Some(a) => ValidationError::AiAppProcess { exe_path: p, app: a.name.clone() },
+                            None => ValidationError::DuplicateProcessRule { exe_path: p },
+                        });
+                    }
+                }
             }
         }
     }
@@ -571,6 +585,21 @@ mod tests {
         let forbidden = vec![std::path::PathBuf::from("c:\\core\\mihomo.exe")];
         assert!(validate_forbidden_exes(&m.process_routing, &forbidden).is_err());
     }
+    #[test]
+    fn duplicate_with_ai_rule_reports_ai_app() {
+        let mut m = Model::default();
+        m.process_routing.rules.push(ProcessRule {
+            name: "ChatGPT".into(),
+            ai_app: Some("chatgpt".into()),
+            processes: vec![ProcessEntry::name("ChatGPT.exe")],
+            ..Default::default()
+        });
+        m.process_routing.rules.push(ProcessRule { processes: vec![ProcessEntry::name("chatgpt.exe")], ..Default::default() });
+        let e = errs(&m);
+        assert!(e.contains(&ValidationError::AiAppProcess { exe_path: "chatgpt.exe".into(), app: "ChatGPT".into() }), "{e:?}");
+        assert!(!e.iter().any(|e| matches!(e, ValidationError::DuplicateProcessRule { .. })));
+    }
+
     fn pmodel(rules: impl FnOnce(&Listener) -> Vec<ProcessRule>) -> Model {
         let mut m = Model::default();
         let l = Listener::new_default("l1".into(), 7891);
