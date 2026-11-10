@@ -1,7 +1,9 @@
 //! AI 应用列表：内置兜底、远程镜像拉取、本地缓存。
 
 pub mod catalog;
+pub mod detect;
 pub mod fetch;
+pub mod launch;
 pub mod rules;
 
 use std::path::{Path, PathBuf};

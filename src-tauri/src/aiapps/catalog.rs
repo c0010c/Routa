@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_ICON_LEN: usize = 64 * 1024;
-const EXE_ROOTS: [&str; 4] = ["%LOCALAPPDATA%", "%PROGRAMFILES%", "%PROGRAMFILES(X86)%", "%APPDATA%"];
+pub(crate) const EXE_ROOTS: [&str; 4] = ["%LOCALAPPDATA%", "%PROGRAMFILES%", "%PROGRAMFILES(X86)%", "%APPDATA%"];
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
 pub struct Catalog {

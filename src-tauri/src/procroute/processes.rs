@@ -37,6 +37,18 @@ pub fn running_processes() -> Vec<RunningProcess> {
     out
 }
 
+/// 名字（不区分大小写）在 `names` 中的所有进程 pid，不按 exe 去重（同一 exe 的多个进程都算）。
+pub fn pids_named(names: &[String]) -> HashSet<u32> {
+    process_ids()
+        .into_iter()
+        .filter(|pid| {
+            image_path(*pid)
+                .and_then(|p| Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()))
+                .is_some_and(|n| names.iter().any(|x| x.eq_ignore_ascii_case(&n)))
+        })
+        .collect()
+}
+
 fn process_ids() -> Vec<u32> {
     let mut pids = Vec::new();
     // SAFETY: 快照句柄在本函数内关闭；entry.dwSize 如实设置。
