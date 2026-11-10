@@ -19,6 +19,7 @@ import { Layout } from "./components/Layout";
 
 import { Listeners } from "./pages/Listeners";
 import { FullOverview } from "./pages/FullOverview";
+import { AiAppsPage } from "./pages/AiApps";
 import { ProcessRoutingPage } from "./pages/ProcessRouting";
 import { Settings } from "./pages/Settings";
 import { ResourceCenter } from "./pages/ResourceCenter";
@@ -95,6 +96,7 @@ function ApplicationShell() {
       <Routes>
         <Route path="/" element={<FullOverview />} />
         <Route path="/listeners" element={<Listeners />} />
+        <Route path="/ai-apps" element={<AiAppsPage />} />
         <Route path="/process-routing" element={<ProcessRoutingPage />} />
         <Route path="/subscriptions" element={<ResourceCenter subscriptionsOnly />} />
         <Route path="/nodes" element={<ResourceCenter />} />

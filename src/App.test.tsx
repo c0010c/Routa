@@ -51,6 +51,7 @@ describe("App", () => {
     expect(labels).toEqual([
       "概览",
       "代理",
+      "AI 应用",
       "进程分流",
       "订阅",
       "节点",
