@@ -2,6 +2,7 @@
 
 pub mod catalog;
 pub mod fetch;
+pub mod rules;
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
