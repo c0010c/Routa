@@ -2,7 +2,7 @@
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-pub const PROTO_VERSION: u32 = 5;
+pub const PROTO_VERSION: u32 = 6;
 pub const PIPE_NAME: &str = r"\\.\pipe\RoutaProcSvc";
 pub const SERVICE_NAME: &str = "RoutaProcSvc";
 /// 单帧 JSON 正文的最大字节数。
@@ -302,7 +302,7 @@ mod tests {
 
         let ds = serde_json::to_string(&DesiredState { rules: vec![], routa_pid: 1 }).unwrap();
         assert!(!ds.contains("on_routa_exit"));
-        assert_eq!(PROTO_VERSION, 5);
+        assert_eq!(PROTO_VERSION, 6);
         let lp = LearnedPath { rule_id: "r1".into(), path: r"C:\a\x.exe".into() };
         let buf = encode(&lp).unwrap();
         assert_eq!(decode::<LearnedPath>(&buf[4..]).unwrap(), lp);

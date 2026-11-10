@@ -59,7 +59,7 @@ pub fn exe_key(path: &str) -> String {
 /// 6. 消失的规则：`RemoveRule`（此时同 exe 的新规则都已就位）
 /// 7. 不再受保护的 exe：`RemoveBlock`
 /// 8. 需要放行的 exe：`Permit`
-/// 9. 动作种类变化（含新增、换 exe）且 `reset_on_change`：`Reset`
+/// 9. 动作种类变化（含新增、换 exe）、代理目标变化，或规则消失，且 `reset_on_change`：`Reset`（每个 exe 至多一次）
 ///
 /// 只有 `on_fault=Block` 的规则会产生 WFP 操作（`EnsureBlock/RemoveBlock/Permit/Revoke`），
 /// 且只作用在它的 [`guard_exes`] 上：按进程名的规则只守护 `guard_paths`，从不对进程名本身
@@ -183,10 +183,20 @@ pub fn plan(old: &[RuleSpec], new: &[RuleSpec]) -> Vec<Op> {
         }
     }
     // 9
+    let mut reset_keys: HashSet<String> = HashSet::new();
     for n in new {
-        if n.reset_on_change && prev(n).map(|o| kind(&o.action)) != Some(kind(&n.action)) {
+        // action 相等比较已涵盖种类变化与代理目标变化
+        let changed = prev(n).map(|o| &o.action) != Some(&n.action);
+        if n.reset_on_change && changed && reset_keys.insert(key(n)) {
             ops.push(Op::Reset {
                 exe: n.exe_path.clone(),
+            });
+        }
+    }
+    for o in old {
+        if o.reset_on_change && new_of(&o.id).is_none() && reset_keys.insert(key(o)) {
+            ops.push(Op::Reset {
+                exe: o.exe_path.clone(),
             });
         }
     }
@@ -764,21 +774,27 @@ mod tests {
     }
 
     #[test]
-    fn reset_only_on_action_change() {
+    fn reset_on_action_or_target_change() {
+        // 动作种类变化：照旧 Reset
         let ops = plan(
             &[r(Action::Direct, FaultPolicy::Direct)],
             &[r(Action::Proxy(target(1)), FaultPolicy::Direct)],
         );
         assert_eq!(count_resets(&ops), 1, "{ops:?}");
         assert!(matches!(ops.last(), Some(Op::Reset { .. })), "{ops:?}");
-
+        // 换代理目标：现在也 Reset，且排在 SetProxy 之后
         let ops = plan(
             &[r(Action::Proxy(target(1)), FaultPolicy::Direct)],
             &[r(Action::Proxy(target(2)), FaultPolicy::Direct)],
         );
+        assert_eq!(count_resets(&ops), 1, "{ops:?}");
+        assert!(matches!(ops.last(), Some(Op::Reset { .. })), "{ops:?}");
+        // reset_on_change=false：都不 Reset
+        let ops = plan(
+            &[spec("r", EXE, Action::Proxy(target(1)), FaultPolicy::Direct, false)],
+            &[spec("r", EXE, Action::Proxy(target(2)), FaultPolicy::Direct, false)],
+        );
         assert_eq!(count_resets(&ops), 0, "{ops:?}");
-
-        // reset_on_change=false 时动作变化也不 Reset
         let ops = plan(
             &[spec("r", EXE, Action::Direct, FaultPolicy::Direct, false)],
             &[spec("r", EXE, Action::Block, FaultPolicy::Direct, false)],
@@ -787,7 +803,31 @@ mod tests {
     }
 
     #[test]
-    fn proxy_target_change_edits_config_without_reset() {
+    fn removed_reset_rule_resets_its_exe() {
+        let ops = plan(
+            &[spec("r", EXE, Action::Proxy(target(1)), FaultPolicy::Direct, true)],
+            &[],
+        );
+        assert_eq!(ops.last(), Some(&Op::Reset { exe: EXE.into() }), "{ops:?}");
+        let ops = plan(
+            &[spec("r", EXE, Action::Proxy(target(1)), FaultPolicy::Direct, false)],
+            &[],
+        );
+        assert_eq!(count_resets(&ops), 0, "{ops:?}");
+    }
+
+    #[test]
+    fn reset_once_per_exe() {
+        // 同一 exe 的规则换了 id（删 + 增）且动作变化：只 Reset 一次
+        let ops = plan(
+            &[spec("a", EXE, Action::Proxy(target(1)), FaultPolicy::Direct, true)],
+            &[spec("b", EXE, Action::Proxy(target(2)), FaultPolicy::Direct, true)],
+        );
+        assert_eq!(count_resets(&ops), 1, "{ops:?}");
+    }
+
+    #[test]
+    fn proxy_target_change_edits_config_then_resets() {
         for fault in [FaultPolicy::Direct, FaultPolicy::Block] {
             let ops = plan(
                 &[r(Action::Proxy(target(1)), fault.clone())],
@@ -795,10 +835,13 @@ mod tests {
             );
             assert_eq!(
                 ops,
-                vec![Op::SetProxy {
-                    rule: "r".into(),
-                    target: target(2)
-                }]
+                vec![
+                    Op::SetProxy {
+                        rule: "r".into(),
+                        target: target(2)
+                    },
+                    Op::Reset { exe: EXE.into() }
+                ]
             );
         }
     }
@@ -864,6 +907,7 @@ mod tests {
                 Op::Revoke { exe: EXE.into() },
                 Op::RemoveRule { rule: "r".into() },
                 Op::RemoveBlock { exe: EXE.into() },
+                Op::Reset { exe: EXE.into() },
             ]
         );
         // on_fault=Block 且动作为 Block：本来就没有放行
@@ -872,12 +916,19 @@ mod tests {
             ops,
             vec![
                 Op::RemoveRule { rule: "r".into() },
-                Op::RemoveBlock { exe: EXE.into() }
+                Op::RemoveBlock { exe: EXE.into() },
+                Op::Reset { exe: EXE.into() }
             ]
         );
         // on_fault=Direct：只删 ProxyBridge 规则
         let ops = plan(&[r(Action::Direct, FaultPolicy::Direct)], &[]);
-        assert_eq!(ops, vec![Op::RemoveRule { rule: "r".into() }]);
+        assert_eq!(
+            ops,
+            vec![
+                Op::RemoveRule { rule: "r".into() },
+                Op::Reset { exe: EXE.into() }
+            ]
+        );
     }
 
     #[test]
@@ -1360,13 +1411,20 @@ mod tests {
             }
         }
 
-        // Reset：动作种类变化（含新增、换 exe）且 reset_on_change 时每条规则一次，都在最后
-        let want_resets = new
-            .iter()
-            .filter(|n| {
-                n.reset_on_change && prev(n).map(|o| kind(&o.action)) != Some(kind(&n.action))
-            })
-            .count();
+        // Reset：动作种类 / 代理目标变化（含新增、换 exe）或规则消失，且 reset_on_change；
+        // 每个 exe 至多一次，都在最后
+        let mut want_keys: HashSet<String> = HashSet::new();
+        for n in new {
+            if n.reset_on_change && prev(n).map(|o| &o.action) != Some(&n.action) {
+                want_keys.insert(exe_key(&n.exe_path));
+            }
+        }
+        for o in old {
+            if o.reset_on_change && !new.iter().any(|n| n.id == o.id) {
+                want_keys.insert(exe_key(&o.exe_path));
+            }
+        }
+        let want_resets = want_keys.len();
         assert_eq!(count_resets(&ops), want_resets, "{ctx}");
         assert!(
             ops[ops.len() - want_resets..]
