@@ -137,7 +137,7 @@ pub(crate) fn validation(e: Vec<ValidationError>) -> String {
             ValidationError::DuplicateProcessRule { exe_path } => format!("{exe_path} 已有分流规则"),
             ValidationError::TooManyProcessRules { max } => format!("走代理的「节点 + 网卡」组合最多 {max} 个"),
             ValidationError::EmptyProcessRule { rule } => format!("规则「{rule}」至少要有一个进程"),
-            ValidationError::AiAppProcess { exe_path, app } => format!("{exe_path} 已由 AI 应用「{app}」管理"),
+            ValidationError::AiAppProcess { exe_path, app } => format!("{exe_path} 已由 AI 应用「{app}」管理，请在 AI 应用页操作"),
         })
         .collect::<Vec<_>>()
         .join("；")

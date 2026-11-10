@@ -177,6 +177,16 @@ describe("ProcessRoutingPage", () => {
     expect(screen.queryByText("chatgpt-ai.exe")).not.toBeInTheDocument();
   });
 
+  it("shows the empty state when only AI rules exist", async () => {
+    const ai: ProcessRule = {
+      id: "r3", name: "ChatGPT 应用", processes: [N("chatgpt-ai.exe")], learned: [],
+      node: { manual_id: "m1" }, interface: null, on_fault: "Direct", reset_on_change: false,
+      user_enabled: true, ai_app: "chatgpt",
+    };
+    renderPage(base, withRules(ai));
+    expect(await screen.findByText("还没有分流规则")).toBeInTheDocument();
+  });
+
   it("blocked rule shows reason chip", async () => {
     renderPage({
       ...base,

@@ -423,12 +423,12 @@ export function ProcessRoutingPage() {
   const pr = m.process_routing;
   const viewingRule = pr.rules.find((r) => r.id === viewing) ?? null;
   const q = search.trim().toLowerCase();
-  const shown = pr.rules.filter(
+  const manual = pr.rules.filter((r) => !isAiRule(r));
+  const shown = manual.filter(
     (r) =>
-      !isAiRule(r) &&
-      (!q ||
+      !q ||
       ruleLabel(r).toLowerCase().includes(q) ||
-      r.processes.some((p) => p.value.toLowerCase().includes(q))),
+      r.processes.some((p) => p.value.toLowerCase().includes(q)),
   );
 
   return (
@@ -450,7 +450,7 @@ export function ProcessRoutingPage() {
         onChange={(e) => setSearch(e.target.value)}
         sx={{ maxWidth: 360 }}
       />
-      {pr.rules.length === 0 ? (
+      {manual.length === 0 ? (
         <EmptyState
           icon={<AppsOutlined />}
           title="还没有分流规则"
@@ -498,7 +498,7 @@ export function ProcessRoutingPage() {
                         <Box sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>
                           <LearnedLocations
                             rule={r}
-                            others={pr.rules.filter((x) => x.id !== r.id)}
+                            others={manual.filter((x) => x.id !== r.id)}
                             routingEnabled={pr.enabled}
                             running={running.data ?? []}
                             onRemove={(p) => removeLearned.mutate(r.id, p)}
