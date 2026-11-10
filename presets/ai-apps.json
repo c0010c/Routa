@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "apps": [
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT",
+      "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgdmlld0JveD0iMCAwIDQ4IDQ4Ij48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHJ4PSIxMCIgZmlsbD0iIzEwYTM3ZiIvPjx0ZXh0IHg9IjI0IiB5PSIzMiIgZm9udC1mYW1pbHk9IkFyaWFsLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjIiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5HPC90ZXh0Pjwvc3ZnPg==",
+      "download_url": "https://chatgpt.com/download",
+      "test_url": "https://chatgpt.com",
+      "on_fault": "Block",
+      "install": [
+        { "type": "store", "family": "OpenAI.Codex_2p2nqsd0c76g0", "app_id": "App" }
+      ],
+      "processes": ["ChatGPT.exe", "Codex.exe", "codex-command-runner.exe"]
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgdmlld0JveD0iMCAwIDQ4IDQ4Ij48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHJ4PSIxMCIgZmlsbD0iI2Q5Nzc1NyIvPjx0ZXh0IHg9IjI0IiB5PSIzMiIgZm9udC1mYW1pbHk9IkFyaWFsLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjIiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5DPC90ZXh0Pjwvc3ZnPg==",
+      "download_url": "https://claude.ai/download",
+      "test_url": "https://claude.ai",
+      "on_fault": "Block",
+      "install": [
+        { "type": "store", "family": "Claude_pzs8sxrjxfjjc", "app_id": "Claude" },
+        { "type": "exe", "path": "%LOCALAPPDATA%\\AnthropicClaude\\claude.exe" }
+      ],
+      "processes": ["claude.exe", "cowork-svc.exe", "claude-ssh-proxy.exe", "claude-ssh-broker.exe"]
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgdmlld0JveD0iMCAwIDQ4IDQ4Ij48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHJ4PSIxMCIgZmlsbD0iIzIyMjIyMiIvPjx0ZXh0IHg9IjI0IiB5PSIzMiIgZm9udC1mYW1pbHk9IkFyaWFsLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjIiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5DdTwvdGV4dD48L3N2Zz4=",
+      "download_url": "https://cursor.com/download",
+      "test_url": "https://cursor.com",
+      "on_fault": "Block",
+      "install": [
+        { "type": "exe", "path": "%LOCALAPPDATA%\\Programs\\cursor\\Cursor.exe" },
+        { "type": "exe", "path": "%PROGRAMFILES%\\cursor\\Cursor.exe" }
+      ],
+      "processes": ["Cursor.exe"]
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+pub mod aiapps;
 pub mod commands;
 pub mod config_gen;
 pub mod core;
