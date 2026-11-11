@@ -154,7 +154,7 @@ export function NodeBrowserGrid({
             onSelectionKeyDown={navigate}
             running={status.data?.core === "Running"}
             testTarget={n.proxy ?? undefined} testUrl={m?.settings.delay_test_url}
-            pending={test.isPending && !!n.proxy && !!test.variables?.[0]?.includes(n.proxy)}
+            pending={test.waiting(n.proxy, delay)}
             actions={[{ label: "测延迟", disabled: test.isPending || !n.proxy, onClick: () => n.proxy && measure([n.proxy]) }]}
             onSelect={() => onPick(n.ref)}
           />

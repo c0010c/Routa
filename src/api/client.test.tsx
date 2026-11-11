@@ -7,12 +7,14 @@ vi.mock("../bindings", () => ({
     getStatus: vi.fn(async () => ({})),
     resetTraffic: vi.fn(),
     saveListener: vi.fn(),
+    testDelays: vi.fn(),
   },
 }));
 
 import { commands } from "../bindings";
 import { ApplyResultProvider } from "../components/ApplyResultSnackbar";
-import { useResetTraffic, useSaveListener } from "./client";
+import type { DelayResult } from "../bindings";
+import { useResetTraffic, useSaveListener, useTestDelays } from "./client";
 
 function Probe() {
   const reset = useResetTraffic();
@@ -64,5 +66,42 @@ describe("mutation error reporting", () => {
     expect(await screen.findByText(/仍被引用/)).toBeInTheDocument();
     expect(spy).not.toHaveBeenCalled();
     expect(screen.queryByText("操作失败")).not.toBeInTheDocument();
+  });
+});
+
+function DelayProbe({ results }: { results: Record<string, DelayResult | undefined> }) {
+  const test = useTestDelays();
+  return (
+    <>
+      <button onClick={() => test.mutate(["a", "b"])}>measure</button>
+      {["a", "b", "c"].map((n) => <span key={n}>{`${n}:${test.waiting(n, results[n])}`}</span>)}
+    </>
+  );
+}
+
+describe("useTestDelays.waiting", () => {
+  it("stops waiting for a node once this run's result lands, while the batch is still running", async () => {
+    vi.mocked(commands.testDelays).mockImplementation(() => new Promise(() => {}));
+    const old: DelayResult = { ms: 90, tested_at: 1, error: null };
+    const qc = new QueryClient();
+    const view = (results: Record<string, DelayResult | undefined>) => (
+      <QueryClientProvider client={qc}>
+        <ApplyResultProvider>
+          <DelayProbe results={results} />
+        </ApplyResultProvider>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(view({ a: old }));
+    expect(screen.getByText("a:false")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("measure"));
+    // An earlier result does not count; nodes outside the batch never wait.
+    expect(await screen.findByText("a:true")).toBeInTheDocument();
+    expect(screen.getByText("b:true")).toBeInTheDocument();
+    expect(screen.getByText("c:false")).toBeInTheDocument();
+    const fresh: DelayResult = { ms: 50, tested_at: Math.floor(Date.now() / 1000), error: null };
+    rerender(view({ a: fresh, b: { ...fresh, stale: true } }));
+    expect(screen.getByText("a:false")).toBeInTheDocument();
+    // A stale result is not this run's answer.
+    expect(screen.getByText("b:true")).toBeInTheDocument();
   });
 });

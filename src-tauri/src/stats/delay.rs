@@ -8,8 +8,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::api::{ApiError, MihomoApi};
 
-pub const DEFAULT_CONCURRENCY: usize = 16;
-pub const DEFAULT_TIMEOUT_MS: u32 = 10000;
+/// Each dead node holds a slot for the whole timeout, so a wide pool keeps a
+/// few dead nodes from stalling the live ones queued behind them.
+pub const DEFAULT_CONCURRENCY: usize = 32;
+/// Working nodes answer in well under 5 s; a longer wait only delays the
+/// verdict on dead ones.
+pub const DEFAULT_TIMEOUT_MS: u32 = 5000;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, specta::Type)]
 pub struct DelayResult {
@@ -91,17 +95,34 @@ pub async fn test_many(
     concurrency: usize,
     timeout_ms: u32,
 ) -> Vec<(String, DelayResult)> {
-    stream::iter(names.iter().cloned())
-        .map(|name| async move {
+    test_many_each(api, names, url, concurrency, timeout_ms, |_, _| {}).await
+}
+
+/// `test_many`, calling `on_result` as each test finishes (completion order),
+/// so callers can show results before the slowest node answers.
+pub async fn test_many_each(
+    api: &dyn MihomoApi,
+    names: &[String],
+    url: &str,
+    concurrency: usize,
+    timeout_ms: u32,
+    mut on_result: impl FnMut(&str, &DelayResult),
+) -> Vec<(String, DelayResult)> {
+    let mut done: Vec<Option<DelayResult>> = vec![None; names.len()];
+    let mut tests = stream::iter(names.iter().cloned().enumerate())
+        .map(|(i, name)| async move {
             let r = match api.delay(&name, url, timeout_ms).await {
                 Ok(ms) => DelayResult { ms: Some(ms), tested_at: now_unix(), error: None, stale: false },
                 Err(e) => DelayResult::failed(e.into(), now_unix()),
             };
-            (name, r)
+            (i, r)
         })
-        .buffered(concurrency.max(1))
-        .collect()
-        .await
+        .buffer_unordered(concurrency.max(1));
+    while let Some((i, r)) = tests.next().await {
+        on_result(&names[i], &r);
+        done[i] = Some(r);
+    }
+    names.iter().cloned().zip(done.into_iter().map(|r| r.expect("every test yields a result"))).collect()
 }
 
 #[cfg(test)]
@@ -134,6 +155,19 @@ mod tests {
         api.set_delay("a", Ok(1));
         let out = test_many(&api, &["a".to_string()], "u", 0, 5000).await;
         assert_eq!(out[0].1.ms, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_many_each_reports_every_result_once() {
+        let api = FakeApi::new();
+        api.set_delay("a", Ok(10));
+        api.set_delay("b", Err(ApiError::Rejected { status: 504, message: "Timeout".into() }));
+        let names: Vec<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
+        let mut seen = Vec::new();
+        let out = test_many_each(&api, &names, "u", 2, 5000, |n, r| seen.push((n.to_string(), r.ms))).await;
+        seen.sort();
+        assert_eq!(seen, vec![("a".to_string(), Some(10)), ("b".to_string(), None)]);
+        assert_eq!(out.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["a", "b"]);
     }
 
     #[test]

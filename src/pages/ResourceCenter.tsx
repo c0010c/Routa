@@ -83,6 +83,9 @@ export function ResourceCenter({
   // the card is outlined for FOCUS_MS.
   const [highlight, setHighlight] = useState<{ key: string; lit: boolean; seq: number } | null>(null);
   const focusSeq = useRef(0);
+  // Sort by the delays from before a test: results land one by one and must not reshuffle the grid mid-run.
+  const sortDelays = useRef(runtime.data?.delays);
+  if (!test.isPending) sortDelays.current = runtime.data?.delays;
   const loaded = !!model.data && !!runtime.data;
   useEffect(() => {
     if (subscriptionsOnly || !focus || typeof focus !== "object") return;
@@ -202,7 +205,7 @@ export function ResourceCenter({
     (g) => g.id !== "ungrouped" || g.nodes.length > 0 || nodes.length === 0,
   );
   const delay = (name: string) => {
-    const d = st.delays[name];
+    const d = (sortDelays.current ?? st.delays)[name];
     return d?.stale ? Infinity : d?.ms ?? Infinity;
   };
   const q = search.trim().toLowerCase();
@@ -530,7 +533,7 @@ export function ResourceCenter({
                               testTarget={n.proxy}
                               testUrl={m.settings.delay_test_url}
                               running={st.core === "Running"}
-                              pending={test.isPending && !!test.variables?.[0]?.includes(n.proxy)}
+                              pending={test.waiting(n.proxy, st.delays[n.proxy])}
                               monitorFocus={!!highlight?.lit && highlight.key === nodeKey(n.ref)}
                               status={
                                 // One mark slot: a down node outranks the Tailscale state.

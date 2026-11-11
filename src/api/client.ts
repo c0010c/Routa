@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Listener, Exit } from "../bindings";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSyncExternalStore } from "react";
+import { useRef, useSyncExternalStore } from "react";
 import {
   commands,
   type ApplyOutcome,
+  type DelayResult,
   type Result,
   type ValidationError,
 } from "../bindings";
@@ -132,7 +133,25 @@ export const useDeleteSubscription = make(() => commands.deleteSubscription);
 export const useRefreshSubscription = make(() => commands.refreshSubscription);
 export const useSelectGroupMember = make(() => commands.selectGroupMember);
 export const useSaveSettings = make(() => commands.saveSettings);
-export const useTestDelays = make(() => commands.testDelays);
+const useTestDelaysCommand = make(() => commands.testDelays);
+
+/**
+ * Delay tests. Results land in `status.delays` one by one while a batch runs,
+ * so `waiting(name, result)` is true only until this run's result for `name` arrives.
+ */
+export function useTestDelays(options: MutationOptions = {}) {
+  const test = useTestDelaysCommand(options);
+  const startedAt = useRef(0);
+  const mark = () => { startedAt.current = Math.floor(Date.now() / 1000); };
+  return {
+    ...test,
+    mutate: (names: string[]) => { mark(); test.mutate(names); },
+    mutateAsync: (names: string[]) => { mark(); return test.mutateAsync(names); },
+    waiting: (name: string | null | undefined, result?: DelayResult) =>
+      test.isPending && !!name && !!test.variables?.[0]?.includes(name)
+      && !(result && !result.stale && result.tested_at >= startedAt.current),
+  };
+}
 export const useRetryTailscaleExitNodes = make(() => commands.retryTailscaleExitNodes);
 export const useOpenLogDir = make(() => commands.openLogDir);
 export const useResetTraffic = make(() => commands.resetTraffic);

@@ -37,7 +37,7 @@ use crate::model::{
 };
 use crate::monitor::{MonitorBook, MonitorNotice, MonitorStatus};
 use crate::netif::{InterfaceSource, NetInterface};
-use crate::stats::delay::{test_many, DelayBook, DelayError, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
+use crate::stats::delay::{test_many, test_many_each, DelayBook, DelayError, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
 use crate::stats::traffic::{Rate, TrafficAggregator, TrafficTick};
 use crate::store::{Store, TrafficTotals};
 use crate::subscription::fetch::{fetch_listener_ports, record_result, update_subscription, FetchError, PortAllocator};
@@ -152,6 +152,8 @@ struct TailscaleTrack {
 /// restarts it.
 pub const EXIT_NODE_MAX_RETRIES: u32 = 5;
 const EXIT_NODE_RETRY_DELAY: Duration = Duration::from_secs(2);
+/// How often a running delay test pushes the results so far.
+const DELAY_EMIT_EVERY: Duration = Duration::from_millis(250);
 
 /// State guarded by the engine mutex.
 struct Engine {
@@ -1068,19 +1070,45 @@ impl Inner {
                 .map(|n| (n, DelayResult::failed(DelayError::NoCore, now_unix())))
                 .collect();
         };
-        let mut results = test_many(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, timeout_ms).await;
+        let stale = |name: &str, live: &Live, st: &RuntimeStatus| {
+            let same_core = live.delay_generation == generation && live.api.as_ref().is_some_and(|now| Arc::ptr_eq(now, &api));
+            let current_applied = matches!(st.last_apply, Some(ApplyOutcome::Reloaded { .. }));
+            let same_path = live.delay_versions.get(name).copied().unwrap_or(0) == versions.get(name).copied().unwrap_or(0);
+            !same_core || !same_path || !applied || !current_applied
+        };
+        // Record each result as it lands so the page fills in while slow
+        // nodes are still timing out; status pushes are throttled.
+        let mut last_emit = std::time::Instant::now();
+        let mut results = test_many_each(api.as_ref(), &names, &url, DEFAULT_CONCURRENCY, timeout_ms, |name, r| {
+            {
+                let live = self.live.lock().unwrap();
+                let mut st = self.status.lock().unwrap();
+                if stale(name, &live, &st) { return; }
+                st.delays.record(name.to_string(), r.clone());
+            }
+            if last_emit.elapsed() >= DELAY_EMIT_EVERY {
+                last_emit = std::time::Instant::now();
+                self.emit_status();
+            }
+        })
+        .await;
+        // Final check with the engine held (contexts synced): the authority.
+        // An early record that has gone stale since is marked so.
         {
             let eng = self.engine.lock().await;
             self.sync_delay_contexts(&eng.model);
             let live = self.live.lock().unwrap();
             let mut st = self.status.lock().unwrap();
-            let same_core = live.delay_generation == generation && live.api.as_ref().is_some_and(|now| Arc::ptr_eq(now, &api));
-            let current_applied = matches!(st.last_apply, Some(ApplyOutcome::Reloaded { .. }));
             for (name, r) in &mut results {
-                let same_path = live.delay_versions.get(name).copied().unwrap_or(0) == versions.get(name).copied().unwrap_or(0);
-                r.stale = !same_core || !same_path || !applied || !current_applied;
+                r.stale = stale(name, &live, &st);
                 // A late old-path result must never replace a fresh current one.
-                if !r.stale { st.delays.record(name.clone(), r.clone()); }
+                if r.stale {
+                    if let Some(early) = st.delays.0.get_mut(name.as_str()).filter(|b| b.tested_at == r.tested_at && b.ms == r.ms && b.error == r.error) {
+                        early.stale = true;
+                    }
+                } else {
+                    st.delays.record(name.clone(), r.clone());
+                }
             }
         }
         self.emit_status();
