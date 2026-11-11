@@ -12,6 +12,21 @@ import { NodePickerDialog } from "./NodePickerDialog";
 
 const FADED = { filter: "grayscale(1)", opacity: 0.55 } as const;
 
+/** 48px app icon. Local icons can be dark glyphs on transparency (e.g. ChatGPT), so dark mode puts them on a light plate of the same size. */
+function AppIcon({ src }: { src: string }) {
+  return (
+    <Box
+      component="img"
+      src={src}
+      alt=""
+      sx={(theme) => ({
+        width: 48, height: 48, boxSizing: "border-box", objectFit: "contain", borderRadius: 2.5,
+        ...theme.applyStyles("dark", { bgcolor: "common.white", p: 0.5 }),
+      })}
+    />
+  );
+}
+
 const DOT_SX = { position: "absolute", top: 10, right: 10, width: 8, height: 8, borderRadius: "50%" } as const;
 
 function StatusDot({ app, paused, busy, onTransfer }: { app: AiAppView; paused: boolean; busy: boolean; onTransfer(): void }) {
@@ -80,7 +95,7 @@ export function AiAppCard({
   if (!app.installed) {
     return (
       <Box sx={{ ...cardSx, opacity: 0.45 }}>
-        <img src={app.icon} alt="" width={48} height={48} />
+        <AppIcon src={app.icon} />
         <Typography variant="subtitle2">{app.name}</Typography>
         <Link
           component="button"
@@ -110,7 +125,7 @@ export function AiAppCard({
   return (
     <Box sx={cardSx}>
       <Box sx={{ display: "flex", ...fade }}>
-        <img src={app.icon} alt="" width={48} height={48} />
+        <AppIcon src={app.icon} />
       </Box>
       <StatusDot app={app} paused={paused} busy={busy} onTransfer={onTransfer} />
       <Typography variant="subtitle2">{app.name}</Typography>

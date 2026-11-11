@@ -591,7 +591,11 @@ async relaunchAsAdmin(connectTun: boolean) : Promise<Result<null, string>> {
 /** user-defined types **/
 
 export type AiAppConflict = { rule_id: ProcessRuleId; rule_name: string; process: string; removes_rule: boolean }
-export type AiAppView = { id: string; name: string; icon: string; download_url: string; installed: boolean; running: boolean; rule_id: ProcessRuleId | null; enabled: boolean; node: NodeRef | null; 
+export type AiAppView = { id: string; name: string; 
+/**
+ * 本机已安装时为该应用自己的图标，否则为列表里的占位图。
+ */
+icon: string; download_url: string; installed: boolean; running: boolean; rule_id: ProcessRuleId | null; enabled: boolean; node: NodeRef | null; 
 /**
  * 开关开着时，列表里这个应用的进程中仍由手动规则管着的那些（列表更新新增、同步时跳过的）。
  */

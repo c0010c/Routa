@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod commands;
 pub mod detect;
 pub mod fetch;
+pub mod icon;
 pub mod launch;
 pub mod rules;
 

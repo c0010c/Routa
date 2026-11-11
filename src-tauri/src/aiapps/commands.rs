@@ -22,6 +22,7 @@ type Rt<'a> = State<'a, Arc<Runtime>>;
 pub struct AiAppView {
     pub id: String,
     pub name: String,
+    /// 本机已安装时为该应用自己的图标，否则为列表里的占位图。
     pub icon: String,
     pub download_url: String,
     pub installed: bool,
@@ -39,6 +40,7 @@ pub(crate) fn build_views(
     model: &Model,
     installed: impl Fn(&CatalogApp) -> bool,
     running: impl Fn(&CatalogApp) -> bool,
+    local_icon: impl Fn(&CatalogApp) -> Option<String>,
 ) -> Vec<AiAppView> {
     catalog
         .apps
@@ -49,7 +51,7 @@ pub(crate) fn build_views(
             AiAppView {
                 id: a.id.clone(),
                 name: a.name.clone(),
-                icon: a.icon.clone(),
+                icon: local_icon(a).unwrap_or_else(|| a.icon.clone()),
                 download_url: a.download_url.clone(),
                 installed: installed(a),
                 running: running(a),
@@ -92,10 +94,18 @@ pub async fn sync_rules(rt: &Runtime, catalog: &Catalog) {
 pub async fn ai_apps_list(app: AppHandle) -> Vec<AiAppView> {
     let catalog = app.state::<Arc<AiApps>>().catalog();
     let model = app.state::<Arc<Runtime>>().model();
-    // 商店包查询与进程枚举都会阻塞。
+    // 商店包查询、进程枚举与取图标都会阻塞。
     tauri::async_runtime::spawn_blocking(move || {
         let procs = crate::procroute::processes::running_processes();
-        build_views(&catalog, &model, |a| detect::detect(a).is_some(), |a| detect::running(a, &procs))
+        let targets: std::collections::HashMap<&str, detect::LaunchTarget> =
+            catalog.apps.iter().filter_map(|a| Some((a.id.as_str(), detect::detect(a)?))).collect();
+        build_views(
+            &catalog,
+            &model,
+            |a| targets.contains_key(a.id.as_str()),
+            |a| detect::running(a, &procs),
+            |a| targets.get(a.id.as_str()).and_then(super::icon::local_icon),
+        )
     })
     .await
     .unwrap_or_else(|e| {
@@ -199,7 +209,7 @@ mod tests {
         let catalog = Catalog { schema_version: 1, apps: vec![app("on"), app("off"), app("none")] };
         let mut model = Model::default();
         model.process_routing.rules = vec![ai_rule("r-on", "on", true), ai_rule("r-off", "off", false)];
-        let views = build_views(&catalog, &model, |a| a.id != "none", |a| a.id == "on");
+        let views = build_views(&catalog, &model, |a| a.id != "none", |a| a.id == "on", |a| (a.id == "on").then(|| "data:image/png;base64,LOCAL".to_string()));
         assert_eq!(views.len(), 3);
         let (on, off, none) = (&views[0], &views[1], &views[2]);
         assert_eq!(on.id, "on");
@@ -213,6 +223,9 @@ mod tests {
         assert!(off.node.is_some());
         assert!(!none.enabled && !none.installed);
         assert_eq!(none.rule_id, None);
+        // 本机图标优先，取不到用列表占位图。
+        assert_eq!(on.icon, "data:image/png;base64,LOCAL");
+        assert_eq!(off.icon, "data:image/png;base64,");
         assert_eq!(none.node, None);
     }
 
@@ -236,7 +249,7 @@ mod tests {
             manual("m1", "工作软件", &["EXTRA.exe", "notepad.exe"]),
             manual("m2", "", &["extra2.exe"]),
         ];
-        let views = build_views(&catalog, &model, |_| true, |_| false);
+        let views = build_views(&catalog, &model, |_| true, |_| false, |_| None);
         assert_eq!(
             views[0].held,
             vec![AiAppConflict {
