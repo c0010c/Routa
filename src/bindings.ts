@@ -75,6 +75,46 @@ async refreshSubscription(id: SubscriptionId) : Promise<Result<FetchResult, null
     else return { status: "error", error: e  as any };
 }
 },
+async previewSubscription(s: Subscription) : Promise<Result<SubscriptionPreview, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("preview_subscription", { s }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async commitSubscriptionPreview(preview: SubscriptionPreview, replacement: NodeRef | null) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("commit_subscription_preview", { preview, replacement }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteSubscriptionReplacing(id: SubscriptionId, replacement: NodeRef | null) : Promise<Result<SubscriptionDeleted, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_subscription_replacing", { id, replacement }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async restoreSubscription(token: string) : Promise<Result<ApplyOutcome, ValidationError[]>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("restore_subscription", { token }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async retrySubscriptionApply(id: SubscriptionId) : Promise<Result<ApplyOutcome, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("retry_subscription_apply", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async selectGroupMember(exit: ExitId, member: NodeRef) : Promise<Result<ApplyOutcome, ValidationError[]>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("select_group_member", { exit, member }) };
@@ -965,8 +1005,17 @@ export type Subscription = { id: SubscriptionId; name: string; url: string; upda
 /**
  * unix 秒
  */
-last_updated: number | null; last_result: FetchResult | null; nodes: Node[] }
+last_updated: number | null; last_result: FetchResult | null; nodes: Node[]; info?: SubscriptionInfo | null }
+export type SubscriptionDeleted = { token: string; outcome: ApplyOutcome }
 export type SubscriptionId = string
+export type SubscriptionInfo = { usage: SubscriptionUsage | null; last_success: number | null; history: SubscriptionUpdate[] }
+export type SubscriptionPreview = { subscription: Subscription; base: string; added: string[]; removed: string[]; affected: string[]; skipped_tailscale: number; via_proxy: boolean }
+export type SubscriptionUpdate = { at: number; result: FetchResult; added: string[]; removed: string[]; via_proxy: boolean;
+/**
+ * None means download failed before application was attempted.
+ */
+apply: ApplyOutcome | null }
+export type SubscriptionUsage = { upload: number | null; download: number | null; total: number | null; expire: number | null }
 export type TailnetPeer = { 
 /**
  * The machine's requested hostname (what a Tailscale instance's

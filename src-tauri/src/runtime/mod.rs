@@ -7,6 +7,8 @@
 //! take `live` before `traffic`/`status` so samples and corrections stay ordered.
 
 mod tasks;
+mod subscriptions;
+pub use subscriptions::SubscriptionDeleted;
 
 use crate::model::ExitId;
 
@@ -40,7 +42,7 @@ use crate::netif::{InterfaceSource, NetInterface};
 use crate::stats::delay::{test_many, test_many_each, DelayBook, DelayError, DelayResult, DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS};
 use crate::stats::traffic::{Rate, TrafficAggregator, TrafficTick};
 use crate::store::{Store, TrafficTotals};
-use crate::subscription::fetch::{fetch_listener_ports, record_result, update_subscription, FetchError, PortAllocator};
+use crate::subscription::fetch::{fetch_listener_ports, record_result, download_subscription, FetchError, PortAllocator};
 use crate::subscription::Parsed;
 use crate::tailscale::{TailscaleState, TailscaleTracker};
 
@@ -221,6 +223,7 @@ struct Inner {
     /// Set by `shutdown`: nothing may launch a core or start work afterwards.
     shut_down: AtomicBool,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    subscription_undo: Mutex<Option<subscriptions::DeletedSnapshot>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, specta::Type)]
@@ -973,10 +976,14 @@ impl Inner {
             (sub, port)
         };
 
-        let result = match update_subscription(&sub, port).await {
-            Ok(p) => self.check_nodes(&sub, p.nodes).await.map(|nodes| Parsed {
+        let downloaded = download_subscription(&sub, port).await;
+        let usage = downloaded.as_ref().ok().and_then(|d| d.usage.clone());
+        let via_proxy = downloaded.as_ref().is_ok_and(|d| d.via_proxy);
+        let downloaded_ok = downloaded.is_ok();
+        let result = match downloaded {
+            Ok(d) => self.check_nodes(&sub, d.parsed.nodes).await.map(|nodes| Parsed {
                 nodes,
-                skipped_tailscale: p.skipped_tailscale,
+                skipped_tailscale: d.parsed.skipped_tailscale,
             }),
             Err(e) => Err(e),
         };
@@ -997,17 +1004,26 @@ impl Inner {
             });
         }
         let old_nodes = target.nodes.clone();
+        crate::subscription::review::initialize_info(target);
         record_result(target, result, now_unix());
         let fetch_result = target.last_result.clone();
-        let changed = target.nodes != old_nodes;
+        let changed = target.nodes != old_nodes || matches!(fetch_result, Some(FetchResult::Ok { .. })) && target.info.as_ref().and_then(|i| i.history.first()).and_then(|h| h.apply.as_ref()).is_some_and(crate::subscription::review::application_failed);
+        if downloaded_ok { target.info.get_or_insert_with(Default::default).usage = usage; }
+        let (added, removed) = crate::subscription::review::changes(&old_nodes, &target.nodes);
         // New nodes may invalidate a Select exit's selection.
         normalize(&mut m);
         self.commit_model(&mut eng, m);
-        if changed {
-            self.apply(&mut eng).await;
+        let applied = if changed {
+            Some(self.apply(&mut eng).await)
         } else {
-            self.emit_status();
+            None
+        };
+        let mut m = eng.model.clone();
+        if let Some(target) = m.subscriptions.iter_mut().find(|s| &s.id == id) {
+            crate::subscription::review::record(target, fetch_result.clone()?, added, removed, via_proxy, applied, now_unix());
         }
+        self.commit_model(&mut eng, m);
+        self.emit_status();
         fetch_result
     }
 
@@ -1193,6 +1209,7 @@ impl Runtime {
             save_errors: Mutex::new((None, None)),
             shut_down: AtomicBool::new(false),
             tasks: Mutex::new(Vec::new()),
+            subscription_undo: Mutex::new(None),
         };
         Self { inner: Arc::new(inner) }
     }

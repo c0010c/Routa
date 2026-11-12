@@ -6,7 +6,7 @@ use std::fmt;
 use std::net::TcpListener;
 use std::time::Duration;
 
-use crate::model::{ExitId, FetchResult, Model, Subscription};
+use crate::model::{ExitId, FetchResult, Model, Subscription, SubscriptionUsage};
 use crate::subscription::parse::{parse_subscription, ParseError, Parsed};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +51,26 @@ fn build_client(via_proxy: Option<u16>) -> Result<reqwest::Client, FetchError> {
 
 /// GET the raw subscription body, directly or through `127.0.0.1:<port>`.
 pub async fn fetch_body(url: &str, via_proxy: Option<u16>) -> Result<String, FetchError> {
+    fetch_response(url, via_proxy).await.map(|(body, _)| body)
+}
+
+/// Missing or malformed fields remain unknown; zero is a valid counter.
+pub fn parse_usage(header: &str) -> Option<SubscriptionUsage> {
+    let mut usage = SubscriptionUsage::default();
+    for field in header.split(';') {
+        let Some((key, value)) = field.trim().split_once('=') else { continue };
+        match key.trim().to_ascii_lowercase().as_str() {
+            "upload" => usage.upload = value.trim().parse().ok(),
+            "download" => usage.download = value.trim().parse().ok(),
+            "total" => usage.total = value.trim().parse::<u64>().ok().filter(|v| *v > 0),
+            "expire" => usage.expire = value.trim().parse::<i64>().ok().filter(|v| *v > 0),
+            _ => {}
+        }
+    }
+    (usage != SubscriptionUsage::default()).then_some(usage)
+}
+
+async fn fetch_response(url: &str, via_proxy: Option<u16>) -> Result<(String, Option<SubscriptionUsage>), FetchError> {
     let client = build_client(via_proxy)?;
     let resp = client
         .get(url)
@@ -61,6 +81,7 @@ pub async fn fetch_body(url: &str, via_proxy: Option<u16>) -> Result<String, Fet
     if !status.is_success() {
         return Err(FetchError::Http(format!("HTTP {}", status.as_u16())));
     }
+    let usage = resp.headers().get("subscription-userinfo").and_then(|h| h.to_str().ok()).and_then(parse_usage);
     let mut resp = resp;
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = resp
@@ -73,12 +94,18 @@ pub async fn fetch_body(url: &str, via_proxy: Option<u16>) -> Result<String, Fet
         }
         buf.extend_from_slice(&chunk);
     }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+    Ok((String::from_utf8_lossy(&buf).into_owned(), usage))
 }
 
-async fn fetch_nodes(url: &str, via_proxy: Option<u16>) -> Result<Parsed, FetchError> {
-    let body = fetch_body(url, via_proxy).await?;
-    parse_subscription(&body).map_err(FetchError::Parse)
+pub struct Downloaded {
+    pub parsed: Parsed,
+    pub usage: Option<SubscriptionUsage>,
+    pub via_proxy: bool,
+}
+
+async fn fetch_nodes(url: &str, via_proxy: Option<u16>) -> Result<Downloaded, FetchError> {
+    let (body, usage) = fetch_response(url, via_proxy).await?;
+    Ok(Downloaded { parsed: parse_subscription(&body).map_err(FetchError::Parse)?, usage, via_proxy: via_proxy.is_some() })
 }
 
 /// Try a direct fetch; if it fails and a fallback port is given, retry through it.
@@ -86,6 +113,10 @@ pub async fn update_subscription(
     sub: &Subscription,
     fallback_port: Option<u16>,
 ) -> Result<Parsed, FetchError> {
+    download_subscription(sub, fallback_port).await.map(|d| d.parsed)
+}
+
+pub async fn download_subscription(sub: &Subscription, fallback_port: Option<u16>) -> Result<Downloaded, FetchError> {
     let direct_err = match fetch_nodes(&sub.url, None).await {
         Ok(nodes) => return Ok(nodes),
         Err(e) => e,
@@ -168,6 +199,15 @@ pub fn fetch_listener_ports(model: &Model, alloc: &mut PortAllocator) -> Vec<(Ex
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn usage_header_preserves_unknown_values_and_rejects_invalid_limits() {
+        let usage = parse_usage("upload=0; download=1024; total=2048; expire=2000000000").unwrap();
+        assert_eq!(usage.upload, Some(0)); assert_eq!(usage.download, Some(1024));
+        assert_eq!(usage.total, Some(2048)); assert_eq!(usage.expire, Some(2000000000));
+        assert_eq!(parse_usage("total=-1; download=invalid; expire=0"), None);
+        let partial = parse_usage("download=123; other=42").unwrap();
+        assert_eq!(partial.upload,None); assert_eq!(partial.total,None);
+    }
     use crate::model::SubscriptionId;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -177,6 +217,7 @@ mod tests {
 
     fn sub(url: &str) -> Subscription {
         Subscription {
+            info: None,
             fallback_listener: None,
             id: SubscriptionId::new(),
             name: "s".into(),

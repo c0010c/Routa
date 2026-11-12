@@ -6,13 +6,14 @@ export function FormDialog({
   onClose,
   children,
   sx,
+  busy = false,
   ...rest
-}: Omit<DialogProps, "open" | "onClose"> & { onClose: () => void }) {
+}: Omit<DialogProps, "open" | "onClose"> & { onClose: () => void; busy?: boolean }) {
   return (
     <Dialog
       open
       {...rest}
-      onClose={onClose}
+      onClose={() => !busy && onClose()}
       sx={[
         {
           "& .MuiDialog-paper": {
@@ -51,6 +52,7 @@ export function FormDialog({
       {children}
       <IconButton
         aria-label="关闭"
+        disabled={busy}
         onClick={onClose}
         sx={{ position: "absolute", right: 12, top: 12 }}
       >

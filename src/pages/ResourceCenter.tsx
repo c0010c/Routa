@@ -12,7 +12,6 @@ import SwapVert from "@mui/icons-material/SwapVert";
 import UnfoldLess from "@mui/icons-material/UnfoldLess";
 import UnfoldMore from "@mui/icons-material/UnfoldMore";
 import {
-  Alert,
   Box,
   Button,
   Chip,
@@ -28,13 +27,11 @@ import {
 import {
   useModel,
   useStatus,
-  useRefreshSubscription,
-  useDeleteSubscription,
   useDeleteManualNode,
   useDeleteNodeGroup,
   useTestDelays,
 } from "../api/client";
-import type { ManualNode, NodeGroup, NodeRef, Subscription } from "../bindings";
+import type { ManualNode, NodeGroup, NodeRef } from "../bindings";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { MonitorMark } from "../components/MonitorMark";
 import { useApplyResult } from "../components/ApplyResultSnackbar";
@@ -46,25 +43,23 @@ import { nodeKey, expandMembers } from "../lib/refs";
 import { clearMonitorFocus, useMonitorFocus } from "../api/monitorFocus";
 import { useSettingsSave, settingsSaveMessage } from "../api/settings";
 import { EMPTY_MONITOR_STATUS, fetchInUseNodes, skippedMessage, targetsForNode, withNode, withoutNode } from "../lib/monitor";
-import { SubscriptionDialog, newSubscription } from "./SubscriptionDialog";
 import { ManualNodeDialog, newManualNode } from "./ManualNodeDialog";
 import { NodeGroupDialog, newNodeGroup } from "./NodeGroupDialog";
 import { TailscaleDialog, newTailscaleNode } from "./TailscaleDialog";
 import { ListenerDialog, newListener } from "./ListenerDialog";
+import { Subscriptions } from "./Subscriptions";
 
 const FOCUS_MS = 3000;
 
-export function ResourceCenter({
-  subscriptionsOnly = false,
-}: {
-  subscriptionsOnly?: boolean;
-}) {
+export function ResourceCenter({ subscriptionsOnly = false }: { subscriptionsOnly?: boolean }) {
+  return subscriptionsOnly ? <Subscriptions /> : <NodeResources />;
+}
+
+function NodeResources() {
   const [batch, setBatch] = useState(false);
   const model = useModel(),
     runtime = useStatus(),
-    refresh = useRefreshSubscription(),
     test = useTestDelays(),
-    delSub = useDeleteSubscription(),
     delNode = useDeleteManualNode(),
     delGroup = useDeleteNodeGroup();
   const [params, setParams] = useSearchParams();
@@ -88,13 +83,13 @@ export function ResourceCenter({
   if (!test.isPending) sortDelays.current = runtime.data?.delays;
   const loaded = !!model.data && !!runtime.data;
   useEffect(() => {
-    if (subscriptionsOnly || !focus || typeof focus !== "object") return;
+    if (!focus || typeof focus !== "object") return;
     // Clear whatever could hide the card.
     setSearch("");
     if (params.has("source")) setParams({});
     setHighlight({ key: nodeKey(focus.Node), lit: true, seq: ++focusSeq.current });
     clearMonitorFocus();
-  }, [focus, subscriptionsOnly, params, setParams]);
+  }, [focus, params, setParams]);
   useEffect(() => {
     if (!highlight || !loaded) return;
     const card = Array.from(document.querySelectorAll<HTMLElement>("[data-grid-key]")).find(
@@ -108,8 +103,7 @@ export function ResourceCenter({
     return () => clearTimeout(timer);
   }, [highlight]);
   const [newMenu, setNewMenu] = useState<HTMLElement | null>(null);
-  const [sub, setSub] = useState<Subscription | null>(null),
-    [manual, setManual] = useState<ManualNode | null>(null),
+  const [manual, setManual] = useState<ManualNode | null>(null),
     [ts, setTs] = useState<ManualNode | null>(null),
     [group, setGroup] = useState<NodeGroup | null>(null),
     [proxy, setProxy] = useState<NodeRef | null>(null);
@@ -258,25 +252,17 @@ export function ResourceCenter({
           {simple && (
             <IconButton
               component={Link}
-              to={subscriptionsOnly ? "/nodes" : "/"}
-              aria-label={subscriptionsOnly ? "返回节点" : "返回连接"}
+              to="/"
+              aria-label="返回连接"
             >
               <ArrowBackOutlined />
             </IconButton>
           )}
           <Typography variant="h5">
-            {subscriptionsOnly ? "订阅" : "节点"}
+            节点
           </Typography>
         </Stack>
         <Box>
-          {subscriptionsOnly ? (
-            <Button
-              variant="contained"
-              onClick={() => setSub(newSubscription())}
-            >
-              新增订阅
-            </Button>
-          ) : (
             <>
               {simple && (
                 <Button component={Link} to="/subscriptions">
@@ -306,114 +292,8 @@ export function ResourceCenter({
                 <MenuItem onClick={create(() => setGroup(newNodeGroup()))}>新建分组</MenuItem>
               </Menu>
             </>
-          )}
         </Box>
       </Stack>
-      {subscriptionsOnly ? (
-        <Box
-          sx={{
-            height: "calc(100dvh - 150px)",
-            minHeight: 300,
-            overflowY: "auto",
-          }}
-        >
-          <FixedCardGrid>
-            {m.subscriptions.map((s) => (
-              <Paper
-                component="article"
-                aria-label={s.name}
-                key={s.id}
-                sx={{
-                  overflow: "hidden",
-                  minWidth: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                }}
-              >
-                <Stack spacing={1.5} sx={{ p: 2 }}>
-                  <Typography variant="h6" noWrap title={s.name}>
-                    {s.name}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    data-selectable="true"
-                    sx={{
-                      overflowWrap: "anywhere",
-                      height: 40,
-                      overflowY: "auto",
-                    }}
-                  >
-                    {s.url}
-                  </Typography>
-                  <Typography>
-                    {s.nodes.length} 个节点 ·{" "}
-                    {s.update_interval_mins
-                      ? `每 ${s.update_interval_mins} 分钟更新`
-                      : "手动更新"}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {s.last_updated
-                      ? new Date(s.last_updated * 1000).toLocaleString("zh-CN")
-                      : "尚未更新"}
-                  </Typography>
-                  <Typography variant="body2">
-                    备用代理：
-                    {visibleListeners(m).find((l) => l.exit === s.fallback_exit)
-                      ?.name ??
-                      (s.fallback_exit ? "旧配置（请重新选择代理）" : "不使用")}
-                  </Typography>
-                  {s.last_result && "Failed" in s.last_result && (
-                    <Alert severity="error">
-                      {s.last_result.Failed.reason}
-                    </Alert>
-                  )}
-                </Stack>
-                <Box
-                  sx={{
-                    p: 1.5,
-                    mt: "auto",
-                    flexWrap: "wrap",
-                    borderTop: 1,
-                    borderColor: "divider",
-                    display: "flex",
-                    gap: 1,
-                  }}
-                >
-                  <Button
-                    disabled={refresh.isPending}
-                    onClick={() => refresh.mutate(s.id)}
-                  >
-                    更新
-                  </Button>
-                  <Button
-                    component={Link}
-                    to={`/nodes?source=${encodeURIComponent(s.id)}`}
-                  >
-                    查看节点
-                  </Button>
-                  <Button onClick={() => setSub(s)}>编辑</Button>
-                  <Button
-                    color="error"
-                    onClick={() =>
-                      setDeleting({
-                        name: s.name,
-                        run: () => delSub.mutateAsync(s.id),
-                      })
-                    }
-                  >
-                    删除
-                  </Button>
-                </Box>
-              </Paper>
-            ))}
-          </FixedCardGrid>
-          {!m.subscriptions.length && (
-            <Typography sx={{ p: 5, textAlign: "center" }}>
-              暂无订阅，添加后可更新节点。
-            </Typography>
-          )}
-        </Box>
-      ) : (
         <>
           <Stack
             direction="row"
@@ -622,15 +502,7 @@ export function ResourceCenter({
             共 {nodes.length} 个节点（跨分组去重）
           </Typography>
         </>
-      )}
       {batch && <BatchNodeDialog onClose={() => setBatch(false)} />}
-      {sub && (
-        <SubscriptionDialog
-          key={sub.id}
-          subscription={sub}
-          onClose={() => setSub(null)}
-        />
-      )}
       {manual && (
         <ManualNodeDialog
           key={manual.id}

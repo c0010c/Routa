@@ -96,6 +96,36 @@ pub struct Subscription {
     pub last_updated: Option<i64>,
     pub last_result: Option<FetchResult>,
     pub nodes: Vec<Node>,
+    #[specta(optional)]
+    pub info: Option<SubscriptionInfo>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, specta::Type)]
+#[serde(default)]
+pub struct SubscriptionUsage {
+    pub upload: Option<u64>,
+    pub download: Option<u64>,
+    pub total: Option<u64>,
+    pub expire: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, specta::Type)]
+#[serde(default)]
+pub struct SubscriptionInfo {
+    pub usage: Option<SubscriptionUsage>,
+    pub last_success: Option<i64>,
+    pub history: Vec<SubscriptionUpdate>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
+pub struct SubscriptionUpdate {
+    pub at: i64,
+    pub result: FetchResult,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub via_proxy: bool,
+    /// None means download failed before application was attempted.
+    pub apply: Option<crate::core::apply::ApplyOutcome>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, specta::Type)]
@@ -197,6 +227,7 @@ impl Default for Subscription {
             last_updated: None,
             last_result: None,
             nodes: Vec::new(),
+            info: None,
         }
     }
 }
@@ -608,6 +639,7 @@ mod tests {
         });
         let m = Model {
             subscriptions: vec![Subscription {
+                info: None,
                 fallback_listener: None,
                 id: sub_id,
                 name: "订阅 ✨".into(),

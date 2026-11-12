@@ -550,6 +550,7 @@ async fn subscription_due_is_fetched_and_applied() {
         node: NodeRef::Subscription { subscription_id: sub_id.clone(), name: "a".into() },
     };
     m.subscriptions.push(Subscription {
+        info: None,
         fallback_listener: None,
         id: sub_id.clone(),
         name: "订阅".into(),
@@ -930,6 +931,7 @@ async fn stale_fetch_discarded_when_url_changed() {
     let sub_id = SubscriptionId("sub-1".into());
     let mut m = model_with_listener(false);
     m.subscriptions.push(Subscription {
+        info: None,
         fallback_listener: None,
         id: sub_id.clone(),
         name: "订阅".into(),
@@ -1006,6 +1008,7 @@ async fn invalid_nodes_rejected_by_core_keep_old_nodes() {
     };
     let mut m = model_with_listener(false);
     m.subscriptions.push(Subscription {
+        info: None,
         fallback_listener: None,
         id: sub_id.clone(),
         name: "订阅".into(),
@@ -1298,6 +1301,7 @@ async fn fallback_fetch_only_through_a_port_our_core_owns() {
     let sub_id = SubscriptionId("sub-1".into());
     let mut m = model_with_listener(false);
     m.subscriptions.push(Subscription {
+        info: None,
         fallback_listener: None,
         id: sub_id.clone(),
         name: "订阅".into(),
@@ -1966,6 +1970,58 @@ fn reject_next_reload(api: &FakeApi) {
         .lock()
         .unwrap()
         .push_back(Err(crate::core::api::ApiError::Rejected { status: 400, message: "bad".into() }));
+}
+
+#[tokio::test]
+async fn subscription_preview_is_read_only_and_requires_fresh_reference_confirmation() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).respond_with(ResponseTemplate::new(200)
+        .insert_header("subscription-userinfo", "upload=0; download=100; total=1000")
+        .set_body_string("proxies:\n  - {name: next, type: socks5, server: example.test, port: 1080}\n"))
+        .mount(&server).await;
+    let mut m = model_with_listener(false);
+    let mut sub = Subscription { name: "来源".into(), url: server.uri(), ..Default::default() };
+    sub.nodes = crate::subscription::parse_subscription("proxies:\n  - {name: old, type: socks5, server: example.test, port: 1080}\n").unwrap().nodes;
+    let id = sub.id.clone();
+    m.exits[0].kind = ExitKind::Node { node: NodeRef::Subscription { subscription_id: id.clone(), name: "old".into() } };
+    m.subscriptions.push(sub.clone());
+    let h = harness(&m);
+    let before = h.rt.model();
+    let duplicate = Subscription { name: "重复地址".into(), url: sub.url.clone(), ..Default::default() };
+    assert!(h.rt.preview_subscription(duplicate).await.is_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
+    let preview = h.rt.preview_subscription(sub).await.unwrap();
+    assert_eq!(before,h.rt.model());
+    assert!(!preview.affected.is_empty());
+    assert_eq!(preview.subscription.info.as_ref().unwrap().usage.as_ref().unwrap().download,Some(100));
+    assert!(h.rt.commit_subscription_preview(preview.clone(),None).await.is_err());
+    assert_eq!(before,h.rt.model());
+    h.rt.mutate(|m| m.subscriptions[0].name = "新名称".into()).await.unwrap();
+    assert!(h.rt.commit_subscription_preview(preview,None).await.is_err());
+    assert_eq!(h.rt.model().subscriptions[0].nodes[0].name,"old");
+    let preview = h.rt.preview_subscription(h.rt.model().subscriptions[0].clone()).await.unwrap();
+    h.rt.commit_subscription_preview(preview,Some(NodeRef::Subscription { subscription_id: id, name: "next".into() })).await.unwrap();
+    assert_eq!(h.rt.model().subscriptions[0].nodes[0].name,"next");
+    assert!(h.rt.model().subscriptions[0].info.as_ref().unwrap().history[0].apply.is_some());
+}
+
+#[tokio::test]
+async fn subscription_delete_undo_never_overwrites_later_configuration() {
+    let sub = Subscription { name: "待删除".into(), url: "https://example.test/sub".into(), ..Default::default() };
+    let mut m = model_with_listener(false); m.subscriptions.push(sub.clone());
+    let h = harness(&m);
+    let before = h.rt.model();
+    let deleted = h.rt.delete_subscription_replacing(sub.id.clone(),None).await.unwrap();
+    assert!(h.rt.model().subscriptions.is_empty());
+    h.rt.restore_subscription(deleted.token).await.unwrap();
+    assert_eq!(h.rt.model(),before);
+    let deleted = h.rt.delete_subscription_replacing(sub.id,None).await.unwrap();
+    h.rt.mutate(|m| m.settings.delay_test_url = "https://changed.test/".into()).await.unwrap();
+    assert!(h.rt.restore_subscription(deleted.token).await.is_err());
+    assert_eq!(h.rt.model().settings.delay_test_url,"https://changed.test/");
+    assert!(h.rt.model().subscriptions.is_empty());
 }
 
 #[tokio::test(start_paused = true)]

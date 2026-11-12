@@ -115,7 +115,8 @@ it("renders standalone subscription cards with a source-filtered node link", asy
     "/nodes?source=s1",
   );
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
-  expect(screen.getByText("https://example.test/sub")).toBeInTheDocument();
+  expect(screen.getByText("example.test")).toBeInTheDocument();
+  expect(screen.queryByText("https://example.test/sub")).not.toBeInTheDocument();
 });
 it("filters a subscription source across groups", async () => {
   setup(false, "/nodes?source=s1");

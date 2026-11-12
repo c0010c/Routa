@@ -49,6 +49,7 @@ export function useTrafficHistory(): TrafficHistory {
 
 interface MutationOptions {
   errorFeedback?: "global" | "local";
+  applyFeedback?: boolean;
 }
 
 function useApiMutation<A extends unknown[], T>(
@@ -64,7 +65,7 @@ function useApiMutation<A extends unknown[], T>(
       if (!isValidationError(e) && options.errorFeedback !== "local") apply.showError(errorMessage(e));
     },
     onSuccess: (data) => {
-      if (typeof data === "object" && data !== null && isApplyOutcome(data)) apply.show(data);
+      if (options.applyFeedback !== false && typeof data === "object" && data !== null && isApplyOutcome(data)) apply.show(data);
       void qc.invalidateQueries({ queryKey: ["model"] });
       void qc.invalidateQueries({ queryKey: ["status"] });
       void qc.invalidateQueries({ queryKey: ["procroute"] });

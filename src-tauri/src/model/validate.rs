@@ -476,6 +476,7 @@ mod tests {
     }
     fn sub(name: &str) -> Subscription {
         Subscription {
+            info: None,
             fallback_listener: None,
             id: SubscriptionId::new(),
             name: name.into(),

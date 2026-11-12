@@ -121,6 +121,7 @@ mod tests {
     }
     fn sub_with(node: &str) -> Subscription {
         Subscription {
+            info: None,
             fallback_listener: None,
             id: SubscriptionId("s".into()),
             name: "s".into(),

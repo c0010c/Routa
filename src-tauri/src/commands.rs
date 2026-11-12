@@ -106,6 +106,7 @@ pub mod ops {
                 s.nodes = old.nodes.clone();
                 s.last_updated = old.last_updated;
                 s.last_result = old.last_result.clone();
+                s.info = old.info.clone();
             }
             let id = s.id.clone();
             upsert(&mut m.subscriptions, s, |x| x.id == id);
@@ -442,6 +443,36 @@ pub async fn delete_subscription(rt: Rt<'_>, id: SubscriptionId) -> CmdResult {
 #[specta::specta]
 pub async fn refresh_subscription(rt: Rt<'_>, id: SubscriptionId) -> Result<FetchResult, ()> {
     Ok(rt.refresh_subscription(id).await)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn preview_subscription(rt: Rt<'_>, s: Subscription) -> Result<crate::subscription::review::SubscriptionPreview, String> {
+    rt.preview_subscription(s).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn commit_subscription_preview(rt: Rt<'_>, preview: crate::subscription::review::SubscriptionPreview, replacement: Option<NodeRef>) -> CmdResult {
+    rt.commit_subscription_preview(preview, replacement).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_subscription_replacing(rt: Rt<'_>, id: SubscriptionId, replacement: Option<NodeRef>) -> Result<crate::runtime::SubscriptionDeleted, Vec<ValidationError>> {
+    rt.delete_subscription_replacing(id, replacement).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn restore_subscription(rt: Rt<'_>, token: String) -> CmdResult {
+    rt.restore_subscription(token).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn retry_subscription_apply(rt: Rt<'_>, id: SubscriptionId) -> Result<ApplyOutcome, String> {
+    rt.retry_subscription_apply(id).await
 }
 
 #[tauri::command]
@@ -955,6 +986,7 @@ pub(crate) mod tests {
         let sub_id = SubscriptionId::new();
         let node = NodeRef::Subscription { subscription_id: sub_id.clone(), name: "n1".into() };
         let sub = Subscription {
+            info: None,
             fallback_listener: None,
             id: sub_id,
             name: "s".into(),
@@ -992,6 +1024,7 @@ pub(crate) mod tests {
 
     fn sub(url: &str) -> Subscription {
         Subscription {
+            info: None,
             fallback_listener: None,
             id: SubscriptionId::new(),
             name: "s".into(),

@@ -159,6 +159,7 @@ mod tests {
     fn model() -> Model {
         let mut m = Model::default();
         m.subscriptions.push(Subscription {
+            info: None,
             id: SubscriptionId("s".into()),
             name: "s".into(),
             url: "https://x".into(),

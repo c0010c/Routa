@@ -616,6 +616,7 @@ mod tests {
     }
     fn base() -> Model {
         let sub = Subscription {
+            info: None,
             fallback_listener: None,
             id: SubscriptionId("s1".into()),
             name: "机场".into(),
