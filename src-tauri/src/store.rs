@@ -183,7 +183,6 @@ mod tests {
         let m = store.load_model().unwrap();
         assert_eq!(m.subscriptions.len(), 1);
         assert_eq!(m.subscriptions[0].url, "https://x/sub");
-        assert!(m.process_routing.enabled);
         let ids: Vec<_> = m.process_routing.rules.iter().map(|r| r.id.0.as_str()).collect();
         assert_eq!(ids, ["new1"]);
         assert_eq!(m.process_routing.rules[0].processes, vec![crate::model::ProcessEntry::path(r"C:\b.exe")]);
@@ -192,6 +191,36 @@ mod tests {
         assert_eq!(drop_old_process_rules(&mut raw), 2);
         assert_eq!(drop_old_process_rules(&mut raw), 0);
         assert_eq!(drop_old_process_rules(&mut serde_json::json!({})), 0);
+    }
+
+    #[test]
+    fn legacy_pause_becomes_individual_disabled_rules_and_survives_save() {
+        let (_td, store) = open_tmp();
+        let mut raw = serde_json::json!({
+            "proxy_layout_version": 1,
+            "process_routing": {"enabled": false, "exit_prompt": false, "rules": [
+                {"id": "ai", "ai_app": "chatgpt", "user_enabled": true, "node": {"manual_id": "n"}, "processes": [{"kind": "Name", "value": "ChatGPT.exe"}]},
+                {"id": "manual", "user_enabled": true, "processes": [{"kind": "Name", "value": "git.exe"}]},
+                {"id": "off", "user_enabled": false, "processes": [{"kind": "Name", "value": "curl.exe"}]}
+            ]}
+        });
+        fs::write(store.state_path(), serde_json::to_vec(&raw).unwrap()).unwrap();
+        let mut model = store.load_model().unwrap();
+        assert!(model.process_routing.rules.iter().all(|r| !r.user_enabled));
+        assert!(!model.process_routing.exit_prompt);
+        assert_eq!(model.process_routing.rules[0].node, Some(crate::model::NodeRef::Manual { manual_id: crate::model::ManualNodeId("n".into()) }));
+        // Enabling one app never resumes the old paused manual rule.
+        model.process_routing.rules[0].user_enabled = true;
+        store.save_model(&model).unwrap();
+        assert_eq!(store.load_model().unwrap(), model);
+        let saved: serde_json::Value = read_json(&store.state_path()).unwrap().unwrap();
+        assert!(saved["process_routing"].get("enabled").is_none());
+        assert!(!model.process_routing.rules[1].user_enabled);
+        // An old active configuration retains individual switches.
+        raw["process_routing"]["enabled"] = serde_json::json!(true);
+        fs::write(store.state_path(), serde_json::to_vec(&raw).unwrap()).unwrap();
+        let model = store.load_model().unwrap();
+        assert_eq!(model.process_routing.rules.iter().map(|r| r.user_enabled).collect::<Vec<_>>(), vec![true, true, false]);
     }
 
     #[test]

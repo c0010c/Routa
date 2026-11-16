@@ -11,19 +11,17 @@ const mono = { fontFamily: "Consolas, monospace", fontSize: 12, wordBreak: "brea
 export function LearnedLocations({
   rule,
   others,
-  routingEnabled,
   running,
   onRemove,
 }: {
   rule: ProcessRule;
   others: ProcessRule[];
-  routingEnabled: boolean;
   running: RunningProcess[];
   onRemove?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   if (learningNames(rule).length === 0) return null;
-  const skipped = skippedOf(rule, others, routingEnabled);
+  const skipped = skippedOf(rule, others);
   // A learned path another enabled rule claims by path is not guarded by this rule (the backend
   // doesn't send it): it shows up only as skipped and isn't counted.
   const learned = rule.learned.filter((p) => !skipped.some((s) => s.path.toLowerCase() === p.toLowerCase()));

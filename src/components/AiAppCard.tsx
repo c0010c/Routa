@@ -10,8 +10,6 @@ import { useApplyResult } from "./ApplyResultSnackbar";
 import { DelayText } from "./DelayText";
 import { NodePickerDialog } from "./NodePickerDialog";
 
-const FADED = { filter: "grayscale(1)", opacity: 0.55 } as const;
-
 /** 48px app icon. Local icons can be dark glyphs on transparency (e.g. ChatGPT), so dark mode puts them on a light plate of the same size. */
 function AppIcon({ src }: { src: string }) {
   return (
@@ -29,10 +27,10 @@ function AppIcon({ src }: { src: string }) {
 
 const DOT_SX = { position: "absolute", top: 10, right: 10, width: 8, height: 8, borderRadius: "50%" } as const;
 
-function StatusDot({ app, paused, busy, onTransfer }: { app: AiAppView; paused: boolean; busy: boolean; onTransfer(): void }) {
+function StatusDot({ app, busy, onTransfer }: { app: AiAppView; busy: boolean; onTransfer(): void }) {
   const status = useProcRouteStatus();
   const view = app.rule_id ? status.data?.actions[app.rule_id] : undefined;
-  const live = app.enabled && !paused;
+  const live = app.enabled;
   // "Pending" (waiting for the service to confirm) carries a reason too, but is not a failure.
   const failed = live && view?.action !== "Pending" && !!view?.reason;
   // Some of the app's processes are still routed by a manual rule (skipped when the catalog grew).
@@ -64,7 +62,6 @@ function StatusDot({ app, paused, busy, onTransfer }: { app: AiAppView; paused: 
 export function AiAppCard({
   app,
   model,
-  paused,
   busy,
   onToggle,
   onLaunch,
@@ -73,7 +70,6 @@ export function AiAppCard({
 }: {
   app: AiAppView;
   model: Model;
-  paused: boolean;
   /** A flow (enable / disable / launch / change node) is running for this app. */
   busy: boolean;
   onToggle(on: boolean): void;
@@ -111,25 +107,24 @@ export function AiAppCard({
     );
   }
 
-  const fade = paused ? FADED : undefined;
   const sw = (
     <Switch
       size="small"
       checked={app.enabled}
       disabled={busy}
-      color={paused ? "default" : "primary"}
+      color="primary"
       onChange={(e) => onToggle(e.target.checked)}
       slotProps={{ input: { "aria-label": `${app.name} 代理开关` } }}
     />
   );
   return (
     <Box sx={cardSx}>
-      <Box sx={{ display: "flex", ...fade }}>
+      <Box sx={{ display: "flex" }}>
         <AppIcon src={app.icon} />
       </Box>
-      <StatusDot app={app} paused={paused} busy={busy} onTransfer={onTransfer} />
+      <StatusDot app={app} busy={busy} onTransfer={onTransfer} />
       <Typography variant="subtitle2">{app.name}</Typography>
-      <Box sx={{ ...fade, display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5 }}>
+      <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5 }}>
         <Button size="small" variant="outlined" color="inherit" disabled={busy} onClick={() => setPicking(true)} sx={{ textTransform: "none", maxWidth: "100%" }}>
           <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis" }}>
             {app.node ? nodeLabel(model, app.node) : "选择节点"}
@@ -142,7 +137,7 @@ export function AiAppCard({
         )}
       </Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        {app.enabled && paused ? <Tooltip title="进程分流已关闭，开启后恢复"><span>{sw}</span></Tooltip> : sw}
+        {sw}
         {/* `loading` overlays the spinner on the kept label: a startIcon would widen the button and shift the centered row. */}
         <Button
           size="small"

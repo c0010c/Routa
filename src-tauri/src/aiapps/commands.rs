@@ -34,7 +34,7 @@ pub struct AiAppView {
     pub held: Vec<AiAppConflict>,
 }
 
-/// 每个列表应用一项，按列表顺序；`enabled` 只看 AI 规则自身的开关（总开关由"启动"打开）。
+/// 每个列表应用一项，按列表顺序；`enabled` 只看 AI 规则自身的开关。
 pub(crate) fn build_views(
     catalog: &Catalog,
     model: &Model,

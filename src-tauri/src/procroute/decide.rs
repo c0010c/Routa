@@ -13,7 +13,7 @@ use crate::model::validate::process_proxy_host;
 use crate::model::{Listener, Model, ProcessRule, ProcessRuleId};
 use crate::runtime::{CoreStopReason, RuntimeStatus};
 
-/// 根据模型和运行状态算出下发给助手的期望状态。全局开关关闭或规则被禁用时，
+/// 根据模型和运行状态算出下发给助手的期望状态。规则被禁用时，
 /// 规则不出现在结果里（助手不再管理该进程）；其余规则保持原顺序。
 ///
 /// 服务端一条规则对应一个程序：每条规则按进程展开，id 为 [`spec_id`]，用 [`rule_of_spec`] 还原。
@@ -58,10 +58,10 @@ pub fn reasons(model: &Model, status: &RuntimeStatus) -> HashMap<ProcessRuleId, 
         .collect()
 }
 
-/// 下发给助手的规则：全局开关打开时用户启用的规则。
+/// 下发给助手的规则：用户启用的规则。
 fn active_rules(model: &Model) -> impl Iterator<Item = &ProcessRule> {
     let routing = &model.process_routing;
-    routing.rules.iter().filter(move |r| routing.enabled && r.user_enabled)
+    routing.rules.iter().filter(move |r| r.user_enabled)
 }
 
 /// spec 第 5 节，按顺序判断，先命中者生效。返回动作和（非代理时的）原因。
@@ -165,7 +165,7 @@ mod tests {
             last_result: None,
             nodes: vec![Node { name: "n1".into(), proxy_type: "ss".into(), server: "x".into(), raw: serde_json::Value::Null }],
         });
-        m.process_routing.enabled = true;
+
         m.process_routing.rules.push(rule(on_fault));
         crate::model::hidden::reconcile_hidden_listeners(&mut m);
         let l = m.listeners.iter_mut().find(|l| l.hidden).unwrap();
@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(d.rules.iter().map(|r| rule_of_spec(&r.id)).collect::<Vec<_>>(), ["r2"]);
 
         let mut m = model(FaultPolicy::Direct);
-        m.process_routing.enabled = false;
+        for rule in &mut m.process_routing.rules { rule.user_enabled = false; }
         let d = decide(&m, &running(), PID);
         assert!(d.rules.is_empty());
         assert_eq!(d.routa_pid, PID);

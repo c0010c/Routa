@@ -72,11 +72,11 @@ function Help({ children }: { children: ReactNode }) {
  * Info toast after saving a rule that starts recording locations; `null` when nothing new is recorded
  * (also when the rule or process routing is off: nothing is recorded then).
  */
-function learningNotice(before: ProcessRule | undefined, saved: ProcessRule, others: ProcessRule[], routingEnabled: boolean) {
-  if (!saved.user_enabled || !routingEnabled) return null;
+function learningNotice(before: ProcessRule | undefined, saved: ProcessRule, others: ProcessRule[]) {
+  if (!saved.user_enabled) return null;
   const newly = newlyLearning(before, saved);
   if (newly.length === 0) return null;
-  const skipped = skippedOf(saved, others, routingEnabled);
+  const skipped = skippedOf(saved, others);
   return [
     "已开启按进程名阻断",
     `${newly.join("、")} 联网时会自动记录位置，分流服务停止后也能拦住；还没联网过的位置除外。`,
@@ -99,7 +99,6 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
   const notify = useApplyResult();
   const m = model.data;
   const rules = (m?.process_routing.rules ?? []).filter((x) => !isAiRule(x));
-  const routingEnabled = m?.process_routing.enabled ?? false;
   const others = rules.filter((x) => x.id !== rule?.id);
   // Mirrors `ProcessRule::default`.
   const [r, setR] = useState<ProcessRule>(
@@ -129,7 +128,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
     return kind && typeof kind === "object" && "Tailscale" in kind ? kind.Tailscale.interface : null;
   })();
   const block = r.on_fault === "Block";
-  const skipped = block ? skippedOf(r, others, routingEnabled) : [];
+  const skipped = block ? skippedOf(r, others) : [];
   // Learned locations are the service's: show the stored list, removals apply at once.
   const stored = rule && rules.find((x) => x.id === rule.id);
   const autoName = r.processes.length ? ruleLabel({ name: "", processes: r.processes }) : "";
@@ -154,7 +153,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
     try {
       await save.mutateAsync(next);
       onClose();
-      const notice = learningNotice(rule, next, others, routingEnabled);
+      const notice = learningNotice(rule, next, others);
       if (notice) notify.showMessage(notice, "info");
     } catch (e) {
       setErrs(isValidationError(e) ? ruleErrors(e.errors) : { form: [errorMessage(e)] });
@@ -185,7 +184,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
             ref={entries}
             entries={r.processes}
             others={others}
-            routingEnabled={routingEnabled}
+
             running={running.data ?? []}
             error={errs.processes}
             onChange={(processes) => {
@@ -252,7 +251,7 @@ function RuleForm({ rule, onClose }: { rule?: ProcessRule; onClose: () => void }
               <LearnedLocations
                 rule={{ ...r, learned: stored.learned }}
                 others={others}
-                routingEnabled={routingEnabled}
+
                 running={running.data ?? []}
                 onRemove={(p) => removeLearned.mutate(r.id, p)}
               />

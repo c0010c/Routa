@@ -17,7 +17,6 @@ vi.mock("../bindings", () => ({
     procrouteRetry: vi.fn(),
     saveProcessRule: vi.fn(),
     deleteProcessRule: vi.fn(),
-    saveProcessRoutingSettings: vi.fn(),
     disableRoutingAndQuit: vi.fn(),
     removeLearnedProcessPath: vi.fn(),
     listRunningProcesses: vi.fn(),
@@ -42,7 +41,6 @@ const model: Model = {
   manual_nodes: [{ id: "m1", name: "东京", kind: { Proxy: { raw: "ss://x" } }, groups: [] }],
   node_groups: [],
   process_routing: {
-    enabled: true,
     rules: [
       { id: "r1", name: "", processes: [N("curl.exe")], learned: [], node: { manual_id: "m1" }, on_fault: "Direct", reset_on_change: false, user_enabled: true, ai_app: null },
       {
@@ -98,23 +96,23 @@ describe("ProcessRoutingPage", () => {
   it("not installed shows enable button", async () => {
     vi.mocked(commands.procrouteInstall).mockResolvedValue({ status: "ok", data: null });
     renderPage({ ...base, component: "NotInstalled" });
-    const btn = await screen.findByRole("button", { name: "启用进程分流" });
-    expect(screen.getByText("未安装")).toBeInTheDocument();
+    const btn = await screen.findByRole("button", { name: "安装组件" });
+    expect(screen.getByText(/需要先安装分流组件/)).toBeInTheDocument();
     fireEvent.click(btn);
     await waitFor(() => expect(commands.procrouteInstall).toHaveBeenCalled());
   });
 
   it("needs update shows update button", async () => {
     renderPage({ ...base, component: "NeedsUpdate" });
-    expect(await screen.findByRole("button", { name: "更新分流服务" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "启用进程分流" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "更新组件" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "安装组件" })).not.toBeInTheDocument();
   });
 
   it("failed update keeps a retryable button and reports the actual error", async () => {
     let finish: (result: { status: "error"; error: string }) => void = () => {};
     vi.mocked(commands.procrouteInstall).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     renderPage({ ...base, component: "NeedsUpdate" });
-    const button = await screen.findByRole("button", { name: "更新分流服务" });
+    const button = await screen.findByRole("button", { name: "更新组件" });
     fireEvent.click(button);
     await waitFor(() => expect(button).toBeDisabled());
     act(() => finish({ status: "error", error: "旧服务进程未退出，请稍后重试" }));
@@ -127,12 +125,12 @@ describe("ProcessRoutingPage", () => {
 
   it.each(["Stopped", { Error: { message: "服务启动失败" } }] as const)("offers service repair after a failed installation: %s", async (component) => {
     renderPage({ ...base, component });
-    expect(await screen.findByRole("button", { name: "修复分流服务" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: component === "Stopped" ? "启动组件" : "修复组件" })).toBeInTheDocument();
   });
 
   it("shows the error of a failed component and apply errors", async () => {
     renderPage({ ...base, component: { Error: { message: "管道无响应" } }, apply_errors: ["规则 curl.exe 下发失败"] });
-    expect(await screen.findByText("错误：管道无响应")).toBeInTheDocument();
+    expect(await screen.findByText("分流组件异常：管道无响应")).toBeInTheDocument();
     expect(screen.getByText("规则 curl.exe 下发失败")).toBeInTheDocument();
   });
 
@@ -149,7 +147,7 @@ describe("ProcessRoutingPage", () => {
 
     unmount();
     renderPage(status);
-    await screen.findByText("运行中");
+    await screen.findByRole("heading", { name: "进程分流" });
     expect(screen.queryByText(/最近一次中断：/)).not.toBeInTheDocument();
   });
 
@@ -318,43 +316,29 @@ describe("ProcessRoutingPage", () => {
     expect(screen.getByText("没有匹配的规则")).toBeInTheDocument();
   });
 
-  it("keeps the switch next to the title and explains a paused state", async () => {
-    vi.mocked(commands.saveProcessRoutingSettings).mockResolvedValue({ status: "ok", data: null });
-    renderPage(base, { ...model, process_routing: { ...model.process_routing, enabled: false } });
-    expect(await screen.findByText("进程分流已暂停，下面的规则都不生效。")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "启用进程分流规则" })).not.toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
-    await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(true));
-    // Exit policy and component maintenance live in Settings now.
-    expect(screen.queryByText("退出行为与故障策略")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "更多组件操作" })).not.toBeInTheDocument();
-  });
-
-  it("offers 停用并退出 next to the switch while routing is on", async () => {
-    vi.mocked(commands.disableRoutingAndQuit).mockResolvedValue({ status: "ok", data: null });
+  it("正常时不显示总开关、运行中标签或暂停提示", async () => {
     renderPage(base);
-    fireEvent.click(await screen.findByRole("button", { name: "停用并退出" }));
-    await waitFor(() => expect(commands.disableRoutingAndQuit).toHaveBeenCalled());
-  });
-
-  it("shows why 停用并退出 did not quit", async () => {
-    const reason = "进程分流还没有停用成功，暂不退出：服务启动失败";
-    vi.mocked(commands.disableRoutingAndQuit).mockResolvedValue({ status: "error", error: reason });
-    renderPage(base);
-    fireEvent.click(await screen.findByRole("button", { name: "停用并退出" }));
-    expect(await screen.findByText(reason)).toBeInTheDocument();
-  });
-
-  it("hides 停用并退出 while routing is paused", async () => {
-    renderPage(base, { ...model, process_routing: { ...model.process_routing, enabled: false } });
-    await screen.findByRole("switch", { name: "启用进程分流规则" });
-    expect(screen.queryByRole("button", { name: "停用并退出" })).not.toBeInTheDocument();
-  });
-
-  it("hides the switch until the component is installed", async () => {
-    renderPage({ ...base, component: "NotInstalled" });
-    await screen.findByText("未安装");
+    await screen.findByRole("heading", { name: "进程分流" });
+    expect(screen.queryByText("运行中")).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "启用进程分流规则" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/进程分流已暂停/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "停用并退出" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("switch")).toHaveLength(model.process_routing.rules.length);
+  });
+
+  it("停止时保留启动入口，恢复正常后提示消失", async () => {
+    vi.mocked(commands.procrouteRetry).mockResolvedValue({ status: "ok", data: null });
+    const { qc } = renderPage({ ...base, component: "Stopped" });
+    fireEvent.click(await screen.findByRole("button", { name: "启动组件" }));
+    await waitFor(() => expect(commands.procrouteRetry).toHaveBeenCalled());
+    act(() => qc.setQueryData(["procroute"], base));
+    await waitFor(() => expect(screen.queryByText(/分流组件已停止/)).not.toBeInTheDocument());
+    expect(screen.queryByText("运行中")).not.toBeInTheDocument();
+  });
+
+  it("显示组件被其他用户占用的异常原因", async () => {
+    renderPage({ ...base, component: "OwnedByOtherUser" });
+    expect(await screen.findByText(/分流组件被其他 Windows 用户占用/)).toBeInTheDocument();
   });
 
   it("toggles a rule through set_process_rule_enabled, not saveProcessRule", async () => {

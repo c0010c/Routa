@@ -926,7 +926,7 @@ async fn run(rt: Arc<Runtime>, app: AppHandle, mut commands: mpsc::Receiver<Comm
         link.reconnect_if_due(&mut reconnect, paused, connect, start_service).await;
 
         let (model, st) = (rt.model(), rt.status());
-        // 全局开关关闭时 decide 不含任何规则：照样下发，服务据此撤掉全部规则。
+        // 没有启用规则时仍下发空集合，服务据此撤掉已停用的规则。
         let desired = decide(&model, &st, pid);
         if retry_done.is_some() {
             if link.connected() {

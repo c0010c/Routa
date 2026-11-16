@@ -30,7 +30,7 @@ function Harness({ initial = [], others = [] }: { initial?: ProcessEntry[]; othe
   const [entries, setEntries] = useState(initial);
   return (
     <>
-      <ProcessEntriesField entries={entries} others={others} routingEnabled running={running} onChange={setEntries} />
+      <ProcessEntriesField entries={entries} others={others} running={running} onChange={setEntries} />
       <pre data-testid="out">{JSON.stringify(entries)}</pre>
     </>
   );
@@ -87,7 +87,7 @@ describe("ProcessEntriesField", () => {
     const ref = createRef<ProcessEntriesHandle>();
     const onChange = vi.fn();
     const entries: ProcessEntry[] = [{ kind: "Name", value: "chrome.exe" }];
-    render(<ProcessEntriesField ref={ref} entries={entries} others={[]} routingEnabled running={[]} onChange={onChange} />);
+    render(<ProcessEntriesField ref={ref} entries={entries} others={[]} running={[]} onChange={onChange} />);
     // Nothing typed: the entries as they are.
     let got: ProcessEntry[] | null = null;
     act(() => void (got = ref.current!.commit()));
@@ -104,7 +104,7 @@ describe("ProcessEntriesField", () => {
   });
 
   it("shows the external error and the help tooltip trigger", () => {
-    render(<ProcessEntriesField entries={[]} others={[]} routingEnabled running={[]} error="至少添加一个进程" onChange={() => {}} />);
+    render(<ProcessEntriesField entries={[]} others={[]} running={[]} error="至少添加一个进程" onChange={() => {}} />);
     expect(screen.getByText("至少添加一个进程")).toBeTruthy();
     expect(screen.getAllByTestId("HelpOutlineOutlinedIcon").length).toBeGreaterThan(0);
   });

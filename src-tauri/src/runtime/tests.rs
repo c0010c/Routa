@@ -1640,7 +1640,7 @@ async fn process_routing_change_does_not_reload_core() {
 
     h.rt
         .mutate_process_routing(|pr| {
-            pr.enabled = true;
+
             pr.rules.push(process_rule(r"C:\Apps\game.exe"));
         })
         .await
@@ -1650,7 +1650,6 @@ async fn process_routing_change_does_not_reload_core() {
     assert_eq!(h.launcher.checks.lock().unwrap().len(), checks);
     assert_eq!(h.launcher.count(), 1);
     let saved = Store::open(h.data.clone()).unwrap().load_model().unwrap();
-    assert!(saved.process_routing.enabled);
     assert_eq!(saved.process_routing.rules[0].processes, vec![ProcessEntry::path(r"C:\Apps\game.exe")]);
     assert_eq!(h.rt.model(), saved);
     assert!(drain(&mut h.events).iter().any(|e| matches!(e, RuntimeEvent::Status(_))));

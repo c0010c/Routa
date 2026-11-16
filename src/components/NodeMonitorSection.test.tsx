@@ -31,7 +31,7 @@ const model = (nm: Partial<NodeMonitorSettings> = {}): Model => ({
   },
   manual_nodes: [],
   node_groups: [],
-  process_routing: { enabled: false, rules: [], exit_prompt: true },
+  process_routing: { rules: [], exit_prompt: true },
 });
 
 const target = (name: string, over: Partial<MonitorTarget> = {}): MonitorTarget => ({

@@ -74,16 +74,15 @@ export function entryError(e: ProcessEntry, entries: ProcessEntry[], others: Pro
   return undefined;
 }
 
-const isActive = (r: ProcessRule, routingEnabled: boolean) => routingEnabled && r.user_enabled;
+const isActive = (r: ProcessRule) => r.user_enabled;
 
 /** 其他启用规则里，用路径单独接管了这个程序某些位置的规则（路径优先）。 */
 export function pathOwners(
   name: string,
   others: ProcessRule[],
-  routingEnabled: boolean,
 ): { rule: ProcessRule; path: string }[] {
   return others
-    .filter((r) => isActive(r, routingEnabled))
+    .filter((r) => isActive(r))
     .flatMap((r) =>
       r.processes
         .filter((x) => x.kind === "Path" && same(fileName(x.value), name))
@@ -97,8 +96,8 @@ export function learningNames(rule: Pick<ProcessRule, "on_fault" | "processes">)
 }
 
 /** 不会记录的位置：属于其他启用规则的路径。 */
-export function skippedOf(rule: ProcessRule, others: ProcessRule[], routingEnabled: boolean) {
-  return learningNames(rule).flatMap((n) => pathOwners(n, others, routingEnabled));
+export function skippedOf(rule: ProcessRule, others: ProcessRule[]) {
+  return learningNames(rule).flatMap((n) => pathOwners(n, others));
 }
 
 /** 保存后新增的"会记录位置"的程序名（用于保存前提示）。 */
@@ -108,6 +107,6 @@ export function newlyLearning(before: ProcessRule | undefined, after: ProcessRul
 }
 
 /** 启用且故障时阻断的规则。 */
-export function blockingRules(rules: ProcessRule[], routingEnabled: boolean): ProcessRule[] {
-  return rules.filter((r) => isActive(r, routingEnabled) && r.on_fault === "Block");
+export function blockingRules(rules: ProcessRule[]): ProcessRule[] {
+  return rules.filter((r) => isActive(r) && r.on_fault === "Block");
 }

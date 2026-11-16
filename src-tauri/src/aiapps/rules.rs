@@ -52,7 +52,7 @@ fn app_entries(app: &CatalogApp) -> Vec<ProcessEntry> {
 }
 
 /// 移除冲突条目（规则变空就删除），插入或更新 AI 规则（node、processes、on_fault、name、
-/// reset_on_change=true、user_enabled=true），并打开总开关。返回被整条删除的规则 id。
+/// reset_on_change=true、user_enabled=true）。返回被整条删除的规则 id。
 pub fn enable(pr: &mut ProcessRouting, app: &CatalogApp, node: NodeRef) -> Vec<ProcessRuleId> {
     let mut removed = vec![];
     for r in pr.rules.iter_mut().filter(|r| r.ai_app.is_none()) {
@@ -78,7 +78,7 @@ pub fn enable(pr: &mut ProcessRouting, app: &CatalogApp, node: NodeRef) -> Vec<P
     r.node = Some(node);
     r.reset_on_change = true;
     r.user_enabled = true;
-    pr.enabled = true;
+
     removed
 }
 
@@ -189,11 +189,10 @@ mod tests {
     }
 
     #[test]
-    fn enable_creates_tagged_rule_and_turns_routing_on() {
+    fn enable_creates_enabled_tagged_rule() {
         let mut p = pr(vec![]);
         let a = app("chatgpt", &["ChatGPT.exe", "Codex.exe"]);
         enable(&mut p, &a, node("n"));
-        assert!(p.enabled);
         let r = ai_rule(&p, "chatgpt").unwrap();
         assert_eq!(r.ai_app.as_deref(), Some("chatgpt"));
         assert_eq!(r.name, a.name);
@@ -201,6 +200,22 @@ mod tests {
         assert!(r.reset_on_change && r.user_enabled);
         assert_eq!(r.on_fault, FaultPolicy::Block);
         assert_eq!(r.node, Some(node("n")));
+    }
+
+    #[test]
+    fn enabling_one_app_keeps_other_apps_and_manual_rules_disabled() {
+        let mut manual = rule("manual", vec![ProcessEntry::name("git.exe")]);
+        manual.user_enabled = false;
+        let mut other = rule("other", vec![ProcessEntry::name("Claude.exe")]);
+        other.ai_app = Some("claude".into());
+        other.user_enabled = false;
+        let mut p = pr(vec![manual.clone(), other.clone()]);
+        enable(&mut p, &app("chatgpt", &["ChatGPT.exe"]), node("n"));
+        assert!(ai_rule(&p, "chatgpt").unwrap().user_enabled);
+        assert_eq!(p.rules[0], manual);
+        assert_eq!(p.rules[1], other);
+        disable(&mut p, "chatgpt");
+        assert!(p.rules.iter().all(|r| !r.user_enabled));
     }
 
     #[test]

@@ -21,7 +21,6 @@ vi.mock("../bindings", () => ({
     procrouteStatus: vi.fn(),
     procrouteCleanup: vi.fn(),
     procrouteUninstall: vi.fn(),
-    saveProcessRoutingSettings: vi.fn(),
     setExitPrompt: vi.fn(),
     openProjectLink: vi.fn(),
   },
@@ -47,7 +46,7 @@ const model: Model = {
   },
   manual_nodes: [],
   node_groups: [],
-  process_routing: { enabled: false, rules: [], exit_prompt: true },
+  process_routing: { rules: [], exit_prompt: true },
 };
 
 function renderPage(initial = model, simple = false, tab = "network") {

@@ -1,11 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
-import { Box, Stack, Switch, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
+import { Box, Stack, Typography } from "@mui/material";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AiAppConflict, AiAppView, NodeRef } from "../bindings";
 import { errorMessage, isValidationError, useModel, validationText } from "../api/client";
 import { desktopApi, useDesktopMutation, useDesktopState } from "../api/desktop";
-import { useSaveProcessRoutingSettings } from "../api/procroute";
+import { useProcRouteStatus } from "../api/procroute";
+import { ProcessRoutingAlerts } from "../components/ProcessRoutingAlerts";
 import { useAiAppConflicts, useAiApps, useDisableAiApp, useEnableAiApp, useLaunchAiApp } from "../api/aiApps";
 import { AiAppCard } from "../components/AiAppCard";
 import { ConflictDialog, ResetDialog } from "../components/AiAppDialogs";
@@ -18,8 +18,6 @@ import { NodePickerDialog } from "../components/NodePickerDialog";
  */
 function useAiAppFlow() {
   const qc = useQueryClient();
-  // With the master switch off nothing reaches the service, so no connection gets reset.
-  const paused = !useModel().data?.process_routing.enabled;
   const apply = useApplyResult();
   const prefs = useDesktopState().data?.preferences;
   const savePrefs = useDesktopMutation(desktopApi.preferences);
@@ -109,7 +107,7 @@ function useAiAppFlow() {
       guarded(app, async () => {
         if (on) {
           await enableFlow(app);
-        } else if (paused || !app.running || (await confirmReset(app))) {
+        } else if (!app.running || (await confirmReset(app))) {
           await disable.mutateAsync(app.id);
         }
       }),
@@ -123,7 +121,7 @@ function useAiAppFlow() {
       const ruleId = app.rule_id;
       if (!ruleId) return setPicked((p) => ({ ...p, [app.id]: node }));
       await guarded(app, async () => {
-        if (!paused && app.enabled && app.running && !(await confirmReset(app))) return;
+        if (app.enabled && app.running && !(await confirmReset(app))) return;
         await changeRuleNode.mutateAsync([ruleId, node]);
       });
     },
@@ -133,29 +131,22 @@ function useAiAppFlow() {
 export function AiAppsPage() {
   const model = useModel().data;
   const apps = useAiApps().data;
-  const settings = useSaveProcessRoutingSettings();
+  const status = useProcRouteStatus();
   const flow = useAiAppFlow();
   if (!model) return null;
-  const on = model.process_routing.enabled;
 
   return (
     <Box>
       <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 2 }}>
         <Typography variant="h5">AI 应用</Typography>
-        <Switch
-          checked={on}
-          onChange={(e) => settings.mutate(e.target.checked)}
-          slotProps={{ input: { "aria-label": "进程分流总开关" } }}
-          sx={on ? undefined : { borderRadius: 4, boxShadow: (t) => `0 0 0 3px ${alpha(t.palette.primary.main, 0.25)}` }}
-        />
       </Stack>
+      {status.data && <Box sx={{ "&:has(.MuiAlert-root)": { mb: 2 }, display: "grid", gap: 2 }}><ProcessRoutingAlerts status={status.data} /></Box>}
       <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 2 }}>
         {(apps ?? []).map((app) => (
           <AiAppCard
             key={app.id}
             app={{ ...app, node: flow.nodeOf(app) }}
             model={model}
-            paused={!on}
             busy={flow.isBusy(app)}
             onToggle={(v) => void flow.toggle(app, v)}
             onLaunch={() => void flow.launch(app)}

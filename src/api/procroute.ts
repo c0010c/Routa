@@ -16,7 +16,6 @@ export const useSaveProcessRuleConfirmed = make(() => commands.saveProcessRuleCo
 /** Forgets one learned location of a rule; the model refetches on success. */
 export const useRemoveLearnedPath = make(() => commands.removeLearnedProcessPath);
 export const useDeleteProcessRule = make(() => commands.deleteProcessRule);
-export const useSaveProcessRoutingSettings = make(() => commands.saveProcessRoutingSettings);
 /** Turns process routing off, waits briefly for the service, then exits Routa. */
 export const useDisableRoutingAndQuit = make(() => commands.disableRoutingAndQuit);
 /** Whether quitting asks first when block rules would cut programs off. */

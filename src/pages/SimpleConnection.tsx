@@ -407,7 +407,7 @@ export function SimpleConnection() {
                         {r.node && selected && nodeKey(r.node) !== nodeKey(selected)
                           ? "使用其他节点，关闭并重新勾选后使用当前节点"
                           : requested ||
-                              (m.process_routing.enabled && r.user_enabled)
+                              (r.user_enabled)
                           ? (routing.data?.actions[r.id]?.reason ??
                             routing.data?.actions[r.id]?.action ??
                             "等待确认")
@@ -514,7 +514,6 @@ export function SimpleConnection() {
           (r) => !isAiRule(r) && !p.managed_rules.includes(r.id) && r.user_enabled,
         ) ||
         (!requested &&
-          m.process_routing.enabled &&
           rules.some((r) => r.user_enabled))) && (
         <Alert
           severity="info"

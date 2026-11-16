@@ -98,10 +98,10 @@ describe("pathOwners / learningNames / skippedOf", () => {
   const on = rule({ name: "On", processes: [p("C:\\g\\a.exe")] });
   const off = rule({ name: "Off", processes: [p("D:\\h\\a.exe")], user_enabled: false });
   it("ignores disabled rules", () => {
-    expect(pathOwners("A.exe", [on, off], true)).toEqual([{ rule: on, path: "C:\\g\\a.exe" }]);
+    expect(pathOwners("A.exe", [on, off])).toEqual([{ rule: on, path: "C:\\g\\a.exe" }]);
   });
-  it("ignores everything when routing is off", () => {
-    expect(pathOwners("a.exe", [on], false)).toEqual([]);
+  it("ignores a disabled path owner", () => {
+    expect(pathOwners("a.exe", [off])).toEqual([]);
   });
   it("learns only Block rules' names", () => {
     expect(learningNames(rule({ on_fault: "Direct", processes: [n("a.exe")] }))).toEqual([]);
@@ -109,7 +109,7 @@ describe("pathOwners / learningNames / skippedOf", () => {
   });
   it("skips locations owned by other rules", () => {
     const r = rule({ on_fault: "Block", processes: [n("a.exe")] });
-    expect(skippedOf(r, [on, off], true)).toEqual([{ rule: on, path: "C:\\g\\a.exe" }]);
+    expect(skippedOf(r, [on, off])).toEqual([{ rule: on, path: "C:\\g\\a.exe" }]);
   });
 });
 
@@ -133,7 +133,7 @@ describe("blockingRules", () => {
     const a = rule({ on_fault: "Block" });
     const b = rule({ on_fault: "Block", user_enabled: false });
     const c = rule({ on_fault: "Direct" });
-    expect(blockingRules([a, b, c], true)).toEqual([a]);
-    expect(blockingRules([a, b, c], false)).toEqual([]);
+    expect(blockingRules([a, b, c])).toEqual([a]);
+    expect(blockingRules([b, c])).toEqual([]);
   });
 });

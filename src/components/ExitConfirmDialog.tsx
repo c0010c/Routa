@@ -17,8 +17,8 @@ import { useApplyResult } from "./ApplyResultSnackbar";
 /**
  * Shown when the tray's 退出 finds enabled block rules (Rust emits
  * "confirm-exit" with their names): quitting would cut those programs off.
- * Also reports why a tray action failed ("exit-error"): 停用进程分流并退出 did
- * not quit, or 启用 / 停用进程分流 could not be saved.
+ * Also reports why a tray action failed ("exit-error"): 停用所有规则并退出 did
+ * not quit.
  */
 export function ExitConfirmDialog() {
   const [names, setNames] = useState<string[] | null>(null);
@@ -87,6 +87,9 @@ export function ExitConfirmDialog() {
         <DialogContentText>
           {`下面这些规则选了阻断，退出后对应程序会断网，直到 Routa 再次运行：${(names ?? []).join("、")}`}
         </DialogContentText>
+        <DialogContentText sx={{ mt: 1 }}>
+          选择「停用所有规则并退出」后，下次启动时各条规则仍保持关闭。
+        </DialogContentText>
         <FormControlLabel
           sx={{ mt: 1 }}
           control={<Checkbox checked={dontAsk} onChange={(e) => setDontAsk(e.target.checked)} />}
@@ -99,7 +102,7 @@ export function ExitConfirmDialog() {
           仍然退出
         </Button>
         <Button variant="contained" disabled={busy} onClick={() => void disableThenQuit()}>
-          停用进程分流并退出
+          停用所有规则并退出
         </Button>
       </DialogActions>
     </Dialog>

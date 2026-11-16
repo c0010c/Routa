@@ -103,7 +103,7 @@ fn rule_label(r: &ProcessRule) -> &str {
     }
 }
 
-/// Enabled listeners, then enabled process rules (when routing is on).
+/// Enabled listeners, then enabled process rules.
 fn uses(model: &Model) -> Vec<Use> {
     let find_exit = |id: &crate::model::ExitId| model.exits.iter().find(|e| &e.id == id);
     let mut exits: Vec<(&Exit, String)> = Vec::new();
@@ -112,11 +112,9 @@ fn uses(model: &Model) -> Vec<Use> {
             exits.push((e, format!("{} :{}", l.name, l.port)));
         }
     }
-    if model.process_routing.enabled {
-        for r in model.process_routing.rules.iter().filter(|r| r.user_enabled && r.node.is_some()) {
-            if let Some(e) = rule_listener(model, r).and_then(|l| l.exit.as_ref()).and_then(find_exit) {
-                exits.push((e, format!("进程分流 · {}", rule_label(r))));
-            }
+    for r in model.process_routing.rules.iter().filter(|r| r.user_enabled && r.node.is_some()) {
+        if let Some(e) = rule_listener(model, r).and_then(|l| l.exit.as_ref()).and_then(find_exit) {
+            exits.push((e, format!("进程分流 · {}", rule_label(r))));
         }
     }
     exits
@@ -179,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn in_use_skips_disabled_listener_and_routing_off() {
+    fn in_use_skips_disabled_listeners_and_rules() {
         let mut off = listener("关闭", 7891, "节点");
         off.user_enabled = false;
         let mut m = model(vec![exit("节点", ExitKind::Node { node: nref("甲") }), exit("隐藏", ExitKind::Node { node: nref("乙") })], vec![off]);
@@ -187,8 +185,7 @@ mod tests {
         let mut hidden = listener("__proc_x", 37800, "隐藏");
         hidden.hidden = true;
         m.listeners.push(hidden);
-        m.process_routing.enabled = false;
-        m.process_routing.rules.push(ProcessRule { name: "微信".into(), node: Some(nref("乙")), ..ProcessRule::default() });
+        m.process_routing.rules.push(ProcessRule { user_enabled: false, name: "微信".into(), node: Some(nref("乙")), ..ProcessRule::default() });
         assert_eq!(in_use_nodes(&m), InUseNodes::default());
     }
 
@@ -200,7 +197,6 @@ mod tests {
         hidden.hidden = true;
         m.listeners.push(listener("工作代理", 7890, "隐藏"));
         m.listeners.push(hidden);
-        m.process_routing.enabled = true;
         m.process_routing.rules.push(ProcessRule {
             processes: vec![ProcessEntry::name("WeChat.exe")],
             node: Some(nref("甲")),

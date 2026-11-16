@@ -11,7 +11,6 @@ vi.mock("../bindings", () => ({
     getModel: vi.fn(),
     getStatus: vi.fn(),
     procrouteStatus: vi.fn(),
-    saveProcessRoutingSettings: vi.fn(),
     aiAppsList: vi.fn(),
     enableAiApp: vi.fn(),
     disableAiApp: vi.fn(),
@@ -34,7 +33,7 @@ const model = {
   settings: { delay_test_url: "u" },
   manual_nodes: [{ id: "m1", name: "东京", kind: { Proxy: { raw: "ss://x" } }, groups: [] }],
   node_groups: [],
-  process_routing: { enabled: true, rules: [], exit_prompt: true },
+  process_routing: { rules: [], exit_prompt: true },
 } as unknown as Model;
 
 const app = (over: Partial<AiAppView>): AiAppView => ({
@@ -51,14 +50,11 @@ const app = (over: Partial<AiAppView>): AiAppView => ({
   ...over,
 });
 
-function renderPage(apps: AiAppView[], enabled = true, actions: Record<string, unknown> = {}) {
-  vi.mocked(commands.getModel).mockResolvedValue({
-    ...model,
-    process_routing: { ...model.process_routing, enabled },
-  });
+function renderPage(apps: AiAppView[], actions: Record<string, unknown> = {}) {
+  vi.mocked(commands.getModel).mockResolvedValue(model);
   vi.mocked(commands.aiAppsList).mockResolvedValue(apps);
   vi.mocked(commands.getStatus).mockResolvedValue({ core: "Running", delays: {}, interfaces: [] } as never);
-  vi.mocked(commands.procrouteStatus).mockResolvedValue({ actions } as never);
+  vi.mocked(commands.procrouteStatus).mockResolvedValue({ component: "Running", actions, last_interruption: null, conflicts: [], apply_errors: [], truncated_flows: false } as never);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -107,8 +103,7 @@ describe("AiAppsPage", () => {
     renderPage([app({ installed: false })]);
     fireEvent.click(await screen.findByText("未安装 · 下载"));
     expect(commands.openAiAppDownload).toHaveBeenCalledWith("claude");
-    // only the header switch remains
-    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
   it("运行中的应用按钮为 运行中", async () => {
@@ -117,32 +112,21 @@ describe("AiAppsPage", () => {
     expect(screen.queryByRole("button", { name: "启动" })).toBeNull();
   });
 
-  it("总开关关闭时开着的开关有暂停提示且无横幅文字", async () => {
-    renderPage([app({ enabled: true, rule_id: "r1", node: { manual_id: "m1" } })], false);
+  it("页头不再提供总开关，单个应用可以直接启用", async () => {
+    renderPage([app({ rule_id: "r1", node: tokyo })]);
     const sw = await screen.findByRole("switch", { name: "Claude 代理开关" });
-    fireEvent.mouseOver(sw);
-    expect(await screen.findByText("进程分流已关闭，开启后恢复")).toBeInTheDocument();
-    expect(screen.queryByText(/进程分流已关闭，以下应用/)).toBeNull();
-    expect(screen.getByRole("button", { name: "启动" })).toBeEnabled();
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    expect(screen.queryByRole("switch", { name: "进程分流总开关" })).not.toBeInTheDocument();
+    fireEvent.click(sw);
+    await waitFor(() => expect(commands.enableAiApp).toHaveBeenCalledWith("claude", tokyo));
   });
 
-  it("页头总开关切换调用 saveProcessRoutingSettings", async () => {
-    vi.mocked(commands.saveProcessRoutingSettings).mockResolvedValue({ status: "ok", data: null });
-    renderPage([app({})], true);
-    fireEvent.click(await screen.findByRole("switch", { name: "进程分流总开关" }));
-    await waitFor(() => expect(commands.saveProcessRoutingSettings).toHaveBeenCalledWith(false));
-  });
-
-  it("右上角小圆点：生效为绿色，暂停为灰色，失败为红色", async () => {
-    const a = app({ enabled: true, rule_id: "r1", node: { manual_id: "m1" } });
-    const view = renderPage([a], true, { r1: { action: "Proxy", reason: "" } });
+  it("右上角小圆点根据规则实际生效结果显示绿色或红色", async () => {
+    const a = app({ enabled: true, rule_id: "r1", node: tokyo });
+    const view = renderPage([a], { r1: { action: "Proxy", reason: "" } });
     await waitFor(() => expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "green"));
     view.unmount();
-    const paused = renderPage([a], false, { r1: { action: "Proxy", reason: "" } });
-    await screen.findByRole("switch", { name: "Claude 代理开关" });
-    expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "gray");
-    paused.unmount();
-    renderPage([a], true, { r1: { action: "Failed", reason: "出错了" } });
+    renderPage([a], { r1: { action: "Failed", reason: "出错了" } });
     await waitFor(() => expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "red"));
   });
 
@@ -150,7 +134,7 @@ describe("AiAppsPage", () => {
     const held = [conflict({ process: "Codex.exe" })];
     vi.mocked(commands.aiAppConflicts).mockResolvedValue(ok(held));
     const a = app({ enabled: true, rule_id: "r1", node: tokyo, held });
-    renderPage([a], true, { r1: { action: "Proxy", reason: "" } });
+    renderPage([a], { r1: { action: "Proxy", reason: "" } });
     const dot = await screen.findByRole("button", { name: "把 Claude 的进程移交给 AI 应用" });
     await waitFor(() => expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "yellow"));
     fireEvent.mouseOver(dot);
@@ -161,25 +145,21 @@ describe("AiAppsPage", () => {
     await waitFor(() => expect(commands.enableAiApp).toHaveBeenCalledWith("claude", tokyo));
   });
 
-  it("黄色小圆点：取消冲突确认则不移交；暂停时不显示黄色", async () => {
+  it("黄色小圆点：取消冲突确认则不移交", async () => {
     const held = [conflict({ process: "Codex.exe" })];
     vi.mocked(commands.aiAppConflicts).mockResolvedValue(ok(held));
     const a = app({ enabled: true, rule_id: "r1", node: tokyo, held });
-    const view = renderPage([a], true, { r1: { action: "Proxy", reason: "" } });
+    renderPage([a], { r1: { action: "Proxy", reason: "" } });
     fireEvent.click(await screen.findByRole("button", { name: "把 Claude 的进程移交给 AI 应用" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "移除并开启" })).toBeNull());
     expect(commands.enableAiApp).not.toHaveBeenCalled();
-    view.unmount();
-    renderPage([a], false, { r1: { action: "Proxy", reason: "" } });
-    await screen.findByRole("switch", { name: "Claude 代理开关" });
-    expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "gray");
-    expect(screen.queryByRole("button", { name: "把 Claude 的进程移交给 AI 应用" })).toBeNull();
+
   });
 
   it("等待服务确认时小圆点为灰色", async () => {
     const a = app({ enabled: true, rule_id: "r1", node: { manual_id: "m1" } });
-    renderPage([a], true, { r1: { action: "Pending", reason: "等待服务确认当前设置" } });
+    renderPage([a], { r1: { action: "Pending", reason: "等待服务确认当前设置" } });
     await waitFor(() => expect(commands.procrouteStatus).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.getByTestId("ai-dot")).toHaveAttribute("data-state", "gray");
@@ -225,16 +205,13 @@ describe("AiAppsPage", () => {
     expect(commands.launchAiApp).toHaveBeenCalledTimes(1);
   });
 
-  it("总开关关闭时关开关、换节点都不弹断开框", async () => {
-    renderPage([app({ rule_id: "r1", node: tokyo, enabled: true, running: true })], false);
+  it("关闭运行中应用的代理仍会确认连接重建", async () => {
+    renderPage([app({ rule_id: "r1", node: tokyo, enabled: true, running: true })]);
     fireEvent.click(await screen.findByRole("switch", { name: "Claude 代理开关" }));
-    await waitFor(() => expect(commands.disableAiApp).toHaveBeenCalledWith("claude"));
-    fireEvent.click(screen.getByText("东京"));
-    await pickTokyo();
-    await waitFor(() =>
-      expect(invoked.find((c) => c.command === "change_process_node")?.args).toEqual({ id: "r1", node: tokyo }),
-    );
-    expect(screen.queryByText("断开 Claude 的现有连接")).toBeNull();
+    expect(await screen.findByText("断开 Claude 的现有连接")).toBeInTheDocument();
+    expect(commands.disableAiApp).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(commands.disableAiApp).not.toHaveBeenCalled();
   });
 
   it("首次开启先选节点，取消则不调用 enableAiApp", async () => {

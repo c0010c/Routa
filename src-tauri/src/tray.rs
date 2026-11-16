@@ -114,16 +114,13 @@ fn refresh_icon(app: &AppHandle) {
 /// The process-routing part of the tray menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RoutingMenu {
-    /// Label of the global switch item.
-    pub toggle: &'static str,
-    /// Whether "停用进程分流并退出" is shown.
+    /// Whether "停用所有规则并退出" is shown.
     pub disable_and_quit: bool,
 }
 
 pub fn routing_menu(pr: &ProcessRouting) -> RoutingMenu {
     RoutingMenu {
-        toggle: if pr.enabled { "停用进程分流" } else { "启用进程分流" },
-        disable_and_quit: pr.enabled && pr.rules.iter().any(|r| r.user_enabled),
+        disable_and_quit: pr.rules.iter().any(|r| r.user_enabled),
     }
 }
 
@@ -149,8 +146,7 @@ pub fn rule_label(r: &ProcessRule) -> String {
 }
 
 fn blocking_rules(m: &Model) -> impl Iterator<Item = &ProcessRule> {
-    let on = m.process_routing.enabled;
-    m.process_routing.rules.iter().filter(move |r| on && r.user_enabled && r.on_fault == FaultPolicy::Block)
+    m.process_routing.rules.iter().filter(move |r| r.user_enabled && r.on_fault == FaultPolicy::Block)
 }
 
 /// Names of the enabled rules that cut their programs off while Routa is not running.
@@ -163,7 +159,7 @@ pub fn exit_needs_confirm(m: &Model) -> bool {
     m.process_routing.exit_prompt && blocking_rules(m).next().is_some()
 }
 
-/// What "停用进程分流并退出" does after the disable was saved.
+/// What "停用所有规则并退出" does after the disable was saved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DisableExit {
     /// Nothing is blocking any more (or no service is installed): exit.
@@ -206,7 +202,7 @@ fn not_disabled(reason: &str) -> String {
 /// dialog's 不再提示) turns the exit prompt off, but only once Routa really exits.
 pub async fn disable_routing_and_quit(app: &AppHandle, rt: &Runtime, dont_ask_again: bool) -> Result<(), String> {
     use crate::procroute::client::{current_rules_confirmed, runtime_changed, status};
-    rt.mutate_process_routing(|p| p.enabled = false)
+    rt.mutate_process_routing(|p| { for rule in &mut p.rules { rule.user_enabled = false; } })
         .await
         .map_err(|e| not_disabled(&crate::desktop::validation(e)))?;
     runtime_changed();
@@ -268,16 +264,15 @@ static SHOWN_MENU: Mutex<Option<RoutingMenu>> = Mutex::new(None);
 fn build_menu(app: &AppHandle, routing: RoutingMenu) -> tauri::Result<Menu<tauri::Wry>> {
     let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
     let restart = MenuItem::with_id(app, "restart", "重启 mihomo", true, None::<&str>)?;
-    let toggle = MenuItem::with_id(app, "routing-toggle", routing.toggle, true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &restart, &toggle])?;
+    let menu = Menu::with_items(app, &[&open, &restart])?;
     if routing.disable_and_quit {
-        menu.append(&MenuItem::with_id(app, "routing-disable-quit", "停用进程分流并退出", true, None::<&str>)?)?;
+        menu.append(&MenuItem::with_id(app, "routing-disable-quit", "停用所有规则并退出", true, None::<&str>)?)?;
     }
     menu.append(&MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?)?;
     Ok(menu)
 }
 
-/// Rebuilds the menu when the process-routing switch or rules changed.
+/// Rebuilds the menu when enabled rules changed.
 fn refresh_menu(app: &AppHandle) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     let Some(rt) = app.try_state::<Arc<Runtime>>() else { return };
@@ -290,11 +285,6 @@ fn refresh_menu(app: &AppHandle) {
         Ok(()) => *shown = Some(routing),
         Err(e) => eprintln!("set tray menu failed: {e}"),
     }
-}
-
-/// Message for a failed tray 启用 / 停用进程分流.
-pub fn toggle_failed(enable: bool, reason: &str) -> String {
-    format!("{}进程分流失败：{reason}", if enable { "启用" } else { "停用" })
 }
 
 /// A tray action failed: open the window and show why there (the frontend's
@@ -331,16 +321,6 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             "restart" => {
                 let rt = Arc::clone(&*app.state::<Arc<Runtime>>());
                 tauri::async_runtime::spawn(async move { rt.restart_core().await });
-            }
-            "routing-toggle" => {
-                let rt = Arc::clone(&*app.state::<Arc<Runtime>>());
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let enable = !rt.model().process_routing.enabled;
-                    if let Err(e) = rt.mutate_process_routing(|p| p.enabled = enable).await {
-                        report_error(&app, toggle_failed(enable, &crate::desktop::validation(e)));
-                    }
-                });
             }
             "routing-disable-quit" => {
                 let rt = Arc::clone(&*app.state::<Arc<Runtime>>());
@@ -490,7 +470,6 @@ mod tests {
 
     fn with_rules(rules: Vec<ProcessRule>) -> Model {
         let mut m = Model::default();
-        m.process_routing.enabled = true;
         m.process_routing.rules = rules;
         m
     }
@@ -507,14 +486,8 @@ mod tests {
         off.process_routing.exit_prompt = false;
         assert!(!exit_needs_confirm(&off), "exit_prompt off");
         let mut off = m;
-        off.process_routing.enabled = false;
-        assert!(!exit_needs_confirm(&off), "routing off");
-    }
-
-    #[test]
-    fn toggle_failure_names_the_direction() {
-        assert_eq!(toggle_failed(true, "规则无效"), "启用进程分流失败：规则无效");
-        assert_eq!(toggle_failed(false, "保存失败"), "停用进程分流失败：保存失败");
+        for rule in &mut off.process_routing.rules { rule.user_enabled = false; }
+        assert!(!exit_needs_confirm(&off), "all rules off");
     }
 
     #[test]
@@ -563,14 +536,13 @@ mod tests {
     }
 
     #[test]
-    fn routing_menu_follows_switch_and_rules() {
+    fn routing_menu_follows_individual_rules() {
         let mut m = with_rules(vec![block_rule(FaultPolicy::Direct, true)]);
-        assert_eq!(routing_menu(&m.process_routing), RoutingMenu { toggle: "停用进程分流", disable_and_quit: true });
+        assert_eq!(routing_menu(&m.process_routing), RoutingMenu { disable_and_quit: true });
         m.process_routing.rules[0].user_enabled = false;
-        assert_eq!(routing_menu(&m.process_routing), RoutingMenu { toggle: "停用进程分流", disable_and_quit: false });
+        assert_eq!(routing_menu(&m.process_routing), RoutingMenu { disable_and_quit: false });
         m.process_routing.rules[0].user_enabled = true;
-        m.process_routing.enabled = false;
-        assert_eq!(routing_menu(&m.process_routing), RoutingMenu { toggle: "启用进程分流", disable_and_quit: false });
+        assert_eq!(routing_menu(&m.process_routing), RoutingMenu { disable_and_quit: true });
     }
 
     #[test]

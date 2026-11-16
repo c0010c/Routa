@@ -81,7 +81,7 @@ const model: Model = {
     delay_test_url: "u",
     node_monitor: { enabled: false, members: [], interval_secs: 300, fail_threshold: 2, latency_limit_ms: 1000, notify_recovery: true },
   },
-  process_routing: { enabled: false, rules: [], exit_prompt: true },
+  process_routing: { rules: [], exit_prompt: true },
 };
 const status = {
   core: "Running",

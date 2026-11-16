@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../bindings", () => ({ commands: { getModel: vi.fn(), getStatus: vi.fn() } }));
 const one: Subscription = { id: "s1", name: "北辰", url: "https://example.test/sub?token=SECRET", nodes: [{ name: "日本", proxy_type: "ss", server: "s", raw: {} }], last_updated: 100, last_result: { Ok: { node_count: 1 } }, update_interval_mins: 60, fallback_exit: null };
 const two: Subscription = { ...one, id: "s2", name: "远山", last_result: { Failed: { reason: "下载超时" } } };
-const data = { subscriptions: [one, two], listeners: [], exits: [], node_groups: [], manual_nodes: [], process_routing: { enabled: false, rules: [], exit_prompt: true }, settings: { node_monitor: { members: [] } } } as unknown as Model;
+const data = { subscriptions: [one, two], listeners: [], exits: [], node_groups: [], manual_nodes: [], process_routing: { rules: [], exit_prompt: true }, settings: { node_monitor: { members: [] } } } as unknown as Model;
 function setup(subscriptions: Subscription[] = data.subscriptions) {
   vi.mocked(commands.getModel).mockResolvedValue(structuredClone({ ...data, subscriptions }));
   vi.mocked(commands.getStatus).mockResolvedValue({ core: "Stopped", last_apply: null } as RuntimeStatus);

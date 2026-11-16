@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { Model, NodeRef, ProcessRule } from "../bindings";
 
@@ -35,7 +35,7 @@ const model = {
     { id: "ts", name: "家里", groups: [], kind: { Tailscale: { hostname: "h", exit_node: "x", ephemeral: false, udp: true, auth_key: null, interface: "{NIC-TS}" } } },
   ],
   node_groups: [],
-  process_routing: { enabled: true, rules: [], exit_prompt: true },
+  process_routing: { rules: [], exit_prompt: true },
 } as unknown as Model;
 
 /** A rule matched by full path that blocks when Routa or a component is unavailable. */
@@ -161,27 +161,18 @@ describe("ProcessRuleDialog", () => {
     expect(toast).toHaveTextContent("「Chrome Canary」指定的 chrome.exe 不受影响。");
   });
 
-  it("no info toast when the saved rule or process routing is off", async () => {
-    const routingOff: Model = { ...withRules(), process_routing: { ...withRules().process_routing, enabled: false } };
-    for (const [m, ruleOn] of [
-      [routingOff, true],
-      [withRules(), false],
-    ] as const) {
-      vi.mocked(commands.getModel).mockResolvedValue(m);
-      const onClose = renderDialog();
-      await loaded();
-      addProcess("chrome.exe");
-      await pickNode("n1 · 来源甲");
-      fireEvent.click(screen.getByRole("radio", { name: "阻断" }));
-      if (!ruleOn) fireEvent.click(screen.getByRole("switch", { name: "启用" }));
-      fireEvent.click(screen.getByRole("button", { name: "保存" }));
-      await waitFor(() => expect(onClose).toHaveBeenCalled());
-      expect(saved()).toMatchObject({ on_fault: "Block", user_enabled: ruleOn });
-      await new Promise((r) => setTimeout(r, 0));
-      expect(screen.queryByText(/已开启按进程名阻断/)).not.toBeInTheDocument();
-      cleanup();
-      vi.mocked(commands.saveProcessRuleConfirmed).mockClear();
-    }
+  it("no info toast when the saved rule is disabled", async () => {
+    vi.mocked(commands.getModel).mockResolvedValue(withRules());
+    const onClose = renderDialog();
+    await loaded();
+    addProcess("chrome.exe");
+    await pickNode("n1 · 来源甲");
+    fireEvent.click(screen.getByRole("radio", { name: "阻断" }));
+    fireEvent.click(screen.getByRole("switch", { name: "启用" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(saved()).toMatchObject({ on_fault: "Block", user_enabled: false });
+    expect(screen.queryByText(/已开启按进程名阻断/)).not.toBeInTheDocument();
   });
 
   it("no_info_toast_when_nothing_newly_learning", async () => {

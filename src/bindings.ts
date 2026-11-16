@@ -340,14 +340,6 @@ async deleteProcessRule(id: ProcessRuleId) : Promise<Result<ApplyOutcome | null,
     else return { status: "error", error: e  as any };
 }
 },
-async saveProcessRoutingSettings(enabled: boolean) : Promise<Result<null, ValidationError[]>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("save_process_routing_settings", { enabled }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async setExitPrompt(enabled: boolean) : Promise<Result<null, ValidationError[]>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_exit_prompt", { enabled }) };
@@ -889,7 +881,7 @@ export type ProcessEntry = { kind: ProcessKind; value: string }
  * 规则里 `exe_path` 的含义。
  */
 export type ProcessKind = "Name" | "Path"
-export type ProcessRouting = { enabled: boolean; rules: ProcessRule[]; 
+export type ProcessRouting = { rules: ProcessRule[];
 /**
  * 退出 Routa 时是否提示（默认提示）。
  */

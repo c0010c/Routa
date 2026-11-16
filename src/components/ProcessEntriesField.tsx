@@ -56,7 +56,6 @@ export function ProcessEntriesField({
   ref,
   entries,
   others,
-  routingEnabled,
   running,
   error,
   onChange,
@@ -64,7 +63,6 @@ export function ProcessEntriesField({
   ref?: Ref<ProcessEntriesHandle>;
   entries: ProcessEntry[];
   others: ProcessRule[];
-  routingEnabled: boolean;
   running: RunningProcess[];
   error?: string;
   onChange(entries: ProcessEntry[]): void;
@@ -119,7 +117,7 @@ export function ProcessEntriesField({
         entries.filter((x) => !(x.kind === kind && (kind === "Path" ? same(x.value, value) : same(fileName(x.value), value)))),
       );
   };
-  const takenByPath = g ? pathOwners(g.name, others, routingEnabled) : [];
+  const takenByPath = g ? pathOwners(g.name, others) : [];
   const shownError = err ?? error;
 
   return (

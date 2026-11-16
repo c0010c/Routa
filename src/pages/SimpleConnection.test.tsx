@@ -13,7 +13,7 @@ const model: Model = {
   settings: { autostart: false, core_path: null, controller_port: 19097, delay_test_interval_mins: null, delay_test_url: "u", node_monitor: { enabled: false, members: [], interval_secs: 300, fail_threshold: 2, latency_limit_ms: 1000, notify_recovery: true } },
   manual_nodes: [{ id: "n1", name: "香港 01", groups: [], kind: { Proxy: { raw: {} } } }],
   node_groups: [],
-  process_routing: { enabled: false, rules: [], exit_prompt: true },
+  process_routing: { rules: [], exit_prompt: true },
 };
 const status: RuntimeStatus = {
   core: "Running", last_apply: null, health: { exits: {}, listeners: { l1: "Active" } }, delays: {}, traffic: null,

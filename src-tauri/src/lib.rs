@@ -175,7 +175,6 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::save_process_rule,
             commands::remove_learned_process_path,
             commands::delete_process_rule,
-            commands::save_process_routing_settings,
             commands::set_exit_prompt,
             commands::quit_app,
             commands::disable_routing_and_quit,

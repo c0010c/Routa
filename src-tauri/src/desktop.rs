@@ -578,17 +578,7 @@ impl Desktop {
                 ) {
                     return Err("请先安装或启动应用分流组件".into());
                 }
-                if !model.process_routing.enabled
-                    && model
-                        .process_routing
-                        .rules
-                        .iter()
-                        .any(|r| r.user_enabled && !p.managed_rules.contains(&r.id))
-                {
-                    return Err("完整版还有其他启用规则，请先在进程分流中确认全局开关".into());
-                }
                 rt.mutate_process_routing(|pr| {
-                    pr.enabled = true;
                     for r in &mut pr.rules {
                         if p.managed_rules.contains(&r.id) {
                             r.user_enabled = p.selected_apps.contains(&r.id);
@@ -890,7 +880,7 @@ fn reload_ok(outcome: &Option<ApplyOutcome>) -> Result<(), String> {
 }
 
 impl Desktop {
-    /// Points rule `id` at `node`. While process routing is on and the rule is
+    /// Points rule `id` at `node`. While the rule is
     /// enabled, waits for the component to confirm; otherwise restores the
     /// previous node.
     pub async fn change_process_node(&self, rt: &Runtime, id: ProcessRuleId, node: NodeRef) -> Result<(), String> {
@@ -923,7 +913,7 @@ impl Desktop {
             let _ = rt.mutate_process_routing(revert).await;
             return Err(e);
         }
-        if !(model.process_routing.enabled && old.user_enabled && procroute_running()) {
+        if !(old.user_enabled && procroute_running()) {
             return Ok(());
         }
         let confirmed = confirm_or_revert(rt, revert).await?;
@@ -934,8 +924,8 @@ impl Desktop {
         }
     }
 
-    /// Saves (creates or edits) `rule` from the rule dialog. While process
-    /// routing is on and the rule is (or was) enabled, waits for the component
+    /// Saves (creates or edits) `rule` from the rule dialog. While the rule
+    /// is (or was) enabled, waits for the component
     /// to confirm; a failed reload or a missing confirmation restores the
     /// previous rule (or removes a new one).
     pub async fn save_process_rule_confirmed(
@@ -965,7 +955,7 @@ impl Desktop {
             let _ = rt.mutate_process_routing(revert).await;
             return Err(RuleSaveError::Operation(e));
         }
-        if !(model.process_routing.enabled && enabled && procroute_running()) {
+        if !(enabled && procroute_running()) {
             return Ok(outcome);
         }
         if confirm_or_revert(rt, revert).await.map_err(RuleSaveError::Operation)? {
@@ -977,7 +967,7 @@ impl Desktop {
         }
     }
 
-    /// Enables or disables rule `id`. While process routing is on, waits for
+    /// Enables or disables rule `id`. While the component runs, waits for
     /// the component to confirm; otherwise restores the previous state.
     pub async fn set_process_rule_enabled(&self, rt: &Runtime, id: ProcessRuleId, enabled: bool) -> Result<(), String> {
         let _guard = self.operation.lock().await;
@@ -1006,7 +996,7 @@ impl Desktop {
             let _ = rt.mutate_process_routing(revert).await;
             return Err(e);
         }
-        if !(model.process_routing.enabled && procroute_running()) {
+        if !procroute_running() {
             return Ok(());
         }
         let confirmed = confirm_or_revert(rt, revert).await?;
@@ -1056,12 +1046,7 @@ fn prune_simple_ids(prefs: &mut UiPreferences, deleted: &[ProcessRuleId]) {
 
 /// At startup, an enabled AI app needs the core even without auto connect.
 pub(crate) fn ai_needs_core(model: &Model) -> bool {
-    model.process_routing.enabled
-        && model
-            .process_routing
-            .rules
-            .iter()
-            .any(|r| r.ai_app.is_some() && r.user_enabled)
+    model.process_routing.rules.iter().any(|r| r.ai_app.is_some() && r.user_enabled)
 }
 
 async fn ensure_core(rt: &Runtime) -> Result<(), String> {
@@ -1148,7 +1133,7 @@ impl Desktop {
         apply_confirmed(rt, |pr| ai_rules::disable(pr, app_id), "AI 应用停用").await
     }
 
-    /// Before "启动": the core, the component and the process routing switch.
+    /// Before "启动": ensure the core and component are running.
     /// The app's AI rule must already be enabled.
     pub async fn prepare_ai_app(&self, rt: &Runtime, app_id: &str) -> Result<(), String> {
         let ai_enabled = || ai_rules::ai_rule(&rt.model().process_routing, app_id).is_some_and(|r| r.user_enabled);
@@ -1161,9 +1146,6 @@ impl Desktop {
         let _guard = self.operation.lock().await;
         if !ai_enabled() {
             return Err("请先选择节点".into());
-        }
-        if !rt.model().process_routing.enabled {
-            return apply_confirmed(rt, |pr| pr.enabled = true, "进程分流总开关").await;
         }
         // A core or component that just came up: the service may still hold
         // fallback targets. Returns at once when already confirmed.
@@ -1350,7 +1332,6 @@ mod tests {
         assert_eq!(dt.prepare_ai_app(&rt, "chatgpt").await.unwrap_err(), "请先选择节点");
         // A disabled AI rule (no node needed while it is off).
         rt.mutate_process_routing(|pr| {
-            pr.enabled = true;
             pr.rules.push(ProcessRule {
                 ai_app: Some("chatgpt".into()),
                 processes: vec![ProcessEntry::name("ChatGPT.exe")],
@@ -1383,16 +1364,14 @@ mod tests {
             processes: vec![ProcessEntry::name("ChatGPT.exe")],
             ..Default::default()
         };
-        let model = |on: bool, r: ProcessRule| {
+        let model = |r: ProcessRule| {
             let mut m = Model::default();
-            m.process_routing.enabled = on;
             m.process_routing.rules = vec![r];
             m
         };
-        assert!(ai_needs_core(&model(true, rule(true, true))));
-        assert!(!ai_needs_core(&model(false, rule(true, true))));
-        assert!(!ai_needs_core(&model(true, rule(true, false))));
-        assert!(!ai_needs_core(&model(true, rule(false, true))));
+        assert!(ai_needs_core(&model(rule(true, true))));
+        assert!(!ai_needs_core(&model(rule(true, false))));
+        assert!(!ai_needs_core(&model(rule(false, true))));
         assert!(!ai_needs_core(&Model::default()));
     }
     #[tokio::test]

@@ -228,7 +228,7 @@ pub mod ops {
         let model = rt.model();
         let before = model.process_routing.rules.iter().find(|r| r.id == rule.id);
         // 只在可能预记录时枚举进程（较慢，且在引擎锁外做）。
-        let running = if model.process_routing.enabled && !procroute::learn::newly_learning(before, &rule).is_empty() {
+        let running = if !procroute::learn::newly_learning(before, &rule).is_empty() {
             tauri::async_runtime::spawn_blocking(procroute::processes::running_processes).await.unwrap_or_default()
         } else {
             vec![]
@@ -283,17 +283,6 @@ pub mod ops {
 
     pub async fn delete_process_rule(rt: &Runtime, id: ProcessRuleId) -> Result<Option<ApplyOutcome>, Vec<ValidationError>> {
         rt.mutate_process_routing(|p| p.rules.retain(|r| r.id != id || r.ai_app.is_some())).await
-    }
-
-    pub async fn save_process_routing_settings(
-        rt: &Runtime,
-        enabled: bool,
-    ) -> Result<(), Vec<ValidationError>> {
-        rt.mutate_process_routing(|p| {
-            p.enabled = enabled;
-        })
-        .await
-        .map(|_| ())
     }
 
     /// Through the connected service when there is one, else an elevated
@@ -685,15 +674,6 @@ pub async fn delete_process_rule(rt: Rt<'_>, id: ProcessRuleId) -> Result<Option
 
 #[tauri::command]
 #[specta::specta]
-pub async fn save_process_routing_settings(
-    rt: Rt<'_>,
-    enabled: bool,
-) -> Result<(), Vec<ValidationError>> {
-    ops::save_process_routing_settings(&rt, enabled).await
-}
-
-#[tauri::command]
-#[specta::specta]
 pub async fn set_exit_prompt(rt: Rt<'_>, enabled: bool) -> Result<(), Vec<ValidationError>> {
     rt.mutate_process_routing(|p| p.exit_prompt = enabled).await.map(|_| ())
 }
@@ -894,9 +874,6 @@ pub(crate) mod tests {
         assert!(ops::save_process_rule(&rt, bad).await.is_err());
         assert_eq!(rt.model().process_routing.rules.len(), 1, "nothing changed");
 
-        ops::save_process_routing_settings(&rt, true).await.unwrap();
-        let pr = rt.model().process_routing;
-        assert!(pr.enabled);
 
         ops::delete_process_rule(&rt, rule.id).await.unwrap();
         assert!(rt.model().process_routing.rules.is_empty());
@@ -937,7 +914,7 @@ pub(crate) mod tests {
     async fn save_seeds_running_paths_and_remove_learned_forgets_one() {
         let td = tempfile::tempdir().unwrap();
         let rt = runtime(&td);
-        ops::save_process_routing_settings(&rt, true).await.unwrap();
+
         let rule = ProcessRule {
             processes: vec![ProcessEntry::name("a.exe")],
             on_fault: FaultPolicy::Block,
@@ -959,7 +936,7 @@ pub(crate) mod tests {
     async fn save_keeps_stored_learned_and_ignores_incoming() {
         let td = tempfile::tempdir().unwrap();
         let rt = runtime(&td);
-        ops::save_process_routing_settings(&rt, true).await.unwrap();
+
         let rule = ProcessRule {
             processes: vec![ProcessEntry::name("a.exe")],
             on_fault: FaultPolicy::Block,

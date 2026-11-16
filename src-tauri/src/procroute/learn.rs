@@ -15,14 +15,9 @@ pub fn exe_key(p: &str) -> String {
     normalize_exe_path(p).to_lowercase()
 }
 
-/// 规则本身（不看全局开关）处在学习状态：启用、Block、至少一个按进程名的条目。
-fn rule_learning(r: &ProcessRule) -> bool {
+/// 规则处在学习状态：启用、Block、至少一个按进程名的条目。
+pub fn is_learning(r: &ProcessRule) -> bool {
     r.user_enabled && r.on_fault == FaultPolicy::Block && r.processes.iter().any(|p| p.kind == ProcessKind::Name)
-}
-
-/// 规则正在学习位置：全局开关开、规则启用、`on_fault=Block`、至少一个 `Name` 条目。
-pub fn is_learning(model: &Model, r: &ProcessRule) -> bool {
-    model.process_routing.enabled && rule_learning(r)
 }
 
 /// 规则 `r` 自己有与 `path` 同键的 `Path` 条目。
@@ -63,7 +58,7 @@ pub fn merge_reported(pr: &mut ProcessRouting, reported: &[LearnedPath]) -> bool
         let id = rule_of_spec(&l.rule_id);
         let Some(r) = pr.rules.iter_mut().find(|r| r.id.0 == id) else { continue };
         let path = normalize_exe_path(&l.path);
-        if !rule_learning(r) || !names_file(r, &path) || own_path(r, &path) {
+        if !is_learning(r) || !names_file(r, &path) || own_path(r, &path) {
             continue;
         }
         let key = exe_key(&path);
@@ -78,11 +73,11 @@ pub fn merge_reported(pr: &mut ProcessRouting, reported: &[LearnedPath]) -> bool
 /// 本次保存后新进入学习的进程名：`after` 处于学习状态，而 `before` 不存在、不在学习，
 /// 或没有这个进程名。
 pub fn newly_learning(before: Option<&ProcessRule>, after: &ProcessRule) -> Vec<String> {
-    if !rule_learning(after) {
+    if !is_learning(after) {
         return vec![];
     }
     let known: HashSet<String> = before
-        .filter(|b| rule_learning(b))
+        .filter(|b| is_learning(b))
         .map(|b| b.processes.iter().filter(|p| p.kind == ProcessKind::Name).map(|p| exe_key(&p.value)).collect())
         .unwrap_or_default();
     after
@@ -94,11 +89,8 @@ pub fn newly_learning(before: Option<&ProcessRule>, after: &ProcessRule) -> Vec<
 }
 
 /// 保存规则时：对本次新进入学习的进程名，把正在运行的同名 exe 路径记进 `rule.learned`
-/// （排除本规则的 `Path` 条目和归其他启用规则管的路径）。全局开关关闭时不记。
+/// （排除本规则的 `Path` 条目和归其他启用规则管的路径）。
 pub fn seed(model: &Model, before: Option<&ProcessRule>, rule: &mut ProcessRule, running: &[RunningProcess]) {
-    if !model.process_routing.enabled {
-        return;
-    }
     for name in newly_learning(before, rule) {
         let name = exe_key(&name);
         for p in running.iter().filter(|p| exe_key(&p.name) == name) {
@@ -139,7 +131,7 @@ pub fn from_package(
         .process_routing
         .rules
         .iter()
-        .filter(|r| is_learning(model, r))
+        .filter(|r| is_learning(r))
         .flat_map(|r| {
             super::store::siblings(&r.learned, full_name, root)
                 .into_iter()
@@ -179,7 +171,6 @@ mod tests {
 
     fn model(rules: Vec<ProcessRule>) -> Model {
         let mut m = Model::default();
-        m.process_routing.enabled = true;
         m.process_routing.rules = rules;
         m
     }
@@ -299,7 +290,7 @@ mod tests {
         // 已记下后不再产出。
         assert!(from_package(&m, new_name, new_root, &exists).is_empty());
 
-        // 归其他启用规则管的不收；全局开关关闭时不收。
+        // 归其他启用规则管的不收；规则关闭时不收。
         let mut m2 = model(vec![block_rule("r1", vec![ProcessEntry::name("ChatGPT.exe")])]);
         m2.process_routing.rules[0].learned = vec![format!(r"{old}\app\ChatGPT.exe")];
         m2.process_routing.rules.push(ProcessRule {
@@ -308,7 +299,7 @@ mod tests {
             ..ProcessRule::default()
         });
         assert!(from_package(&m2, new_name, new_root, &exists).is_empty());
-        m.process_routing.enabled = false;
+        for rule in &mut m.process_routing.rules { rule.user_enabled = false; }
         m.process_routing.rules[0].learned.truncate(2);
         assert!(from_package(&m, new_name, new_root, &exists).is_empty());
     }

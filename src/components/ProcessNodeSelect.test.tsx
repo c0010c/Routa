@@ -17,7 +17,7 @@ const model = {
     { id: "m2", name: "大阪", kind: { Proxy: { raw: "ss://y" } } },
   ],
   node_groups: [],
-  process_routing: { enabled: true, rules: [] },
+  process_routing: { rules: [] },
 } as unknown as Model;
 
 const rule: ProcessRule = {
